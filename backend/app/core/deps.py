@@ -32,6 +32,9 @@ class RequestContext:
     company_id: UUID
     permissions: list[str]
     locale: str
+    # Where the request came from — recorded on history entries.
+    # "app" (screens), "ask_erp" (confirmed AI actions) or "import" (CSV).
+    channel: str = "app"
 
     def has_permission(self, permission: str) -> bool:
         return SUPER_ADMIN_PERMISSION in self.permissions or permission in self.permissions

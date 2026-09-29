@@ -46,10 +46,10 @@ function isChildActive(to: string, pathname: string, search: string): boolean {
 }
 
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
-  const { activities, quotes, can } = useAppData();
+  const { crm, quotes, can } = useAppData();
   const { open: openAsk } = useAskErp();
   const { pathname, search } = useLocation();
-  const overdue = activities.filter((a) => a.is_overdue).length;
+  const overdue = crm?.overdue_followups ?? 0;
   const pending = quotes.filter((q) => q.status === "Pending approval").length;
 
   const allGroups: NavGroup[] = [

@@ -56,6 +56,10 @@ python3 -m venv .venv
 
 Interactive API docs: http://localhost:8000/docs
 
+Quotation numbers are `QT-<year>-<n>`, counting from 1 per tenant each year
+(`document_counters`, incremented with a row-locking upsert so concurrent
+quotes never share a number) and unique per tenant.
+
 ## Try the full Appendix A flow
 
 ```bash
@@ -83,12 +87,12 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
 - **Alembic migrations.** Schema is created via `Base.metadata.create_all()`
   at startup for dev convenience. Add real migrations before this touches a
   shared environment.
-- **CRM writes aren't audited.** Leads, opportunities, owners and follow-ups
-  are plain permission-checked routes (see "CRM API" below). The one CRM
-  action that creates a financial document —
-  `POST /api/opportunities/{id}/quotations` — runs the same audited
-  `sales.create_quotation_draft.v1` tool as every other quotation, with
-  the opportunity linked via `quotations.opportunity_id`.
+- **CRM writes go through plain routes, not the tool gateway.** They're
+  permission-checked and every change lands in the record's history (see
+  "Record history" below), but only Ask ERP actions and quotations write
+  `AuditEvent`s. `POST /api/opportunities/{id}/quotations` runs the same
+  audited `sales.create_quotation_draft.v1` tool as every other quotation,
+  with the opportunity linked via `quotations.opportunity_id`.
 - **More domains.** Only Sales/Quotations and CRM exist. Inventory, Finance etc.
   follow the same three-file pattern: a model, a domain service, a tool.
 
@@ -143,17 +147,62 @@ One API, one permission set. Each record type has its own routes and
 | --- | --- |
 | `/api/leads`, `PATCH /{id}/owner`, `POST /{id}/convert` | `crm.lead.read`, `crm.lead.write`, `crm.lead.assign`, `crm.lead.convert` |
 | `/api/opportunities`, `PATCH /{id}/owner`, `POST /{id}/quotations` | `crm.opportunity.read`, `crm.opportunity.write`, `crm.opportunity.assign` (+ `sales.quotation.create` to quote) |
-| `/api/activities` (`?open_only=true`) | `crm.activity.read`, `crm.activity.write` |
+| `/api/activities` | `crm.activity.read`, `crm.activity.write` |
 | `/api/contacts` | `crm.contact.read`, `crm.contact.write` |
-| `/api/assignees` | any of `crm.lead.read`, `crm.opportunity.read`, `crm.activity.read` |
+| `/api/assignees`, `GET /api/crm/summary` | any of `crm.lead.read`, `crm.opportunity.read`, `crm.activity.read` |
+| `GET /api/crm/settings` / `PUT` | `crm.opportunity.read` / `crm.settings.write` |
+
+**Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
+`/api/activities` take `limit` (max 200), `offset` and filters, and return
+the total matching count in `X-Total-Count`: leads `q` (every word must
+appear in name, company, phone or email), `status` (a status or `open`),
+`owner` (`me`, `unassigned` or a user id); opportunities `q`, `stage` (a
+stage, `open` or `closed`), `owner`, `closed_since` (open deals plus those
+closed since a date — the pipeline board) and `stale=true`; activities
+`show` (`open`, `overdue`, `done`, `all`), `owner` and `lead_id` /
+`customer_id` / `opportunity_id`. `GET /api/customers` (`q` on name or
+GSTIN, `active`) and `GET /api/contacts` (`q`, `customer_id`) page the same
+way. Without `limit` everything matching comes back. Stale deals are
+filtered in SQL (`crm_service.stale_only`), so `stale=true` pages like any
+other filter.
+
+`GET /api/crm/summary` gives the dashboard, sidebar, bell and pipeline board
+their numbers as aggregate queries — pipeline by stage (count, value,
+weighted), stale deals, won/lost, deals closed in the last `closed_days`
+(default 90) with lost reasons and the six most recent, unowned records,
+overdue follow-ups plus the five most overdue — so no screen loads every
+record. `owner` narrows the deal figures. The pipeline board shows the 30
+newest deals per stage with the stage's totals and a link to the rest.
+
+**Duplicates.** Creating a lead with the phone (last 10 digits) or email of
+an existing lead, or a customer with an existing name or GSTIN, returns 409
+with `detail: {message, duplicates: [{id, label, detail}]}`; send
+`allow_duplicate: true` to create it anyway. CSV import uses the same rules
+(`domain/duplicates.py`).
+
+**Conversion never merges by name.** `POST /api/leads/{id}/convert` takes
+`customer_id` to add the contact to an existing customer, or creates a new
+one. `GET /api/leads/{id}/customer-matches` lists the customers the lead
+might already be — same name, or a contact with its phone or email — so the
+user picks.
+
+**Record history.** Creating, editing, re-staging, reassigning or
+converting a lead or deal, logging or completing a follow-up, and raising a
+quotation each write a `crm_events` row in the same transaction: who, when,
+what changed (`{field: [old, new]}`) and where (`app`, `ask_erp` or
+`import`). `GET /api/leads/{id}/timeline` and
+`GET /api/opportunities/{id}/timeline` return it newest first; a deal's
+timeline includes the lead it came from (and vice versa) when the caller
+can read both.
 
 Leads and opportunities come back with their owner's name and open/overdue
 follow-up counts; opportunities also carry their linked quotations, the
 `stage_changed_at` date (the won/lost date once closed), and idle-deal fields
 (`last_touch_at`, `idle_days`, `is_stale`). A deal is stale when nothing —
 stage change, follow-up or quotation — has touched it for longer than its
-stage allows (`STALE_AFTER_DAYS` in `domain/crm_service.py`: New 7, Qualified
-10, Proposal 14, Negotiation 7 days). Moving a deal to Lost requires a
+stage allows. Each company sets those limits (`/api/crm/settings`, 0 turns a
+stage's warning off); the defaults are New 7, Qualified 10, Proposal 14,
+Negotiation 7 days (`STALE_AFTER_DAYS` in `domain/crm_service.py`). Moving a deal to Lost requires a
 `lost_reason`; reopening it clears the reason. Customers take an optional
 `gstin`, validated (format, state code and check character) and upper-cased. An
 activity is overdue once `due_at` passes while it's not done; a date-only

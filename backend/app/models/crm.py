@@ -1,8 +1,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Numeric, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.core.database import Base
@@ -138,3 +138,38 @@ class Activity(Base):
 
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CrmEvent(Base):
+    """One entry in a record's history: who did what, when, and from where.
+
+    Written by the domain services alongside the change itself (same
+    transaction), for human edits as well as Ask ERP and imports — unlike
+    AuditEvent, which records only AI-initiated tool calls.
+    """
+
+    __tablename__ = "crm_events"
+    __table_args__ = (Index("ix_crm_events_record", "record_type", "record_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    record_type: Mapped[str] = mapped_column(String(20))  # lead | opportunity | customer
+    record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), default="app")  # app | ask_erp | import
+    action: Mapped[str] = mapped_column(String(40))
+    summary: Mapped[str] = mapped_column(String(400))
+    changes: Mapped[dict] = mapped_column(JSONB, default=dict)  # field -> [old, new]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CrmSettings(Base):
+    """Per-company CRM settings. A missing row means the defaults."""
+
+    __tablename__ = "crm_settings"
+
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    # stage -> days an open deal may sit untouched before it's flagged; 0 = never
+    stale_after_days: Mapped[dict] = mapped_column(JSONB, default=dict)

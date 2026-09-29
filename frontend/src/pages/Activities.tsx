@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ACTIVITY_TYPES,
@@ -11,12 +11,11 @@ import {
   updateActivity,
   type Activity,
   type ActivityType,
-  type Customer,
-  type Lead,
-  type Opportunity,
 } from "../api/client";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
+import { Pager, SearchBox } from "../crm/ui";
+import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 import { useAppData } from "../data/AppDataProvider";
 import { relativeDue } from "../lib/format";
 
@@ -29,71 +28,27 @@ function endOfLocalDay(isoDate: string): string {
 }
 
 export function Activities() {
-  const [activities, setActivities] = useState<Activity[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [params, setParams] = useSearchParams();
   const show = (params.get("show") as Show) || "open";
   const setShow = (next: Show) => setParams(next === "open" ? {} : { show: next }, { replace: true });
-  // Overdue status comes from the API (is_overdue), so every page agrees on it.
-  const { refresh: refreshShared, can } = useAppData();
+  const [mine, setMine] = useState(false);
+  // Overdue status and ordering (overdue first, then soonest due) come from the API.
+  const { crm, version, refresh: refreshShared, can } = useAppData();
   const openOpp = useOpenOpportunity();
-
-  const counts = {
-    open: activities.filter((a) => !a.done).length,
-    overdue: activities.filter((a) => a.is_overdue).length,
-    done: activities.filter((a) => a.done).length,
-    all: activities.length,
-  };
-  const visible = activities
-    .filter((a) =>
-      show === "open" ? !a.done : show === "overdue" ? a.is_overdue : show === "done" ? a.done : true,
-    )
-    // Overdue first, then soonest due; undated notes last.
-    .sort((a, b) => {
-      const oa = a.is_overdue ? 0 : 1;
-      const ob = b.is_overdue ? 0 : 1;
-      if (oa !== ob) return oa - ob;
-      const due = (x: Activity) => (x.due_at ? new Date(x.due_at).getTime() : Infinity);
-      return due(a) - due(b);
-    });
-
-  async function refresh() {
-    setLoading(true);
-    try {
-      // Lead/customer/opportunity lists only feed the "Related to" picker; skip any this role can't read.
-      const [a, l, c, o] = await Promise.all([
-        fetchActivities(),
-        can("crm.lead.read") ? fetchLeads() : Promise.resolve([]),
-        can("sales.customer.read") ? fetchCustomers() : Promise.resolve([]),
-        can("crm.opportunity.read") ? fetchOpportunities() : Promise.resolve([]),
-      ]);
-      setActivities(a);
-      setLeads(l);
-      setCustomers(c);
-      setOpportunities(o);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach the Albiruni API.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  const hasTargets = leads.length > 0 || customers.length > 0 || opportunities.length > 0;
+  const list = usePaged(
+    (limit, offset) => fetchActivities({ show, owner: mine ? "me" : "", limit, offset }),
+    `${show}|${mine}`,
+    version,
+  );
+  const visible = list.rows;
+  const counts: Partial<Record<Show, number>> = { open: crm?.open_followups, overdue: crm?.overdue_followups };
 
   async function toggleDone(a: Activity) {
     try {
       await updateActivity(a.id, { done: !a.done });
-      await Promise.all([refresh(), refreshShared()]);
+      await refreshShared();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't update.");
     }
@@ -107,7 +62,7 @@ export function Activities() {
         <p className="page-sub">Follow-ups and the relationship timeline — calls, meetings, tasks and notes against a lead, customer or opportunity. Overdue items sort to the top.</p>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
 
       <div className="toolbar">
         <div className="filters">
@@ -116,44 +71,40 @@ export function Activities() {
               key={f}
               className={show === f ? "on" : ""}
               onClick={() => setShow(f)}
-              style={f === "overdue" && counts.overdue > 0 && show !== f ? { color: "var(--bad)", borderColor: "var(--bad)" } : undefined}
+              style={f === "overdue" && (counts.overdue ?? 0) > 0 && show !== f ? { color: "var(--bad)", borderColor: "var(--bad)" } : undefined}
             >
-              {f === "open" ? "Open" : f === "overdue" ? "Overdue" : f === "done" ? "Done" : "All"} ({counts[f]})
+              {f === "open" ? "Open" : f === "overdue" ? "Overdue" : f === "done" ? "Done" : "All"}
+              {counts[f] !== undefined && ` (${counts[f]})`}
             </button>
           ))}
         </div>
+        <div className="filters" aria-label="Owner filter">
+          <button className={!mine ? "on" : ""} onClick={() => setMine(false)}>
+            Everyone
+          </button>
+          <button className={mine ? "on" : ""} onClick={() => setMine(true)}>
+            Mine
+          </button>
+        </div>
         {can("crm.activity.write") && (
-          <button className="primary-btn" disabled={!hasTargets} onClick={() => setShowForm((v) => !v)}>
+          <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
             {showForm ? "Cancel" : "+ Log activity"}
           </button>
         )}
       </div>
-      {!hasTargets && !loading && (
-        <p className="footnote">Add a lead, customer or opportunity first — every activity is logged against one.</p>
-      )}
 
       {showForm && (
         <ActivityForm
-          leads={leads}
-          customers={customers}
-          opportunities={opportunities}
-          onDone={() => {
+          onDone={(saved) => {
             setShowForm(false);
-            refresh();
-            refreshShared();
+            if (saved) void refreshShared();
           }}
         />
       )}
 
-      {!loading && activities.length === 0 && !showForm && (
+      {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          No activities logged yet.
-        </div>
-      )}
-
-      {activities.length > 0 && visible.length === 0 && (
-        <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          {show === "overdue" ? "Nothing overdue. You're clear." : "Nothing here."}
+          {show === "overdue" ? "Nothing overdue. You're clear." : show === "all" && !mine ? "No activities logged yet." : "Nothing here."}
         </div>
       )}
 
@@ -216,42 +167,70 @@ export function Activities() {
           </table>
         </div>
       )}
+      <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
     </section>
   );
 }
 
-function ActivityForm({
-  leads,
-  customers,
-  opportunities,
-  onDone,
-}: {
-  leads: Lead[];
-  customers: Customer[];
-  opportunities: Opportunity[];
-  onDone: () => void;
-}) {
-  const firstKind: RelatedKind = leads.length > 0 ? "lead" : customers.length > 0 ? "customer" : "opportunity";
+const PICK_LIMIT = 20;
+
+/** Records an activity can be logged against, searched on the server. */
+function useRelatedOptions(kind: RelatedKind, q: string) {
+  const { can } = useAppData();
+  const [options, setOptions] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => {
+    let current = true;
+    const load = async () => {
+      if (kind === "lead" && can("crm.lead.read")) {
+        const page = await fetchLeads({ q, status: "open", limit: PICK_LIMIT });
+        return page.rows.map((l) => ({ id: l.id, label: l.company_name ? `${l.company_name} (${l.name})` : l.name }));
+      }
+      if (kind === "opportunity" && can("crm.opportunity.read")) {
+        const page = await fetchOpportunities({ q, stage: "open", limit: PICK_LIMIT });
+        return page.rows.map((o) => ({ id: o.id, label: `${o.name} — ${o.customer_name}` }));
+      }
+      if (kind === "customer" && can("sales.customer.read")) {
+        const page = await fetchCustomers({ q, active: true, limit: PICK_LIMIT });
+        return page.rows.map((c) => ({ id: c.id, label: c.name }));
+      }
+      return [];
+    };
+    load()
+      .then((rows) => current && setOptions(rows))
+      .catch(() => current && setOptions([]));
+    return () => {
+      current = false;
+    };
+  }, [kind, q, can]);
+  return options;
+}
+
+function ActivityForm({ onDone }: { onDone: (saved: boolean) => void }) {
+  const { can } = useAppData();
+  const kinds = (
+    [
+      ["lead", "crm.lead.read"],
+      ["opportunity", "crm.opportunity.read"],
+      ["customer", "sales.customer.read"],
+    ] as const
+  ).filter(([, p]) => can(p)).map(([k]) => k as RelatedKind);
   const [type, setType] = useState<ActivityType>("Call");
   const [subject, setSubject] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
-  const [relatedKind, setRelatedKind] = useState<RelatedKind>(firstKind);
-  const [relatedId, setRelatedId] = useState(
-    firstKind === "lead" ? leads[0]?.id : firstKind === "customer" ? customers[0]?.id : opportunities[0]?.id,
-  );
+  const [relatedKind, setRelatedKind] = useState<RelatedKind>(kinds[0] ?? "lead");
+  const [search, setSearch] = useState("");
+  const onSearch = useCallback((q: string) => setSearch(q), []);
+  const options = useRelatedOptions(relatedKind, search);
+  const [picked, setPicked] = useState<string | undefined>();
+  const relatedId = picked && options.some((o) => o.id === picked) ? picked : options[0]?.id;
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const optionsFor: Record<RelatedKind, { id: string; label: string }[]> = {
-    lead: leads.map((l) => ({ id: l.id, label: l.name })),
-    customer: customers.map((c) => ({ id: c.id, label: c.name })),
-    opportunity: opportunities.map((o) => ({ id: o.id, label: o.name })),
-  };
-
   function changeKind(kind: RelatedKind) {
     setRelatedKind(kind);
-    setRelatedId(optionsFor[kind][0]?.id);
+    setPicked(undefined);
+    setSearch("");
   }
 
   async function save() {
@@ -270,7 +249,7 @@ function ActivityForm({
         customer_id: relatedKind === "customer" ? relatedId : null,
         opportunity_id: relatedKind === "opportunity" ? relatedId : null,
       });
-      onDone();
+      onDone(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save.");
     } finally {
@@ -302,21 +281,23 @@ function ActivityForm({
         <label className="field">
           <span>Related to</span>
           <select value={relatedKind} onChange={(e) => changeKind(e.target.value as RelatedKind)}>
-            {leads.length > 0 && <option value="lead">Lead</option>}
-            {customers.length > 0 && <option value="customer">Customer</option>}
-            {opportunities.length > 0 && <option value="opportunity">Opportunity</option>}
+            {kinds.includes("lead") && <option value="lead">Open lead</option>}
+            {kinds.includes("opportunity") && <option value="opportunity">Open opportunity</option>}
+            {kinds.includes("customer") && <option value="customer">Customer</option>}
           </select>
         </label>
-        <label className="field">
+        <div className="field">
           <span>{relatedKind === "lead" ? "Lead" : relatedKind === "customer" ? "Customer" : "Opportunity"}</span>
-          <select value={relatedId} onChange={(e) => setRelatedId(e.target.value)}>
-            {optionsFor[relatedKind].map((opt) => (
+          <SearchBox key={relatedKind} value={search} onChange={onSearch} placeholder="Type to search…" />
+          <select value={relatedId ?? ""} onChange={(e) => setPicked(e.target.value)} aria-label="Pick the record">
+            {options.length === 0 && <option value="">{search ? "No match" : "Nothing to pick"}</option>}
+            {options.map((opt) => (
               <option key={opt.id} value={opt.id}>
                 {opt.label}
               </option>
             ))}
           </select>
-        </label>
+        </div>
       </div>
       <label className="field">
         <span>Notes</span>
@@ -327,7 +308,7 @@ function ActivityForm({
         <button className="primary-btn" disabled={!subject.trim() || !relatedId || saving} onClick={save}>
           {saving ? "Saving…" : "Save"}
         </button>
-        <button className="secondary-btn" onClick={onDone}>
+        <button className="secondary-btn" onClick={() => onDone(false)}>
           Cancel
         </button>
       </div>

@@ -33,6 +33,7 @@ CRM_PERMISSIONS = [
     "crm.contact.read", "crm.contact.write",
     "crm.opportunity.read", "crm.opportunity.write", "crm.opportunity.assign",
     "crm.activity.read", "crm.activity.write",
+    "crm.settings.write",
     "sales.customer.read", "sales.customer.write",
 ]
 

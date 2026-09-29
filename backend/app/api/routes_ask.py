@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -126,6 +127,7 @@ def _crm(text: str, intent: str, timezone: str, context: RequestContext, db: Ses
 
     tool = get_tool(plan.tool_name)
     correlation_id = new_correlation_id()
+    context = replace(context, channel="ask_erp")  # history shows it came through Ask ERP
 
     if isinstance(plan, crm_commands.ReadPlan):  # L1: nothing to confirm — answer, audited
         result = execute_tool(
@@ -174,7 +176,7 @@ def confirm(
 
     return execute_tool(
         db,
-        context,
+        replace(context, channel="ask_erp"),  # history shows the change came through Ask ERP
         preview.tool_name,
         preview.args,
         request_text=preview.request_text,

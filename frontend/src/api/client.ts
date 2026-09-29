@@ -1,11 +1,21 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const TOKEN_KEY = "albiruni-token";
 
+/** A record a create would duplicate (409 from the lead/customer forms). */
+export interface DuplicateMatch {
+  id: string;
+  label: string;
+  detail: string;
+}
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Set when the server refused a create as a likely duplicate. */
+  duplicates: DuplicateMatch[] | null;
+  constructor(status: number, message: string, duplicates: DuplicateMatch[] | null = null) {
     super(message);
     this.status = status;
+    this.duplicates = duplicates;
   }
 }
 
@@ -26,7 +36,34 @@ export function setToken(token: string | null) {
   }
 }
 
+/** One page of a list plus how many rows match in total (X-Total-Count). */
+export interface Page<T> {
+  rows: T[];
+  total: number;
+}
+
+type Params = Record<string, string | number | boolean | null | undefined>;
+
+function query(params: Params): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+async function requestPage<T>(path: string, params: Params): Promise<Page<T>> {
+  const res = await send(`${path}${query(params)}`);
+  const rows = (await res.json()) as T[];
+  return { rows, total: Number(res.headers.get("X-Total-Count") ?? rows.length) };
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const res = await send(path, options);
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+async function send(path: string, options: RequestInit = {}): Promise<Response> {
   const token = getToken();
   const headers = new Headers(options.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -38,20 +75,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     let detail = res.statusText;
+    let duplicates: DuplicateMatch[] | null = null;
     try {
       const body = await res.json();
       // FastAPI validation errors arrive as a list of {loc, msg}; show their messages.
-      detail = Array.isArray(body.detail)
-        ? body.detail.map((d: { msg?: string }) => String(d.msg ?? "").replace(/^Value error, /, "")).join(" ")
-        : (body.detail ?? detail);
+      if (Array.isArray(body.detail)) {
+        detail = body.detail.map((d: { msg?: string }) => String(d.msg ?? "").replace(/^Value error, /, "")).join(" ");
+      } else if (body.detail && typeof body.detail === "object") {
+        detail = body.detail.message ?? detail;
+        duplicates = body.detail.duplicates ?? null;
+      } else {
+        detail = body.detail ?? detail;
+      }
     } catch {
       // response wasn't JSON — keep statusText
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, duplicates);
   }
-
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  return res;
 }
 
 // --- Auth ---------------------------------------------------------------
@@ -238,10 +279,24 @@ export interface CustomerInput {
   name: string;
   credit_limit: number;
   gstin?: string;
+  /** Create even though a customer with this name or GSTIN exists. */
+  allow_duplicate?: boolean;
 }
 
-export function fetchCustomers(): Promise<Customer[]> {
-  return request<Customer[]>("/api/customers");
+export interface CustomerQuery {
+  /** Every word must appear in the name or GSTIN. */
+  q?: string;
+  active?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchCustomers(params: CustomerQuery = {}): Promise<Page<Customer>> {
+  return requestPage<Customer>("/api/customers", { ...params });
+}
+
+export function fetchCustomer(id: string): Promise<Customer> {
+  return request<Customer>(`/api/customers/${id}`);
 }
 
 export function createCustomer(body: CustomerInput): Promise<Customer> {
@@ -350,6 +405,7 @@ export const KNOWN_PERMISSIONS = [
   "crm.opportunity.assign",
   "crm.activity.read",
   "crm.activity.write",
+  "crm.settings.write",
   "admin.users.read",
   "admin.users.write",
   "audit.read",
@@ -401,10 +457,52 @@ export interface LeadInput {
   notes?: string;
   /** Anyone but yourself needs crm.lead.assign. */
   owner_user_id?: string | null;
+  /** Create even though a lead with this phone or email exists. */
+  allow_duplicate?: boolean;
 }
 
-export function fetchLeads(): Promise<Lead[]> {
-  return request<Lead[]>("/api/leads");
+/** owner: "me", "unassigned" or a user id. status: a status or "open". */
+export interface LeadQuery {
+  q?: string;
+  status?: string;
+  owner?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchLeads(params: LeadQuery = {}): Promise<Page<Lead>> {
+  return requestPage<Lead>("/api/leads", { ...params });
+}
+
+export function fetchLead(id: string): Promise<Lead> {
+  return request<Lead>(`/api/leads/${id}`);
+}
+
+export interface CustomerMatch {
+  id: string;
+  name: string;
+  gstin: string;
+  reasons: string[];
+}
+
+export function fetchLeadCustomerMatches(id: string): Promise<CustomerMatch[]> {
+  return request<CustomerMatch[]>(`/api/leads/${id}/customer-matches`);
+}
+
+export interface TimelineEntry {
+  id: string;
+  at: string;
+  record_type: "lead" | "opportunity" | "customer";
+  action: string;
+  summary: string;
+  changes: Record<string, [unknown, unknown]>;
+  /** Where the change was made. */
+  source: "app" | "ask_erp" | "import";
+  actor_name: string | null;
+}
+
+export function fetchLeadTimeline(id: string): Promise<TimelineEntry[]> {
+  return request<TimelineEntry[]>(`/api/leads/${id}/timeline`);
 }
 
 export function createLead(body: LeadInput): Promise<Lead> {
@@ -432,6 +530,8 @@ export interface ConvertLeadResult {
 export function convertLead(
   id: string,
   body: {
+    /** Link to this existing customer; omit to create a new one. */
+    customer_id?: string | null;
     create_opportunity: boolean;
     opportunity_name?: string;
     opportunity_value: number;
@@ -453,8 +553,16 @@ export interface Contact {
   phone: string;
 }
 
-export function fetchContacts(): Promise<Contact[]> {
-  return request<Contact[]>("/api/contacts");
+export interface ContactQuery {
+  /** Every word must appear in the name, customer, phone or email. */
+  q?: string;
+  customer_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchContacts(params: ContactQuery = {}): Promise<Page<Contact>> {
+  return requestPage<Contact>("/api/contacts", { ...params });
 }
 
 export function createContact(body: {
@@ -526,8 +634,27 @@ export interface OpportunityInput {
   owner_user_id?: string | null;
 }
 
-export function fetchOpportunities(): Promise<Opportunity[]> {
-  return request<Opportunity[]>("/api/opportunities");
+/** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */
+export interface OpportunityQuery {
+  q?: string;
+  stage?: string;
+  owner?: string;
+  closed_since?: string;
+  stale?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchOpportunities(params: OpportunityQuery = {}): Promise<Page<Opportunity>> {
+  return requestPage<Opportunity>("/api/opportunities", { ...params });
+}
+
+export function fetchOpportunity(id: string): Promise<Opportunity> {
+  return request<Opportunity>(`/api/opportunities/${id}`);
+}
+
+export function fetchOpportunityTimeline(id: string): Promise<TimelineEntry[]> {
+  return request<TimelineEntry[]>(`/api/opportunities/${id}/timeline`);
 }
 
 export function createOpportunity(body: OpportunityInput): Promise<Opportunity> {
@@ -598,8 +725,20 @@ export interface ActivityInput {
   done?: boolean;
 }
 
-export function fetchActivities(openOnly = false): Promise<Activity[]> {
-  return request<Activity[]>(`/api/activities${openOnly ? "?open_only=true" : ""}`);
+export type ActivityShow = "open" | "overdue" | "done" | "all";
+
+export interface ActivityQuery {
+  show?: ActivityShow;
+  owner?: string;
+  lead_id?: string;
+  customer_id?: string;
+  opportunity_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchActivities(params: ActivityQuery = {}): Promise<Page<Activity>> {
+  return requestPage<Activity>("/api/activities", { ...params });
 }
 
 export function createActivity(body: ActivityInput): Promise<Activity> {
@@ -636,4 +775,53 @@ export function importCsv(kind: ImportKind, csv: string, commit = false): Promis
     method: "POST",
     body: JSON.stringify({ csv }),
   });
+}
+
+// --- CRM: settings and summary ----------------------------------------------
+
+/** Days a deal may sit untouched in each open stage before it's flagged; 0 = never. */
+export interface StaleLimits {
+  New: number;
+  Qualified: number;
+  Proposal: number;
+  Negotiation: number;
+}
+
+export function fetchStaleLimits(): Promise<StaleLimits> {
+  return request<StaleLimits>("/api/crm/settings");
+}
+
+export function saveStaleLimits(body: StaleLimits): Promise<StaleLimits> {
+  return request<StaleLimits>("/api/crm/settings", { method: "PUT", body: JSON.stringify(body) });
+}
+
+export interface CrmSummary {
+  open_deals: number;
+  open_value: number;
+  weighted_value: number;
+  by_stage: { stage: OpportunityStage; count: number; value: number; weighted: number }[];
+  stale_deals: number;
+  stale_value: number;
+  won_deals: number;
+  won_value: number;
+  lost_deals: number;
+  won_this_month_value: number;
+  /** Deals closed in the last `closed_days` days. */
+  closed_days: number;
+  recent_won: number;
+  recent_won_value: number;
+  recent_lost: number;
+  recent_lost_value: number;
+  lost_reasons: { reason: string; count: number }[];
+  recently_closed: Opportunity[];
+  unassigned: number;
+  open_followups: number;
+  overdue_followups: number;
+  /** The five most overdue follow-ups, for the bell and dashboard. */
+  overdue_items: Activity[];
+}
+
+/** owner narrows the deal figures ("me", "unassigned" or a user id). */
+export function fetchCrmSummary(params: { owner?: string; closed_days?: number } = {}): Promise<CrmSummary> {
+  return request<CrmSummary>(`/api/crm/summary${query(params)}`);
 }

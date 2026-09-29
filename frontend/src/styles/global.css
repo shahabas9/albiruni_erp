@@ -2656,3 +2656,268 @@ td .sub {
     gap: 2px;
   }
 }
+
+/* ================= Paging, search, history, duplicates ================= */
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}
+
+.pager span {
+  margin-right: 4px;
+}
+
+.search-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 0 12px;
+  color: var(--ink-faint);
+  min-width: 0;
+  flex: 1 1 220px;
+  max-width: 340px;
+}
+
+.search-box:focus-within {
+  outline: 2px solid var(--accent);
+  border-color: transparent;
+}
+
+.search-box input {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  padding: 8px 0;
+  width: 100%;
+  min-width: 0;
+  outline: none;
+}
+
+.field .search-box {
+  max-width: none;
+  border-radius: 10px;
+}
+
+.field .search-box input {
+  border: 0;
+  padding: 8px 0;
+  outline: none;
+}
+
+.filter-select {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: 20px;
+}
+
+.notice.warn {
+  background: var(--warn-soft);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.dup-warning b {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.dup-warning ul {
+  margin: 0 0 10px;
+  padding-left: 18px;
+}
+
+.dup-warning li {
+  margin: 3px 0;
+}
+
+.dup-warning small {
+  color: var(--ink-dim);
+}
+
+.dup-warning .link-btn {
+  margin-left: 8px;
+  padding: 0;
+}
+
+.dup-warning .form-actions {
+  margin-top: 0;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--line);
+}
+
+.timeline li {
+  position: relative;
+  padding: 0 0 14px 12px;
+}
+
+.timeline li::before {
+  content: "";
+  position: absolute;
+  left: -20px;
+  top: 5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--ink-faint);
+}
+
+.timeline li.tl-stage_changed::before,
+.timeline li.tl-converted::before {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.timeline li.tl-owner_changed::before {
+  border-color: var(--violet);
+}
+
+.tl-summary {
+  font-size: 13.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.tl-summary .badge {
+  margin-right: 6px;
+}
+
+.tl-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin-top: 2px;
+}
+
+.choice-list {
+  border: 0;
+  margin: 10px 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.choice-list legend {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 8px;
+  padding: 0;
+}
+
+.choice-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--surface);
+}
+
+.choice-list label.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.choice-list input {
+  margin-top: 3px;
+}
+
+.choice-list b {
+  display: block;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.choice-list small {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.stat-action {
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.limits-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.limits-grid small {
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+
+.input-suffix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input-suffix input {
+  max-width: 96px;
+}
+
+.input-suffix span {
+  font-weight: 500;
+}
+
+@media (max-width: 560px) {
+  .limits-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .search-box {
+    max-width: none;
+  }
+}
+
+.convert-form {
+  display: grid;
+  gap: 12px;
+}
+
+.convert-form .choice-list {
+  margin: 0;
+}
+
+.field input[type="checkbox"],
+.field input[type="radio"] {
+  width: auto;
+}
+
+.column-more {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 0 0;
+  font-size: 12.5px;
+  text-align: center;
+}

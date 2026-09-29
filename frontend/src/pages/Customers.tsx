@@ -1,32 +1,29 @@
-import { useEffect, useState } from "react";
-import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer } from "../api/client";
+import { useCallback, useState } from "react";
+import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
+import { DuplicateWarning, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
+import { PAGE_SIZE, usePaged } from "../lib/usePaged";
+
+type ActiveFilter = "all" | "active" | "inactive";
 
 export function Customers() {
-  const { can } = useAppData();
+  const { can, version } = useAppData();
   const [importing, setImporting] = useState(false);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-
-  async function refresh() {
-    setLoading(true);
-    try {
-      setCustomers(await fetchCustomers());
-      setError(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach the Albiruni API.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
+  const [search, setSearch] = useState("");
+  const onSearch = useCallback((q: string) => setSearch(q), []);
+  const [active, setActive] = useState<ActiveFilter>("all");
+  const list = usePaged(
+    (limit, offset) =>
+      fetchCustomers({ q: search, active: active === "all" ? undefined : active === "active", limit, offset }),
+    `${search}|${active}`,
+    version,
+  );
+  const customers = list.rows;
+  const refresh = list.reload;
 
   return (
     <section>
@@ -36,10 +33,17 @@ export function Customers() {
         <p className="page-sub">Master data for who you sell to — resolved by name in quotations, whether typed or asked in natural language.</p>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
 
       <div className="toolbar">
-        <div />
+        <div className="filters" aria-label="Status filter">
+          {(["all", "active", "inactive"] as const).map((f) => (
+            <button key={f} className={active === f ? "on" : ""} onClick={() => setActive(f)}>
+              {f === "all" ? "All" : f === "active" ? "Active" : "Inactive"}
+            </button>
+          ))}
+        </div>
+        <SearchBox value={search} onChange={onSearch} placeholder="Search name or GSTIN" />
         {can("sales.customer.write") && (
           <div style={{ display: "flex", gap: 8 }}>
             <button className="ghost-btn" onClick={() => setImporting(true)}>
@@ -55,9 +59,9 @@ export function Customers() {
 
       {showForm && <CustomerForm onDone={() => { setShowForm(false); refresh(); }} />}
 
-      {!loading && customers.length === 0 && !showForm && (
+      {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          No customers yet — add one above.
+          {search || active !== "all" ? "No customers match this filter." : "No customers yet — add one above."}
         </div>
       )}
 
@@ -104,8 +108,12 @@ export function Customers() {
                       <button
                         className="secondary-btn"
                         onClick={async () => {
-                          await updateCustomer(c.id, { active: !c.active });
-                          refresh();
+                          try {
+                            await updateCustomer(c.id, { active: !c.active });
+                            await refresh();
+                          } catch (err) {
+                            setError(err instanceof ApiError ? err.message : "Couldn't update.");
+                          }
                         }}
                       >
                         {c.active ? "Deactivate" : "Activate"}
@@ -118,6 +126,7 @@ export function Customers() {
           </table>
         </div>
       )}
+      <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
     </section>
   );
 }
@@ -127,20 +136,22 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
   const [creditLimit, setCreditLimit] = useState(String(customer?.credit_limit ?? 0));
   const [gstin, setGstin] = useState(customer?.gstin ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
 
-  async function save() {
+  async function save(allowDuplicate = false) {
     setSaving(true);
     setError(null);
     try {
       if (customer) {
         await updateCustomer(customer.id, { name, credit_limit: Number(creditLimit), gstin });
       } else {
-        await createCustomer({ name, credit_limit: Number(creditLimit), gstin });
+        await createCustomer({ name, credit_limit: Number(creditLimit), gstin, allow_duplicate: allowDuplicate });
       }
       onDone();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save.");
+      if (err instanceof ApiError && err.duplicates) setDuplicates(err.duplicates);
+      else setError(err instanceof ApiError ? err.message : "Couldn't save.");
     } finally {
       setSaving(false);
     }
@@ -151,7 +162,7 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
       <div className="field-grid">
         <label className="field">
           <span>Name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          <input value={name} onChange={(e) => (setName(e.target.value), setDuplicates(null))} autoFocus />
         </label>
         <label className="field">
           <span>Credit limit (₹)</span>
@@ -161,7 +172,7 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
           <span>GSTIN (optional)</span>
           <input
             value={gstin}
-            onChange={(e) => setGstin(e.target.value.toUpperCase())}
+            onChange={(e) => (setGstin(e.target.value.toUpperCase()), setDuplicates(null))}
             maxLength={15}
             placeholder="e.g. 32ABCDE1234F1Z9"
             style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
@@ -169,8 +180,11 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
         </label>
       </div>
       {error && <div className="error-banner">{error}</div>}
-      <div className="form-actions">
-        <button className="primary-btn" disabled={!name.trim() || saving} onClick={save}>
+      {duplicates && (
+        <DuplicateWarning noun="customer" matches={duplicates} busy={saving} onCreate={() => save(true)} onBack={() => setDuplicates(null)} />
+      )}
+      <div className="form-actions" hidden={Boolean(duplicates)}>
+        <button className="primary-btn" disabled={!name.trim() || saving} onClick={() => save()}>
           {saving ? "Saving…" : "Save"}
         </button>
         <button className="secondary-btn" onClick={onDone}>

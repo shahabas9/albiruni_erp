@@ -1,14 +1,24 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, lead_service
+from app.domain import crm_service, history, lead_service
+from app.domain.duplicates import DuplicateError
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Lead
-from app.schemas.crm import ConvertLeadIn, ConvertLeadOut, LeadIn, LeadOut, LeadUpdate, OwnerIn
+from app.schemas.crm import (
+    ConvertLeadIn,
+    ConvertLeadOut,
+    CustomerMatchOut,
+    LeadIn,
+    LeadOut,
+    LeadUpdate,
+    OwnerIn,
+    TimelineEntry,
+)
 
 router = APIRouter(prefix="/api/leads", tags=["crm"])
 
@@ -16,6 +26,11 @@ ASSIGN = "crm.lead.assign"
 
 
 def http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, DuplicateError):
+        # The UI lists the matches and offers "create anyway" (allow_duplicate).
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail={"message": str(exc), "duplicates": exc.matches}
+        )
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
@@ -32,18 +47,79 @@ def _to_out(lead: Lead, stats: crm_service.FollowUpStats, owners: dict) -> LeadO
 
 
 def _single_out(db: Session, context: RequestContext, lead: Lead) -> LeadOut:
-    return _to_out(lead, crm_service.FollowUpStats(db, context), crm_service.owner_names(db, {lead.owner_user_id}))
+    stats = crm_service.FollowUpStats(db, context, lead_ids=[lead.id])
+    return _to_out(lead, stats, crm_service.owner_names(db, {lead.owner_user_id}))
 
 
 @router.get("", response_model=list[LeadOut])
 def list_leads(
+    response: Response,
+    q: str = "",
+    status_: str = Query("", alias="status", description='A status, or "open" (not Converted/Lost)'),
+    owner: str = Query("", description='"me", "unassigned" or a user id'),
+    limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
+    offset: int = Query(0, ge=0),
     context: RequestContext = Depends(require_permission("crm.lead.read")),
     db: Session = Depends(get_db),
 ):
-    leads = lead_service.list_leads(db, context)
-    stats = crm_service.FollowUpStats(db, context)
+    """Newest first. The total matching count is in the X-Total-Count header."""
+
+    try:
+        leads, total = lead_service.list_leads(
+            db, context, q=q, status=status_, owner=owner, limit=limit, offset=offset
+        )
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+    response.headers["X-Total-Count"] = str(total)
+    stats = crm_service.FollowUpStats(db, context, lead_ids=[lead.id for lead in leads])
     owners = crm_service.owner_names(db, {lead.owner_user_id for lead in leads})
     return [_to_out(lead, stats, owners) for lead in leads]
+
+
+@router.get("/{lead_id}", response_model=LeadOut)
+def get_lead(
+    lead_id: UUID,
+    context: RequestContext = Depends(require_permission("crm.lead.read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return _single_out(db, context, lead_service.get_lead(db, context, lead_id))
+    except NotFoundError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/{lead_id}/timeline", response_model=list[TimelineEntry])
+def lead_timeline(
+    lead_id: UUID,
+    context: RequestContext = Depends(require_permission("crm.lead.read")),
+    db: Session = Depends(get_db),
+):
+    """Who changed what on this lead, newest first — including its deal's
+    history once converted."""
+
+    try:
+        lead = lead_service.get_lead(db, context, lead_id)
+    except NotFoundError as exc:
+        raise http_error(exc) from exc
+    refs = [("lead", lead.id)]
+    if lead.converted_opportunity_id and context.has_permission("crm.opportunity.read"):
+        refs.append(("opportunity", lead.converted_opportunity_id))
+    return history.timeline(db, context, refs)
+
+
+@router.get("/{lead_id}/customer-matches", response_model=list[CustomerMatchOut])
+def lead_customer_matches(
+    lead_id: UUID,
+    context: RequestContext = Depends(require_permission("crm.lead.convert")),
+    db: Session = Depends(get_db),
+):
+    """Existing customers this lead may already be (same name, or a contact
+    with its phone/email) — the convert form offers them instead of guessing."""
+
+    try:
+        return lead_service.customer_matches(db, context, lead_id)
+    except NotFoundError as exc:
+        raise http_error(exc) from exc
 
 
 @router.post("", response_model=LeadOut)

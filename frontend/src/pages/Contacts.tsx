@@ -1,33 +1,20 @@
-import { useEffect, useState } from "react";
-import { ApiError, createContact, fetchContacts, fetchCustomers, updateContact, type Contact, type Customer } from "../api/client";
+import { useCallback, useState } from "react";
+import { ApiError, createContact, fetchContacts, updateContact, type Contact } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { ContactActions } from "../crm/ContactActions";
+import { Pager, SearchBox } from "../crm/ui";
+import { useAppData } from "../data/AppDataProvider";
+import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
 export function Contacts() {
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { version } = useAppData();
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-
-  async function refresh() {
-    setLoading(true);
-    try {
-      const [c, cu] = await Promise.all([fetchContacts(), fetchCustomers()]);
-      setContacts(c);
-      setCustomers(cu);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach the Albiruni API.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
+  const [search, setSearch] = useState("");
+  const onSearch = useCallback((q: string) => setSearch(q), []);
+  const list = usePaged((limit, offset) => fetchContacts({ q: search, limit, offset }), search, version);
+  const contacts = list.rows;
+  const refresh = list.reload;
 
   return (
     <section>
@@ -37,10 +24,10 @@ export function Contacts() {
         <p className="page-sub">People at your customers — who you actually talk to, distinct from the account itself.</p>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {list.error && <div className="error-banner">{list.error}</div>}
 
       <div className="toolbar">
-        <div />
+        <SearchBox value={search} onChange={onSearch} placeholder="Search name, customer, phone, email" />
         <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "Cancel" : "+ New contact"}
         </button>
@@ -48,8 +35,6 @@ export function Contacts() {
 
       {showForm && (
         <ContactForm
-          customers={customers}
-          onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])}
           onDone={() => {
             setShowForm(false);
             refresh();
@@ -57,9 +42,9 @@ export function Contacts() {
         />
       )}
 
-      {!loading && contacts.length === 0 && !showForm && (
+      {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          No contacts yet.
+          {search ? "No contacts match this search." : "No contacts yet."}
         </div>
       )}
 
@@ -82,7 +67,6 @@ export function Contacts() {
                   <tr key={c.id}>
                     <td colSpan={6}>
                       <ContactForm
-                        customers={customers}
                         contact={c}
                         onDone={() => {
                           setEditingId(null);
@@ -115,23 +99,13 @@ export function Contacts() {
           </table>
         </div>
       )}
+      <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
     </section>
   );
 }
 
-function ContactForm({
-  customers,
-  contact,
-  onCustomerCreated,
-  onDone,
-}: {
-  customers: Customer[];
-  contact?: Contact;
-  onCustomerCreated?: (customer: Customer) => void;
-  onDone: () => void;
-}) {
-  const [localCustomers, setLocalCustomers] = useState(customers);
-  const [customerId, setCustomerId] = useState(contact?.customer_id ?? customers[0]?.id ?? "");
+function ContactForm({ contact, onDone }: { contact?: Contact; onDone: () => void }) {
+  const [customerId, setCustomerId] = useState(contact?.customer_id ?? "");
   const [name, setName] = useState(contact?.name ?? "");
   const [title, setTitle] = useState(contact?.title ?? "");
   const [email, setEmail] = useState(contact?.email ?? "");
@@ -160,15 +134,7 @@ function ContactForm({
     <div className="card form-card">
       <div className="field-grid">
         {!contact && (
-          <CustomerPicker
-            customers={localCustomers}
-            value={customerId}
-            onChange={setCustomerId}
-            onCustomerCreated={(c) => {
-              setLocalCustomers((prev) => [...prev, c]);
-              onCustomerCreated?.(c);
-            }}
-          />
+          <CustomerPicker value={customerId} onChange={setCustomerId} />
         )}
         <label className="field">
           <span>Name</span>

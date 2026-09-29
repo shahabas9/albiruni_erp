@@ -9,6 +9,8 @@ class CustomerIn(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     credit_limit: float = 0
     gstin: str = ""
+    # Create even though a customer with the same name or GSTIN exists.
+    allow_duplicate: bool = False
 
     _gstin = field_validator("gstin")(normalize_gstin)
 

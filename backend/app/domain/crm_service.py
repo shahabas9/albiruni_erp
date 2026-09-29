@@ -8,15 +8,15 @@ from the client is never trusted on its own.
 """
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, and_, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
 from app.domain.errors import ConflictError
-from app.models.crm import OPEN_STAGES, Activity, Opportunity
+from app.models.crm import OPEN_STAGES, Activity, CrmSettings, Opportunity
 from app.models.identity import User
 from app.models.sales import Customer, Quotation
 
@@ -65,6 +65,44 @@ def owner_names(db: Session, owner_ids: set[UUID | None]) -> dict[UUID, str]:
     return {u.id: u.display_name for u in db.execute(select(User).where(User.id.in_(ids))).scalars()}
 
 
+# --- Listing ------------------------------------------------------------------
+
+MAX_PAGE = 200
+
+
+def filter_owner(stmt: Select, column, owner: str, context: RequestContext) -> Select:
+    """owner: "" (anyone), "me", "unassigned" or a user id."""
+
+    if owner == "me":
+        return stmt.where(column == context.user.id)
+    if owner == "unassigned":
+        return stmt.where(column.is_(None))
+    if owner:
+        try:
+            return stmt.where(column == UUID(owner))
+        except ValueError as exc:
+            raise ConflictError("owner must be 'me', 'unassigned' or a user id.") from exc
+    return stmt
+
+
+def search(q: str, *columns):
+    """Every word must appear in one of the columns (case-insensitive)."""
+
+    words = [w.replace("%", r"\%").replace("_", r"\_") for w in q.split()]
+    return and_(*(or_(*(c.ilike(f"%{w}%") for c in columns)) for w in words))
+
+
+def page(db: Session, stmt: Select, limit: int | None, offset: int) -> tuple[list, int]:
+    """One page of `stmt`'s rows plus the total count, so screens can page
+    through thousands of records instead of loading them all."""
+
+    total = db.execute(select(func.count()).select_from(stmt.order_by(None).subquery())).scalar_one()
+    if limit is not None:
+        stmt = stmt.limit(min(limit, MAX_PAGE))
+    rows = list(db.execute(stmt.offset(offset)).scalars().unique())
+    return rows, total
+
+
 # --- Customers ----------------------------------------------------------------
 
 
@@ -94,7 +132,16 @@ def find_or_create_customer(db: Session, context: RequestContext, name: str) -> 
 class FollowUpStats:
     """Open/overdue follow-up counts per lead and per opportunity, from one query."""
 
-    def __init__(self, db: Session, context: RequestContext):
+    def __init__(
+        self,
+        db: Session,
+        context: RequestContext,
+        *,
+        lead_ids: list[UUID] | None = None,
+        opportunity_ids: list[UUID] | None = None,
+    ):
+        """Pass the ids on screen to load only their follow-ups."""
+
         self.now = now_utc()
         self._by_lead: dict[UUID, list[Activity]] = defaultdict(list)
         self._by_opp: dict[UUID, list[Activity]] = defaultdict(list)
@@ -103,6 +150,10 @@ class FollowUpStats:
             Activity.company_id == context.company_id,
             Activity.done.is_(False),
         )
+        if lead_ids is not None or opportunity_ids is not None:
+            stmt = stmt.where(or_(
+                Activity.lead_id.in_(lead_ids or []), Activity.opportunity_id.in_(opportunity_ids or [])
+            ))
         for a in db.execute(stmt).scalars():
             if a.opportunity_id:
                 self._by_opp[a.opportunity_id].append(a)
@@ -125,9 +176,33 @@ class FollowUpStats:
 
 # --- Idle deals -----------------------------------------------------------------
 
-# Days an open deal may go untouched in each stage before it's flagged
-# (Pipedrive calls this "rotting"). Late stages go cold faster.
+# Default days an open deal may go untouched in each stage before it's flagged
+# (Pipedrive calls this "rotting"). Each company can override them
+# (CrmSettings.stale_after_days); 0 turns the warning off for that stage.
 STALE_AFTER_DAYS = {"New": 7, "Qualified": 10, "Proposal": 14, "Negotiation": 7}
+MAX_STALE_DAYS = 365
+
+
+def stale_limits(db: Session, context: RequestContext) -> dict[str, int]:
+    row = db.get(CrmSettings, context.company_id)
+    saved = row.stale_after_days if row and row.tenant_id == context.tenant_id else {}
+    return {stage: int(saved.get(stage, default)) for stage, default in STALE_AFTER_DAYS.items()}
+
+
+def set_stale_limits(db: Session, context: RequestContext, limits: dict[str, int]) -> dict[str, int]:
+    unknown = set(limits) - set(STALE_AFTER_DAYS)
+    if unknown:
+        raise ConflictError(f"Unknown stage(s): {', '.join(sorted(unknown))}. Use {', '.join(STALE_AFTER_DAYS)}.")
+    for stage, days in limits.items():
+        if not 0 <= int(days) <= MAX_STALE_DAYS:
+            raise ConflictError(f"{stage}: use 0 (off) to {MAX_STALE_DAYS} days.")
+    row = db.get(CrmSettings, context.company_id)
+    if row is None:
+        row = CrmSettings(company_id=context.company_id, tenant_id=context.tenant_id, stale_after_days={})
+        db.add(row)
+    row.stale_after_days = {**(row.stale_after_days or {}), **{k: int(v) for k, v in limits.items()}}
+    db.commit()
+    return stale_limits(db, context)
 
 
 def last_touches(db: Session, context: RequestContext, opportunities: list[Opportunity]) -> dict[UUID, datetime]:
@@ -157,13 +232,50 @@ def last_touches(db: Session, context: RequestContext, opportunities: list[Oppor
     return touches
 
 
-def idle_status(opp: Opportunity, last_touch: datetime, at: datetime | None = None) -> dict:
+def stale_only(stmt: Select, context: RequestContext, limits: dict[str, int], at: datetime | None = None) -> Select:
+    """Narrows a select over Opportunity to deals idle past their stage's
+    limit — the same rule as idle_status, computed in SQL so a list or count
+    of stale deals never loads every open deal."""
+
+    activity = (
+        select(
+            Activity.opportunity_id.label("opp_id"),
+            func.max(func.greatest(Activity.created_at, func.coalesce(Activity.completed_at, Activity.created_at)))
+            .label("at"),
+        )
+        .where(Activity.tenant_id == context.tenant_id, Activity.opportunity_id.is_not(None))
+        .group_by(Activity.opportunity_id)
+        .subquery()
+    )
+    quote = (
+        select(Quotation.opportunity_id.label("opp_id"), func.max(Quotation.created_at).label("at"))
+        .where(Quotation.tenant_id == context.tenant_id, Quotation.opportunity_id.is_not(None))
+        .group_by(Quotation.opportunity_id)
+        .subquery()
+    )
+    # GREATEST skips NULLs in Postgres: a deal with no follow-ups or quotes
+    # is judged on its creation / stage-change date alone.
+    last_touch = func.greatest(Opportunity.created_at, Opportunity.stage_changed_at, activity.c.at, quote.c.at)
+    now = at or now_utc()
+    # idle_days >= limit  <=>  last_touch <= now - limit days
+    conditions = [
+        and_(Opportunity.stage == stage, last_touch <= now - timedelta(days=days))
+        for stage, days in limits.items() if days > 0
+    ]
+    return (
+        stmt.outerjoin(activity, activity.c.opp_id == Opportunity.id)
+        .outerjoin(quote, quote.c.opp_id == Opportunity.id)
+        .where(or_(*conditions) if conditions else false())
+    )
+
+
+def idle_status(opp: Opportunity, last_touch: datetime, limits: dict[str, int], at: datetime | None = None) -> dict:
     idle_days = max(((at or now_utc()) - last_touch).days, 0)
-    limit = STALE_AFTER_DAYS.get(opp.stage)
+    limit = limits.get(opp.stage, 0)  # closed stages have no limit; 0 = warning off
     return {
         "last_touch_at": last_touch,
         "idle_days": idle_days,
-        "is_stale": limit is not None and idle_days >= limit,
+        "is_stale": limit > 0 and idle_days >= limit,
     }
 
 

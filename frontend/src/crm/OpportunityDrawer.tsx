@@ -2,10 +2,15 @@ import { useEffect, useState } from "react";
 import {
   ApiError,
   assignOpportunity,
+  fetchActivities,
   fetchContacts,
+  fetchOpportunity,
+  fetchOpportunityTimeline,
   updateActivity,
   updateOpportunity,
+  type Activity,
   type Contact,
+  type Opportunity,
   type OpportunityStage,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
@@ -14,36 +19,63 @@ import { useAppData } from "../data/AppDataProvider";
 import { dateTime, inr, quoteStatusClass, relativeDue, shortDate } from "../lib/format";
 import { ContactActions } from "./ContactActions";
 import { FollowUpModal, LostReasonModal, QuoteForm } from "./forms";
+import { Timeline } from "./Timeline";
 import { Drawer, ErrorNote, FollowUpBadge, IdleBadge, OwnerPicker } from "./ui";
 
 const OPEN_FLOW: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
 
 /** One opportunity end to end: stage, owner, follow-ups, and its quotations. */
 export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: string; onClose: () => void }) {
-  const { opportunities, activities, assignees, items, refresh, can } = useAppData();
+  const { version, assignees, items, refresh, can } = useAppData();
   const { user } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  const [opp, setOpp] = useState<Opportunity | null>(null);
+  const [followUps, setFollowUps] = useState<Activity[]>([]);
+  const canSeeFollowUps = can("crm.activity.read");
 
-  const opp = opportunities.find((o) => o.id === opportunityId);
+  // Fetched by id, so any deal opens — including ones closed long ago that
+  // no list on screen has loaded. `version` refetches after every change.
+  useEffect(() => {
+    let current = true;
+    Promise.all([
+      fetchOpportunity(opportunityId),
+      canSeeFollowUps ? fetchActivities({ opportunity_id: opportunityId, show: "open" }) : Promise.resolve(null),
+    ])
+      .then(([o, acts]) => {
+        if (!current) return;
+        setOpp(o);
+        setFollowUps(acts?.rows ?? []);
+      })
+      .catch((err) => current && setError(err instanceof ApiError ? err.message : "Couldn't load this deal."));
+    return () => {
+      current = false;
+    };
+  }, [opportunityId, version, canSeeFollowUps]);
+
   const customerId = opp?.customer_id;
   const canSeeContacts = can("crm.contact.read");
   const [contacts, setContacts] = useState<Contact[]>([]);
   useEffect(() => {
     if (!customerId || !canSeeContacts) return;
-    fetchContacts()
-      .then((all) => setContacts(all.filter((c) => c.customer_id === customerId)))
+    fetchContacts({ customer_id: customerId, limit: 50 })
+      .then((page) => setContacts(page.rows))
       .catch(() => setContacts([]));
   }, [customerId, canSeeContacts]);
-  if (!opp) return null;
+  if (!opp) {
+    return error ? (
+      <Drawer title="Deal" onClose={onClose}>
+        <ErrorNote message={error} />
+      </Drawer>
+    ) : null;
+  }
 
   const canWrite = can("crm.opportunity.write");
   const canLog = can("crm.activity.write");
   const canQuote = can("sales.quotation.create");
   const isOpen = OPEN_FLOW.includes(opp.stage);
-  const followUps = activities.filter((a) => a.opportunity_id === opp.id);
   const currentIdx = OPEN_FLOW.indexOf(opp.stage);
 
   async function run(action: () => Promise<unknown>, ok?: string) {
@@ -253,6 +285,13 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
             ))}
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <span className="card-title">History</span>
+        </div>
+        <Timeline load={() => fetchOpportunityTimeline(opp.id)} version={version} />
       </div>
 
       {lostOpen && (

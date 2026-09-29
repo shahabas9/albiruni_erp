@@ -12,7 +12,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
@@ -111,6 +111,7 @@ def list_due_followups(db: Session, context: RequestContext, args: dict[str, Any
     if _mine(context, args):
         stmt = stmt.where(Activity.owner_id == context.user.id)
     rows = list(db.execute(stmt).scalars())
+    labels = activity_service.related_labels(db, context, rows)
     overdue = [a for a in rows if crm_service.is_overdue(a, now)]
     today = [a for a in rows if a not in overdue]
 
@@ -122,7 +123,7 @@ def list_due_followups(db: Session, context: RequestContext, args: dict[str, Any
             f"due today at {a.due_at.astimezone(tz):%H:%M}")
         items.append({
             "title": a.subject,
-            "subtitle": f"{activity_service.related_label(db, context, a)} · {when}",
+            "subtitle": f"{labels[a.id]} · {when}",
             "tone": "bad" if late else None,
             "link": f"/crm?opp={a.opportunity_id}" if a.opportunity_id else "/activities?show=overdue",
         })
@@ -139,30 +140,34 @@ def list_due_followups(db: Session, context: RequestContext, args: dict[str, Any
     }
 
 
-def _open_deals(db: Session, context: RequestContext, args: dict[str, Any]) -> list[Opportunity]:
-    stmt = select(Opportunity).where(
+def _open_deals_query(context: RequestContext, args: dict[str, Any], *columns) -> Select:
+    stmt = select(*columns).select_from(Opportunity).where(
         Opportunity.tenant_id == context.tenant_id,
         Opportunity.company_id == context.company_id,
         Opportunity.stage.in_(OPEN_STAGES),
     )
     if _mine(context, args):
         stmt = stmt.where(Opportunity.owner_user_id == context.user.id)
-    return list(db.execute(stmt).scalars())
+    return stmt
+
 
 
 def list_stale_deals(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
-    deals = _open_deals(db, context, args)
-    touches = crm_service.last_touches(db, context, deals)
+    limits = crm_service.stale_limits(db, context)
+    open_count = db.execute(_open_deals_query(context, args, func.count())).scalar_one()
+    stale_deals = list(db.execute(
+        crm_service.stale_only(_open_deals_query(context, args, Opportunity), context, limits)
+    ).scalars())
+    touches = crm_service.last_touches(db, context, stale_deals)
     stale = sorted(
-        ((o, crm_service.idle_status(o, touches[o.id])) for o in deals),
+        ((o, crm_service.idle_status(o, touches[o.id], limits)) for o in stale_deals),
         key=lambda pair: pair[1]["idle_days"],
         reverse=True,
     )
-    stale = [(o, s) for o, s in stale if s["is_stale"]]
     whose = "your" if _mine(context, args) else "the team's"
     message = (
-        f"{len(stale)} of {whose} {_n(len(deals), 'open deal')} {'is' if len(stale) == 1 else 'are'} going stale." if stale
-        else f"None of {whose} {_n(len(deals), 'open deal')} are going stale."
+        f"{len(stale)} of {whose} {_n(open_count, 'open deal')} {'is' if len(stale) == 1 else 'are'} going stale." if stale
+        else f"None of {whose} {_n(open_count, 'open deal')} are going stale."
     )
     return {
         "message": message,
@@ -181,35 +186,42 @@ def list_stale_deals(db: Session, context: RequestContext, args: dict[str, Any])
 
 
 def pipeline_summary(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
-    deals = _open_deals(db, context, args)
-    total = sum(float(o.value) for o in deals)
-    weighted = sum(float(o.value) * o.probability_pct / 100 for o in deals)
+    rows = db.execute(
+        _open_deals_query(context, args, Opportunity.stage, func.count(), func.coalesce(func.sum(Opportunity.value), 0),
+                          func.coalesce(func.sum(Opportunity.value * Opportunity.probability_pct / 100), 0))
+        .group_by(Opportunity.stage)
+    ).all()
+    by_stage = {stage: (count, float(value)) for stage, count, value, _ in rows}
+    open_count = sum(count for count, _ in by_stage.values())
+    total = sum(value for _, value in by_stage.values())
+    weighted = sum(float(w) for *_, w in rows)
     since = crm_service.now_utc() - timedelta(days=30)
-    closed = db.execute(select(Opportunity).where(
-        Opportunity.tenant_id == context.tenant_id,
-        Opportunity.company_id == context.company_id,
-        Opportunity.stage.in_(("Won", "Lost")),
-        Opportunity.stage_changed_at >= since,
-        *((Opportunity.owner_user_id == context.user.id,) if _mine(context, args) else ()),
-    )).scalars().all()
-    won = [o for o in closed if o.stage == "Won"]
+    closed = dict(db.execute(
+        select(Opportunity.stage, func.count()).where(
+            Opportunity.tenant_id == context.tenant_id,
+            Opportunity.company_id == context.company_id,
+            Opportunity.stage.in_(("Won", "Lost")),
+            Opportunity.stage_changed_at >= since,
+            *((Opportunity.owner_user_id == context.user.id,) if _mine(context, args) else ()),
+        ).group_by(Opportunity.stage)
+    ).all())
     whose = "Your" if _mine(context, args) else "The team's"
     message = (
-        f"{whose} pipeline: {_n(len(deals), 'open deal')} worth ₹{total:,.0f}, weighted forecast ₹{weighted:,.0f}. "
-        f"Last 30 days: {len(won)} won, {len(closed) - len(won)} lost."
+        f"{whose} pipeline: {_n(open_count, 'open deal')} worth ₹{total:,.0f}, weighted forecast ₹{weighted:,.0f}. "
+        f"Last 30 days: {closed.get('Won', 0)} won, {closed.get('Lost', 0)} lost."
     )
-    items = []
-    for stage in OPEN_STAGES:
-        in_stage = [o for o in deals if o.stage == stage]
-        if in_stage:
-            items.append({
-                "title": stage,
-                "subtitle": f"{len(in_stage)} deal{'s' if len(in_stage) != 1 else ''} · ₹{sum(float(o.value) for o in in_stage):,.0f}",
-                "tone": None,
-                "link": "/crm",
-            })
+    items = [
+        {
+            "title": stage,
+            "subtitle": f"{count} deal{'s' if count != 1 else ''} · ₹{value:,.0f}",
+            "tone": None,
+            "link": "/crm",
+        }
+        for stage in OPEN_STAGES
+        for count, value in [by_stage.get(stage, (0, 0.0))]
+        if count
+    ]
     return {"message": message, "items": items, "link": {"label": "Open pipeline", "to": "/crm"}, "result_summary": message}
-
 
 for definition in (
     ToolDefinition("crm.log_activity.v1", "Log a call, WhatsApp, meeting or note that already happened.",

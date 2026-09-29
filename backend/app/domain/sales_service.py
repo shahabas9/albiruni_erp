@@ -10,11 +10,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Integer, cast, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.models.sales import Customer, Item, Quotation, QuotationLine
+from app.models.sales import Customer, DocumentCounter, Item, Quotation, QuotationLine
 
 DISCOUNT_AUTO_APPROVE_LIMIT_PCT = 2.0
 
@@ -126,11 +127,28 @@ def price_quotation(
 
 
 def next_quotation_number(db: Session, context: RequestContext) -> str:
+    """QT-<year>-<n>, n counting from 1 per tenant each year.
+
+    The first number of a year continues after the highest QT-<year>-… the
+    tenant already has (quotations made before the counter existed)."""
+
     year = datetime.now(timezone.utc).year
-    count = db.execute(
-        select(func.count()).select_from(Quotation).where(Quotation.tenant_id == context.tenant_id)
-    ).scalar_one()
-    return f"QT-{year}-{count + 1:05d}"
+    prefix = f"QT-{year}-"
+    highest = (
+        select(func.coalesce(func.max(cast(func.split_part(Quotation.number, "-", 3), Integer)), 0))
+        .where(Quotation.tenant_id == context.tenant_id, Quotation.number.like(f"{prefix}%"))
+        .scalar_subquery()
+    )
+    stmt = (
+        pg_insert(DocumentCounter)
+        .values(tenant_id=context.tenant_id, kind="quotation", year=year, last_value=highest + 1)
+        .on_conflict_do_update(
+            index_elements=[DocumentCounter.tenant_id, DocumentCounter.kind, DocumentCounter.year],
+            set_={"last_value": DocumentCounter.last_value + 1},
+        )
+        .returning(DocumentCounter.last_value)
+    )
+    return f"{prefix}{db.execute(stmt).scalar_one():05d}"
 
 
 def persist_quotation(

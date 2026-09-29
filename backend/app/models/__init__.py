@@ -1,9 +1,9 @@
 """Import every model module so Base.metadata is fully populated for create_all() / Alembic autogenerate."""
 
 from app.models.audit import AuditEvent
-from app.models.crm import Activity, Contact, Lead, Opportunity
+from app.models.crm import Activity, Contact, CrmEvent, CrmSettings, Lead, Opportunity
 from app.models.identity import Role, User
-from app.models.sales import Customer, Item, Quotation, QuotationLine
+from app.models.sales import Customer, DocumentCounter, Item, Quotation, QuotationLine
 from app.models.tenant import Company, Tenant
 
 __all__ = [
@@ -12,6 +12,7 @@ __all__ = [
     "User",
     "Customer",
     "Item",
+    "DocumentCounter",
     "Quotation",
     "QuotationLine",
     "Company",
@@ -20,4 +21,6 @@ __all__ = [
     "Contact",
     "Opportunity",
     "Activity",
+    "CrmEvent",
+    "CrmSettings",
 ]

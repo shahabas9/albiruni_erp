@@ -1,39 +1,58 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ApiError,
   OPPORTUNITY_STAGES,
   assignOpportunity,
   createOpportunity,
-  fetchCustomers,
+  fetchOpportunities,
   updateOpportunity,
-  type Customer,
   type Opportunity,
   type OpportunityStage,
 } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
-import { FollowUpBadge, IdleBadge, OwnerPicker } from "../crm/ui";
+import { FollowUpBadge, IdleBadge, OwnerPicker, Pager, SearchBox, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-
-type OwnerFilter = "all" | "mine" | "unassigned";
+import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
 function formatInr(n: number): string {
   return `₹${n.toLocaleString("en-IN")}`;
 }
 
 export function Opportunities() {
-  const [customers, setCustomers] = useState<Customer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [params] = useSearchParams();
   const [showForm, setShowForm] = useState(params.get("new") === "1");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [stageFilter, setStageFilter] = useState<"all" | OpportunityStage>("all");
+  const [stageFilter, setStageFilter] = useState<"all" | "stale" | OpportunityStage>(() => {
+    if (params.get("stale") === "1") return "stale";
+    const stage = params.get("stage") as OpportunityStage | null;
+    return stage && OPPORTUNITY_STAGES.includes(stage) ? stage : "all";
+  });
   const [owner, setOwner] = useState<OwnerFilter>("all");
+  const [search, setSearch] = useState("");
+  const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
-  const { opportunities, loading, error: loadError, assignees, refresh: reload, can } = useAppData();
+  const { crm, version, assignees, refresh: reload, can } = useAppData();
   const openOpp = useOpenOpportunity();
+  const list = usePaged(
+    (limit, offset) =>
+      fetchOpportunities({
+        q: search,
+        stage: stageFilter === "all" || stageFilter === "stale" ? "" : stageFilter,
+        stale: stageFilter === "stale",
+        owner: ownerParam(owner),
+        limit,
+        offset,
+      }),
+    `${search}|${stageFilter}|${owner}`,
+    version,
+  );
+  const visible = list.rows;
+  const stageCount = (s: OpportunityStage) =>
+    s === "Won" ? crm?.won_deals : s === "Lost" ? crm?.lost_deals : crm?.by_stage.find((b) => b.stage === s)?.count;
 
   async function assign(o: Opportunity, ownerId: string | null) {
     try {
@@ -44,31 +63,7 @@ export function Opportunities() {
     }
   }
 
-  // The customer picker needs the customer list; only the create/edit form uses it.
-  useEffect(() => {
-    if (!can("sales.customer.read")) {
-      setCustomers([]);
-      return;
-    }
-    fetchCustomers()
-      .then(setCustomers)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load customers."));
-  }, [can]);
 
-  const openStages = OPPORTUNITY_STAGES.filter((s) => s !== "Won" && s !== "Lost");
-  const stageTotals = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const o of opportunities) totals.set(o.stage, (totals.get(o.stage) ?? 0) + o.value);
-    return totals;
-  }, [opportunities]);
-
-  const byStage = stageFilter === "all" ? opportunities : opportunities.filter((o) => o.stage === stageFilter);
-  const visible =
-    owner === "mine"
-      ? byStage.filter((o) => o.owner_user_id === user?.id)
-      : owner === "unassigned"
-        ? byStage.filter((o) => !o.owner_user_id)
-        : byStage;
 
   return (
     <section>
@@ -78,21 +73,19 @@ export function Opportunities() {
         <p className="page-sub">Quantified deals against a customer, moving toward Won or Lost. Open a deal to change its stage, schedule follow-ups or raise a quotation.</p>
       </div>
 
-      {(error ?? loadError) && <div className="error-banner">{error ?? loadError}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
 
-      {opportunities.length > 0 && (
+      {crm && crm.open_deals > 0 && (
         <div className="grid brief" style={{ marginBottom: 18 }}>
-          {openStages.map((stage) => (
+          {crm.by_stage.map(({ stage, count, value }) => (
             <div className="card brief-card" key={stage}>
               <h3>
                 <span>{stage}</span>
               </h3>
               <div className="hl-num mono" style={{ fontSize: 22 }}>
-                {formatInr(stageTotals.get(stage) ?? 0)}
+                {formatInr(value)}
               </div>
-              <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ink-dim)" }}>
-                {opportunities.filter((o) => o.stage === stage).length} open
-              </p>
+              <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ink-dim)" }}>{count} open</p>
             </div>
           ))}
         </div>
@@ -101,13 +94,17 @@ export function Opportunities() {
       <div className="toolbar">
         <div className="filters">
           <button className={stageFilter === "all" ? "on" : ""} onClick={() => setStageFilter("all")}>
-            All ({opportunities.length})
+            All
           </button>
           {OPPORTUNITY_STAGES.map((s) => (
             <button key={s} className={stageFilter === s ? "on" : ""} onClick={() => setStageFilter(s)}>
-              {s} ({opportunities.filter((o) => o.stage === s).length})
+              {s}
+              {stageCount(s) !== undefined && ` (${stageCount(s)})`}
             </button>
           ))}
+          <button className={stageFilter === "stale" ? "on" : ""} onClick={() => setStageFilter("stale")}>
+            Going stale{crm ? ` (${crm.stale_deals})` : ""}
+          </button>
         </div>
         <div className="filters" aria-label="Owner filter">
           {(["all", "mine", "unassigned"] as const).map((f) => (
@@ -116,6 +113,7 @@ export function Opportunities() {
             </button>
           ))}
         </div>
+        <SearchBox value={search} onChange={onSearch} placeholder="Search deal or customer" />
         {can("crm.opportunity.write") && (
           <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
             {showForm ? "Cancel" : "+ New opportunity"}
@@ -123,11 +121,9 @@ export function Opportunities() {
         )}
       </div>
 
-      {showForm && customers && (
+      {showForm && (
         <OpportunityForm
-          customers={customers}
           ownerId={user?.id ?? null}
-          onCustomerCreated={(c) => setCustomers((prev) => [...(prev ?? []), c])}
           onDone={() => {
             setShowForm(false);
             reload();
@@ -135,9 +131,9 @@ export function Opportunities() {
         />
       )}
 
-      {!loading && opportunities.length === 0 && !showForm && (
+      {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          No opportunities yet.
+          {search || stageFilter !== "all" || owner !== "all" ? "No opportunities match this filter." : "No opportunities yet."}
         </div>
       )}
 
@@ -157,11 +153,10 @@ export function Opportunities() {
             </thead>
             <tbody>
               {visible.map((o) =>
-                editingId === o.id && customers ? (
+                editingId === o.id ? (
                   <tr key={o.id}>
                     <td colSpan={8}>
                       <OpportunityForm
-                        customers={customers}
                         opportunity={o}
                         onDone={() => {
                           setEditingId(null);
@@ -207,7 +202,7 @@ export function Opportunities() {
                       )}
                     </td>
                     <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      {can("crm.opportunity.write") && customers && (
+                      {can("crm.opportunity.write") && (
                         <button className="ghost-btn sm" onClick={() => setEditingId(o.id)}>
                           Edit
                         </button>
@@ -220,26 +215,22 @@ export function Opportunities() {
           </table>
         </div>
       )}
+      <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
     </section>
   );
 }
 
 /** New opportunities are owned by whoever creates them; reassign from the Owner column. */
 function OpportunityForm({
-  customers,
   opportunity,
   ownerId,
-  onCustomerCreated,
   onDone,
 }: {
-  customers: Customer[];
   opportunity?: Opportunity;
   ownerId?: string | null;
-  onCustomerCreated?: (customer: Customer) => void;
   onDone: () => void;
 }) {
-  const [localCustomers, setLocalCustomers] = useState(customers);
-  const [customerId, setCustomerId] = useState(opportunity?.customer_id ?? customers[0]?.id ?? "");
+  const [customerId, setCustomerId] = useState(opportunity?.customer_id ?? "");
   const [name, setName] = useState(opportunity?.name ?? "");
   const [stage, setStage] = useState<OpportunityStage>(opportunity?.stage ?? "New");
   const [value, setValue] = useState(String(opportunity?.value ?? 0));
@@ -282,15 +273,7 @@ function OpportunityForm({
     <div className="card form-card">
       <div className="field-grid">
         {!opportunity && (
-          <CustomerPicker
-            customers={localCustomers}
-            value={customerId}
-            onChange={setCustomerId}
-            onCustomerCreated={(c) => {
-              setLocalCustomers((prev) => [...prev, c]);
-              onCustomerCreated?.(c);
-            }}
-          />
+          <CustomerPicker value={customerId} onChange={setCustomerId} />
         )}
         <label className="field">
           <span>Opportunity name</span>

@@ -90,11 +90,12 @@ function CompanyChip() {
 function Notifications() {
   const [open, setOpen] = useState(false);
   const ref = useOutsideClose(() => setOpen(false));
-  const { activities, quotes } = useAppData();
+  const { crm, quotes } = useAppData();
   const navigate = useNavigate();
-  const overdue = activities.filter((a) => a.is_overdue);
+  const overdue = crm?.overdue_items ?? [];
+  const overdueCount = crm?.overdue_followups ?? 0;
   const pending = quotes.filter((q) => q.status === "Pending approval");
-  const hasAny = overdue.length + pending.length > 0;
+  const hasAny = overdueCount + pending.length > 0;
 
   const go = (to: string) => {
     setOpen(false);
@@ -110,7 +111,7 @@ function Notifications() {
       {open && (
         <div className="menu-pop notif-list">
           {!hasAny && <div className="empty">Nothing needs you right now.</div>}
-          {overdue.slice(0, 5).map((a) => (
+          {overdue.map((a) => (
             <button key={a.id} onClick={() => go(a.opportunity_id ? `/crm?opp=${a.opportunity_id}` : "/activities?show=overdue")}>
               <Icon name="alert" size={16} />
               <span>
@@ -122,6 +123,12 @@ function Notifications() {
               </span>
             </button>
           ))}
+          {overdueCount > overdue.length && (
+            <button onClick={() => go("/activities?show=overdue")}>
+              <Icon name="alert" size={16} />
+              {overdueCount - overdue.length} more overdue follow-up{overdueCount - overdue.length === 1 ? "" : "s"}
+            </button>
+          )}
           {pending.length > 0 && (
             <button onClick={() => go("/sales?status=pending")}>
               <Icon name="file" size={16} />
