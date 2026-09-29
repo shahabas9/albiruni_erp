@@ -12,6 +12,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
+import { ContactActions } from "../crm/ContactActions";
 import { FollowUpModal } from "../crm/forms";
 import { FollowUpBadge, OwnerPicker } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -130,10 +131,17 @@ export function Leads() {
                 ) : (
                   <tr key={l.id}>
                     <td>
-                      <b>{l.company_name || l.name}</b>
-                      <span className="sub">
-                        {[l.company_name ? l.name : "", l.source].filter(Boolean).join(" · ") || "—"}
-                      </span>
+                      <div className="cell-with-actions">
+                        <div>
+                          <b>{l.company_name || l.name}</b>
+                          <span className="sub">
+                            {[l.company_name ? l.name : "", l.source].filter(Boolean).join(" · ") || "—"}
+                          </span>
+                        </div>
+                        {l.status !== "Converted" && (
+                          <ContactActions phone={l.phone} name={l.name} target={{ lead_id: l.id }} onLogged={reload} />
+                        )}
+                      </div>
                     </td>
                     <td>
                       <span className={`badge ${statusClass(l.status)}`}>{l.status}</span>

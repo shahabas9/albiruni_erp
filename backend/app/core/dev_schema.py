@@ -50,7 +50,11 @@ def ensure_dev_schema() -> None:
                 "notes": "TEXT NOT NULL DEFAULT ''",
                 "probability_pct": "INTEGER NOT NULL DEFAULT 50",
                 "lead_id": "UUID REFERENCES leads(id)",
+                "lost_reason": "VARCHAR(200) NOT NULL DEFAULT ''",
+                # No default here: existing rows must be backfilled from created_at, not "now".
+                "stage_changed_at": "TIMESTAMPTZ",
             },
+            "customers": {"gstin": "VARCHAR(15) NOT NULL DEFAULT ''"},
             "activities": {
                 "notes": "TEXT NOT NULL DEFAULT ''",
                 "due_date": "DATE", "due_at": "TIMESTAMPTZ",
@@ -82,6 +86,9 @@ def ensure_dev_schema() -> None:
         if "completed_at" not in before_activity:
             conn.execute(text("UPDATE activities SET completed_at = created_at WHERE done"))
 
+        # Deals that predate stage tracking: the best known stage date is creation.
+        conn.execute(text("UPDATE opportunities SET stage_changed_at = created_at WHERE stage_changed_at IS NULL"))
+        conn.execute(text("ALTER TABLE opportunities ALTER COLUMN stage_changed_at SET DEFAULT now()"))
         conn.execute(text("UPDATE opportunities SET stage = 'New' WHERE stage = 'Prospecting'"))
         conn.execute(text("UPDATE opportunities SET stage = 'Qualified' WHERE stage = 'Qualification'"))
         conn.execute(text("UPDATE leads SET status = 'Lost' WHERE status = 'Disqualified'"))

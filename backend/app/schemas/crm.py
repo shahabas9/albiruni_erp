@@ -130,6 +130,8 @@ class OpportunityUpdate(BaseModel):
     probability_pct: int | None = Field(default=None, ge=0, le=100)
     expected_close_date: date | None = None
     notes: str | None = None
+    # Required when moving to Lost (unless one is already recorded).
+    lost_reason: str | None = Field(default=None, max_length=200)
 
 
 class OpportunityQuotationIn(BaseModel):
@@ -151,9 +153,15 @@ class OpportunityOut(FollowUpSummary):
     probability_pct: int
     expected_close_date: date | None
     notes: str
+    lost_reason: str
+    stage_changed_at: datetime
     owner_user_id: UUID | None
     owner_name: str | None
     quotations: list[QuotationOut]
+    # Idle-deal signal: last stage change, follow-up or quotation on the deal.
+    last_touch_at: datetime
+    idle_days: int
+    is_stale: bool
     created_at: datetime
 
 
@@ -174,6 +182,8 @@ class ActivityIn(BaseModel):
     opportunity_id: UUID | None = None
     # Defaults to the parent record's owner, else the creator.
     owner_id: UUID | None = None
+    # Log something that already happened (e.g. a call just made) instead of scheduling it.
+    done: bool = False
 
 
 class ActivityUpdate(BaseModel):

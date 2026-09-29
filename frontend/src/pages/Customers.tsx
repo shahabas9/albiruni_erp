@@ -55,6 +55,7 @@ export function Customers() {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>GSTIN</th>
                 <th>Credit limit</th>
                 <th>Status</th>
                 <th></th>
@@ -64,7 +65,7 @@ export function Customers() {
               {customers.map((c) =>
                 editingId === c.id ? (
                   <tr key={c.id}>
-                    <td colSpan={4}>
+                    <td colSpan={5}>
                       <CustomerForm
                         customer={c}
                         onDone={() => {
@@ -77,6 +78,7 @@ export function Customers() {
                 ) : (
                   <tr key={c.id}>
                     <td>{c.name}</td>
+                    <td>{c.gstin ? <span className="mono">{c.gstin}</span> : <span className="followup none">Unregistered</span>}</td>
                     <td className="mono">₹{c.credit_limit.toLocaleString("en-IN")}</td>
                     <td>
                       <span className={`badge ${c.active ? "status-confirmed" : "status-draft"}`}>
@@ -111,6 +113,7 @@ export function Customers() {
 function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () => void }) {
   const [name, setName] = useState(customer?.name ?? "");
   const [creditLimit, setCreditLimit] = useState(String(customer?.credit_limit ?? 0));
+  const [gstin, setGstin] = useState(customer?.gstin ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -119,9 +122,9 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
     setError(null);
     try {
       if (customer) {
-        await updateCustomer(customer.id, { name, credit_limit: Number(creditLimit) });
+        await updateCustomer(customer.id, { name, credit_limit: Number(creditLimit), gstin });
       } else {
-        await createCustomer({ name, credit_limit: Number(creditLimit) });
+        await createCustomer({ name, credit_limit: Number(creditLimit), gstin });
       }
       onDone();
     } catch (err) {
@@ -141,6 +144,16 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
         <label className="field">
           <span>Credit limit (₹)</span>
           <input type="number" min={0} value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>GSTIN (optional)</span>
+          <input
+            value={gstin}
+            onChange={(e) => setGstin(e.target.value.toUpperCase())}
+            maxLength={15}
+            placeholder="e.g. 32ABCDE1234F1Z5"
+            style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
+          />
         </label>
       </div>
       {error && <div className="error-banner">{error}</div>}

@@ -92,6 +92,8 @@ def create_activity(db: Session, context: RequestContext, body: ActivityIn) -> A
         customer_id=body.customer_id,
         opportunity_id=body.opportunity_id,
         created_by=context.user.id,
+        done=body.done,
+        completed_at=crm_service.now_utc() if body.done else None,
     )
     db.add(activity)
     db.commit()

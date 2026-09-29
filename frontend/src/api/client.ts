@@ -40,7 +40,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail ?? detail;
+      // FastAPI validation errors arrive as a list of {loc, msg}; show their messages.
+      detail = Array.isArray(body.detail)
+        ? body.detail.map((d: { msg?: string }) => String(d.msg ?? "").replace(/^Value error, /, "")).join(" ")
+        : (body.detail ?? detail);
     } catch {
       // response wasn't JSON — keep statusText
     }
@@ -200,11 +203,14 @@ export interface Customer {
   name: string;
   credit_limit: number;
   active: boolean;
+  /** GST registration number; "" if unregistered. */
+  gstin: string;
 }
 
 export interface CustomerInput {
   name: string;
   credit_limit: number;
+  gstin?: string;
 }
 
 export function fetchCustomers(): Promise<Customer[]> {
@@ -457,11 +463,30 @@ export interface Opportunity extends FollowUpSummary {
   probability_pct: number;
   expected_close_date: string | null;
   notes: string;
+  /** Set when stage is Lost. */
+  lost_reason: string;
+  /** When the stage last changed (the won/lost date for closed deals). */
+  stage_changed_at: string;
   owner_user_id: string | null;
   owner_name: string | null;
   quotations: Quotation[];
+  /** Last stage change, follow-up or quotation on the deal. */
+  last_touch_at: string;
+  idle_days: number;
+  /** Open deal untouched longer than its stage allows. */
+  is_stale: boolean;
   created_at: string;
 }
+
+/** Suggestions for the lost-reason picker; any text is accepted. */
+export const LOST_REASONS = [
+  "Price too high",
+  "Chose a competitor",
+  "No budget",
+  "No response",
+  "Timing / postponed",
+  "Requirement changed",
+];
 
 export interface OpportunityInput {
   customer_id: string;
@@ -484,7 +509,7 @@ export function createOpportunity(body: OpportunityInput): Promise<Opportunity> 
 
 export function updateOpportunity(
   id: string,
-  body: Partial<Omit<OpportunityInput, "customer_id" | "owner_user_id"> & { stage: OpportunityStage }>,
+  body: Partial<Omit<OpportunityInput, "customer_id" | "owner_user_id"> & { stage: OpportunityStage; lost_reason: string }>,
 ): Promise<Opportunity> {
   return request<Opportunity>(`/api/opportunities/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
@@ -509,8 +534,8 @@ export function quoteOpportunity(
 
 // --- CRM: Activities ----------------------------------------------------------
 
-export type ActivityType = "Call" | "Meeting" | "Email" | "Task" | "Note";
-export const ACTIVITY_TYPES: ActivityType[] = ["Call", "Meeting", "Email", "Task", "Note"];
+export type ActivityType = "Call" | "WhatsApp" | "Meeting" | "Email" | "Task" | "Note";
+export const ACTIVITY_TYPES: ActivityType[] = ["Call", "WhatsApp", "Meeting", "Email", "Task", "Note"];
 
 export interface Activity {
   id: string;
@@ -542,6 +567,8 @@ export interface ActivityInput {
   lead_id?: string | null;
   customer_id?: string | null;
   opportunity_id?: string | null;
+  /** true logs something that already happened (e.g. a call just made). */
+  done?: boolean;
 }
 
 export function fetchActivities(openOnly = false): Promise<Activity[]> {

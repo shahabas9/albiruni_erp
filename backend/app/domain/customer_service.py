@@ -31,6 +31,7 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
         company_id=context.company_id,
         name=body.name,
         credit_limit=body.credit_limit,
+        gstin=body.gstin,
         active=True,
     )
     db.add(customer)

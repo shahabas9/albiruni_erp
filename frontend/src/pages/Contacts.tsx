@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, createContact, fetchContacts, fetchCustomers, updateContact, type Contact, type Customer } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { ContactActions } from "../crm/ContactActions";
 
 export function Contacts() {
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -96,7 +97,12 @@ export function Contacts() {
                     <td>{c.customer_name}</td>
                     <td>{c.title || "—"}</td>
                     <td>{c.email || "—"}</td>
-                    <td>{c.phone || "—"}</td>
+                    <td>
+                      <div className="cell-with-actions">
+                        <span>{c.phone || "—"}</span>
+                        <ContactActions phone={c.phone} name={c.name} target={{ customer_id: c.customer_id }} />
+                      </div>
+                    </td>
                     <td>
                       <button className="secondary-btn" onClick={() => setEditingId(c.id)}>
                         Edit

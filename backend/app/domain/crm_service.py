@@ -123,6 +123,50 @@ class FollowUpStats:
         return self._summary(self._by_opp.get(opportunity_id, []))
 
 
+# --- Idle deals -----------------------------------------------------------------
+
+# Days an open deal may go untouched in each stage before it's flagged
+# (Pipedrive calls this "rotting"). Late stages go cold faster.
+STALE_AFTER_DAYS = {"New": 7, "Qualified": 10, "Proposal": 14, "Negotiation": 7}
+
+
+def last_touches(db: Session, context: RequestContext, opportunities: list[Opportunity]) -> dict[UUID, datetime]:
+    """Most recent sign of life per deal: creation, stage change, any follow-up
+    logged or completed on it, or a quotation raised for it."""
+
+    touches = {o.id: max(o.created_at, o.stage_changed_at or o.created_at) for o in opportunities}
+    if not touches:
+        return touches
+    ids = list(touches)
+    activity_rows = db.execute(
+        select(
+            Activity.opportunity_id,
+            func.max(func.greatest(Activity.created_at, func.coalesce(Activity.completed_at, Activity.created_at))),
+        )
+        .where(Activity.tenant_id == context.tenant_id, Activity.opportunity_id.in_(ids))
+        .group_by(Activity.opportunity_id)
+    )
+    quote_rows = db.execute(
+        select(Quotation.opportunity_id, func.max(Quotation.created_at))
+        .where(Quotation.tenant_id == context.tenant_id, Quotation.opportunity_id.in_(ids))
+        .group_by(Quotation.opportunity_id)
+    )
+    for opp_id, at in [*activity_rows, *quote_rows]:
+        if at is not None and at > touches[opp_id]:
+            touches[opp_id] = at
+    return touches
+
+
+def idle_status(opp: Opportunity, last_touch: datetime, at: datetime | None = None) -> dict:
+    idle_days = max(((at or now_utc()) - last_touch).days, 0)
+    limit = STALE_AFTER_DAYS.get(opp.stage)
+    return {
+        "last_touch_at": last_touch,
+        "idle_days": idle_days,
+        "is_stale": limit is not None and idle_days >= limit,
+    }
+
+
 # --- Opportunity -> Quotation -------------------------------------------------
 
 
@@ -134,6 +178,7 @@ def assert_quotable(opp: Opportunity) -> None:
 def advance_on_quotation(opp: Opportunity) -> None:
     if opp.stage in _STAGES_BEFORE_PROPOSAL:
         opp.stage = "Proposal"
+        opp.stage_changed_at = now_utc()
 
 
 def quotations_for(db: Session, opportunity_ids: list[UUID]) -> dict[UUID, list[Quotation]]:

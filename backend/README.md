@@ -114,7 +114,14 @@ One API, one permission set. Each record type has its own routes and
 | `/api/assignees` | any of `crm.lead.read`, `crm.opportunity.read`, `crm.activity.read` |
 
 Leads and opportunities come back with their owner's name and open/overdue
-follow-up counts; opportunities also carry their linked quotations. An
+follow-up counts; opportunities also carry their linked quotations, the
+`stage_changed_at` date (the won/lost date once closed), and idle-deal fields
+(`last_touch_at`, `idle_days`, `is_stale`). A deal is stale when nothing —
+stage change, follow-up or quotation — has touched it for longer than its
+stage allows (`STALE_AFTER_DAYS` in `domain/crm_service.py`: New 7, Qualified
+10, Proposal 14, Negotiation 7 days). Moving a deal to Lost requires a
+`lost_reason`; reopening it clears the reason. Customers take an optional
+`gstin`, validated (format, state code and check character) and upper-cased. An
 activity is overdue once `due_at` passes while it's not done; a date-only
 activity is due by the end of that day (UTC — the web app sends the end of
 the user's local day instead).

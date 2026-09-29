@@ -12,9 +12,11 @@ from app.core.database import Base
 # of truth for which values are valid (see schemas/crm.py).
 LEAD_STATUSES = ["New", "Contacted", "Qualified", "Converted", "Lost"]
 OPPORTUNITY_STAGES = ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"]
-ACTIVITY_TYPES = ["Call", "Meeting", "Email", "Task", "Note"]
+ACTIVITY_TYPES = ["Call", "WhatsApp", "Meeting", "Email", "Task", "Note"]
 ACTIVITY_KINDS = ACTIVITY_TYPES
 OPEN_STAGES = ("New", "Qualified", "Proposal", "Negotiation")
+# Suggestions for the lost-reason picker; any non-empty text is accepted.
+LOST_REASONS = ["Price too high", "Chose a competitor", "No budget", "No response", "Timing / postponed", "Requirement changed"]
 
 
 class Lead(Base):
@@ -88,6 +90,10 @@ class Opportunity(Base):
     probability_pct: Mapped[int] = mapped_column(default=50)
     expected_close_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Required when stage is Lost, cleared when the deal is reopened.
+    lost_reason: Mapped[str] = mapped_column(String(200), default="")
+    # When the stage last changed — Won/Lost date, and part of "last touched" for idle deals.
+    stage_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     title = synonym("name")

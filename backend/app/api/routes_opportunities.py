@@ -19,13 +19,17 @@ router = APIRouter(prefix="/api/opportunities", tags=["crm"])
 ASSIGN = "crm.opportunity.assign"
 
 
-def _to_out(o: Opportunity, stats: crm_service.FollowUpStats, owners: dict, quotes: dict) -> OpportunityOut:
+def _to_out(
+    o: Opportunity, stats: crm_service.FollowUpStats, owners: dict, quotes: dict, touches: dict
+) -> OpportunityOut:
     return OpportunityOut(
         id=o.id, customer_id=o.customer_id, customer_name=o.customer.name, lead_id=o.lead_id, name=o.name,
         stage=o.stage, value=float(o.value), probability_pct=o.probability_pct,
-        expected_close_date=o.expected_close_date, notes=o.notes, owner_user_id=o.owner_user_id,
+        expected_close_date=o.expected_close_date, notes=o.notes, lost_reason=o.lost_reason,
+        stage_changed_at=o.stage_changed_at, owner_user_id=o.owner_user_id,
         owner_name=owners.get(o.owner_user_id), quotations=[to_quotation_out(q) for q in quotes.get(o.id, [])],
         created_at=o.created_at, **stats.for_opportunity(o.id),
+        **crm_service.idle_status(o, touches[o.id]),
     )
 
 
@@ -35,6 +39,7 @@ def _single_out(db: Session, context: RequestContext, o: Opportunity) -> Opportu
         crm_service.FollowUpStats(db, context),
         crm_service.owner_names(db, {o.owner_user_id}),
         crm_service.quotations_for(db, [o.id]),
+        crm_service.last_touches(db, context, [o]),
     )
 
 
@@ -47,7 +52,8 @@ def list_opportunities(
     stats = crm_service.FollowUpStats(db, context)
     owners = crm_service.owner_names(db, {o.owner_user_id for o in opps})
     quotes = crm_service.quotations_for(db, [o.id for o in opps])
-    return [_to_out(o, stats, owners, quotes) for o in opps]
+    touches = crm_service.last_touches(db, context, opps)
+    return [_to_out(o, stats, owners, quotes, touches) for o in opps]
 
 
 @router.post("", response_model=OpportunityOut)
