@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.core.database import Base
@@ -37,6 +37,10 @@ class Lead(Base):
     source: Mapped[str] = mapped_column(String(60), default="")
     status: Mapped[str] = mapped_column(String(20), default="New")
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Lower-case labels for grouping and filtering (domain/fields.py normalizes them).
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String(40)), default=list)
+    # Values of the company's custom fields for this record type, by field key.
+    custom: Mapped[dict] = mapped_column(JSONB, default=dict)
 
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     converted_customer_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -90,6 +94,10 @@ class Opportunity(Base):
     probability_pct: Mapped[int] = mapped_column(default=50)
     expected_close_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Lower-case labels for grouping and filtering (domain/fields.py normalizes them).
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String(40)), default=list)
+    # Values of the company's custom fields for this record type, by field key.
+    custom: Mapped[dict] = mapped_column(JSONB, default=dict)
     # Required when stage is Lost, cleared when the deal is reopened.
     lost_reason: Mapped[str] = mapped_column(String(200), default="")
     # When the stage last changed — Won/Lost date, and part of "last touched" for idle deals.
@@ -189,3 +197,23 @@ class SalesTarget(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     month: Mapped[date] = mapped_column(Date)  # first day of the month
     amount: Mapped[float] = mapped_column(Numeric(14, 2))
+
+
+class CustomField(Base):
+    """A company-defined field on leads, deals or customers. Archiving
+    (active=False) hides it from forms but keeps the values already saved."""
+
+    __tablename__ = "custom_fields"
+    __table_args__ = (UniqueConstraint("company_id", "record_type", "key", name="uq_custom_fields_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    record_type: Mapped[str] = mapped_column(String(20))  # lead | opportunity | customer
+    key: Mapped[str] = mapped_column(String(40))  # stable; values are stored under it
+    label: Mapped[str] = mapped_column(String(80))
+    field_type: Mapped[str] = mapped_column(String(20))  # text | number | date | select | checkbox
+    options: Mapped[list[str]] = mapped_column(JSONB, default=list)  # select only
+    position: Mapped[int] = mapped_column(default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

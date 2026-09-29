@@ -42,6 +42,7 @@ def _to_out(lead: Lead, stats: crm_service.FollowUpStats, owners: dict) -> LeadO
         source=lead.source, status=lead.status, notes=lead.notes, owner_user_id=lead.owner_user_id,
         owner_name=owners.get(lead.owner_user_id), converted_customer_id=lead.converted_customer_id,
         converted_opportunity_id=lead.converted_opportunity_id, created_at=lead.created_at,
+        tags=list(lead.tags or []), custom=dict(lead.custom or {}),
         **stats.for_lead(lead.id),
     )
 
@@ -57,6 +58,7 @@ def list_leads(
     q: str = "",
     status_: str = Query("", alias="status", description='A status, or "open" (not Converted/Lost)'),
     owner: str = Query("", description='"me", "unassigned" or a user id'),
+    tag: str = "",
     limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
     offset: int = Query(0, ge=0),
     context: RequestContext = Depends(require_permission("crm.lead.read")),
@@ -66,7 +68,7 @@ def list_leads(
 
     try:
         leads, total = lead_service.list_leads(
-            db, context, q=q, status=status_, owner=owner, limit=limit, offset=offset
+            db, context, q=q, status=status_, owner=owner, tag=tag, limit=limit, offset=offset
         )
     except ConflictError as exc:
         raise http_error(exc) from exc

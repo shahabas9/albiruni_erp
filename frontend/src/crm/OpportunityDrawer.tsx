@@ -10,6 +10,7 @@ import {
   updateOpportunity,
   type Activity,
   type Contact,
+  type CustomValues,
   type Opportunity,
   type OpportunityStage,
 } from "../api/client";
@@ -18,6 +19,7 @@ import { Icon } from "../components/Icon";
 import { useAppData } from "../data/AppDataProvider";
 import { dateTime, inr, quoteStatusClass, relativeDue, shortDate } from "../lib/format";
 import { ContactActions } from "./ContactActions";
+import { CustomFieldInputs, CustomFieldValues, TagChips, TagInput, changedCustom, useCustomFields } from "./fields";
 import { FollowUpModal, LostReasonModal, QuoteForm } from "./forms";
 import { Timeline } from "./Timeline";
 import { Drawer, ErrorNote, FollowUpBadge, IdleBadge, OwnerPicker } from "./ui";
@@ -78,15 +80,18 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
   const isOpen = OPEN_FLOW.includes(opp.stage);
   const currentIdx = OPEN_FLOW.indexOf(opp.stage);
 
-  async function run(action: () => Promise<unknown>, ok?: string) {
+  /** Runs a change, refreshes, and says whether it worked (errors show in the drawer). */
+  async function run(action: () => Promise<unknown>, ok?: string): Promise<boolean> {
     setError(null);
     setNotice(null);
     try {
       await action();
       await refresh();
       if (ok) setNotice(ok);
+      return true;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not reach the Albiruni API.");
+      return false;
     }
   }
 
@@ -164,6 +169,8 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
           </div>
         </div>
       </div>
+
+      <DealDetails opp={opp} canEdit={canWrite} onSave={(body) => run(() => updateOpportunity(opp.id, body), "Details saved.")} />
 
       <div className="card">
         <div className="card-head">
@@ -316,5 +323,80 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
         />
       )}
     </Drawer>
+  );
+}
+
+/** Tags and custom fields, read-only until Edit. */
+function DealDetails({
+  opp,
+  canEdit,
+  onSave,
+}: {
+  opp: Opportunity;
+  canEdit: boolean;
+  onSave: (body: { tags: string[]; custom: CustomValues }) => Promise<boolean>;
+}) {
+  const fields = useCustomFields("opportunity");
+  const [editing, setEditing] = useState(false);
+  const [tags, setTags] = useState<string[]>(opp.tags);
+  const [custom, setCustom] = useState<CustomValues>(opp.custom);
+  const [saving, setSaving] = useState(false);
+  const hasAny = opp.tags.length > 0 || fields.some((f) => opp.custom[f.key] != null);
+  if (!hasAny && !canEdit) return null;
+
+  function start() {
+    setTags(opp.tags);
+    setCustom(opp.custom);
+    setEditing(true);
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      if (await onSave({ tags, custom: changedCustom(opp.custom, custom) })) setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="card-title">Details</span>
+        {canEdit && !editing && (
+          <button className="ghost-btn sm" onClick={start}>
+            Edit
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <>
+          <div className="field-grid">
+            <CustomFieldInputs fields={fields} values={custom} onChange={setCustom} />
+            <div className="field full">
+              <span>Tags</span>
+              <TagInput value={tags} onChange={setTags} recordType="opportunity" />
+            </div>
+          </div>
+          <div className="form-actions">
+            <button className="primary-btn" disabled={saving} onClick={save}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button className="secondary-btn" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : hasAny ? (
+        <>
+          <TagChips tags={opp.tags} />
+          <CustomFieldValues fields={fields} values={opp.custom} />
+        </>
+      ) : (
+        <p className="card-note" style={{ margin: 0 }}>
+          No tags{fields.length ? " or custom details" : ""} yet.
+        </p>
+      )}
+    </div>
   );
 }

@@ -13,6 +13,7 @@ import {
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { LostReasonModal } from "../crm/forms";
+import { TagChips } from "../crm/fields";
 import { StaleLimitsEditor } from "../crm/StaleLimitsEditor";
 import { ErrorNote, FollowUpBadge, IdleBadge, Modal, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -341,6 +342,7 @@ function DealCard({
           </span>
         )}
       </div>
+      <TagChips tags={o.tags} />
     </div>
   );
 }

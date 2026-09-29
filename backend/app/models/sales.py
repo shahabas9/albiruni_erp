@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -19,6 +19,10 @@ class Customer(Base):
     active: Mapped[bool] = mapped_column(default=True)
     # Indian GST registration number; empty for unregistered customers.
     gstin: Mapped[str] = mapped_column(String(15), default="")
+    # Lower-case labels for grouping and filtering (domain/fields.py normalizes them).
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String(40)), default=list)
+    # Values of the company's custom fields for this record type, by field key.
+    custom: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
 class Item(Base):

@@ -1,4 +1,5 @@
 from datetime import timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func, select
@@ -9,10 +10,10 @@ from app.api.routes_leads import http_error
 from app.api.routes_opportunities import opportunity_rows
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_any_permission, require_permission
-from app.domain import activity_service, crm_service, target_service
-from app.domain.errors import ConflictError
+from app.domain import activity_service, crm_service, fields, target_service
+from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, Activity, Lead, Opportunity
-from app.schemas.crm import CrmSummary, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetReport, TargetsIn
+from app.schemas.crm import CrmSummary, CustomFieldIn, CustomFieldOut, CustomFieldUpdate, TagCount, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetReport, TargetsIn
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -91,6 +92,67 @@ def put_targets(
         when = target_service.parse_month(body.month)
         target_service.set_targets(db, context, when, [(t.user_id, t.amount) for t in body.targets])
         return target_service.report(db, context, when)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/fields", response_model=list[CustomFieldOut])
+def list_custom_fields(
+    record_type: str = "",
+    include_archived: bool = False,
+    context: RequestContext = Depends(require_any_permission(
+        "crm.lead.read", "crm.opportunity.read", "sales.customer.read", "crm.settings.write",
+    )),
+    db: Session = Depends(get_db),
+):
+    """The company's custom fields (for one record type when given), in form order."""
+
+    try:
+        return fields.list_fields(db, context, record_type or None, include_archived=include_archived)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/fields", response_model=CustomFieldOut)
+def create_custom_field(
+    body: CustomFieldIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return fields.create_field(db, context, record_type=body.record_type, label=body.label,
+                                   field_type=body.field_type, options=body.options)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.patch("/fields/{field_id}", response_model=CustomFieldOut)
+def update_custom_field(
+    field_id: UUID,
+    body: CustomFieldUpdate,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Rename, change choices, reorder or archive. Archiving keeps saved values."""
+
+    try:
+        return fields.update_field(db, context, field_id, body.model_dump(exclude_unset=True))
+    except (NotFoundError, ConflictError) as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/tags", response_model=list[TagCount])
+def list_tags(
+    record_type: str = Query(..., description="lead, opportunity or customer"),
+    context: RequestContext = Depends(require_any_permission(
+        "crm.lead.read", "crm.opportunity.read", "sales.customer.read",
+    )),
+    db: Session = Depends(get_db),
+):
+    """Tags in use on a record type, most used first — for filters and suggestions."""
+
+    try:
+        return fields.tag_counts(db, context, record_type)
     except ConflictError as exc:
         raise http_error(exc) from exc
 

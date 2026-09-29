@@ -18,8 +18,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, history
+from app.domain import crm_service, fields, history
 from app.domain.duplicates import phone_key
+from app.domain.errors import ConflictError
 from app.domain.gstin import normalize_gstin
 from app.models.crm import Lead
 from app.models.sales import Customer
@@ -37,14 +38,25 @@ COLUMNS = {
         "source": ["source", "lead source", "channel"],
         "notes": ["notes", "note", "remarks", "comments", "comment", "description"],
         "owner": ["owner", "assigned to", "salesperson", "sales person", "sales rep", "rep"],
+        "tags": ["tags", "tag", "labels", "label", "category"],
     },
     "customers": {
         "name": ["name", "customer", "customer name", "company", "company name", "business", "business name", "party", "party name"],
         "gstin": ["gstin", "gst", "gst no", "gst number", "gstin uin", "gstin/uin", "gst in"],
         "credit_limit": ["credit limit", "credit", "limit", "credit amount"],
+        "tags": ["tags", "tag", "labels", "label", "category"],
     },
 }
 REQUIRED = {"leads": "name or company", "customers": "name"}
+
+def _tags(row: "Row") -> None:
+    """A Tags cell holds tags separated by commas, semicolons or bars."""
+
+    try:
+        row.values["tags"] = ", ".join(fields.normalize_tags(re.split(r"[,;|]", row.values.get("tags", ""))))
+    except ConflictError as exc:
+        row.error(str(exc))
+
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -137,6 +149,7 @@ def _validate_leads(db: Session, context: RequestContext, rows: list[Row]) -> No
         phone = v.get("phone", "")
         if phone and not 10 <= len(re.sub(r"\D", "", phone)) <= 15:
             row.error(f"“{phone}” doesn't look like a phone number.")
+        _tags(row)
         owner = v.get("owner", "")
         if owner:
             user = users.get(owner.lower())
@@ -180,6 +193,7 @@ def _validate_customers(db: Session, context: RequestContext, rows: list[Row]) -
             v["gstin"] = normalize_gstin(v.get("gstin", ""))
         except ValueError as exc:
             row.error(str(exc))
+        _tags(row)
         raw_limit = re.sub(r"[₹,\s]|rs\.?|inr", "", v.get("credit_limit", ""), flags=re.IGNORECASE)
         try:
             limit = Decimal(raw_limit) if raw_limit else Decimal(0)
@@ -203,6 +217,10 @@ def validate(db: Session, context: RequestContext, kind: str, rows: list[Row]) -
     (_validate_leads if kind == "leads" else _validate_customers)(db, context, rows)
 
 
+def _tag_list(values: dict) -> list[str]:
+    return [t for t in values.get("tags", "").split(", ") if t]
+
+
 def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> int:
     """Writes every "ok" row in one transaction; returns how many were created."""
 
@@ -220,7 +238,7 @@ def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> 
                 tenant_id=context.tenant_id, company_id=context.company_id,
                 name=v["name"], company_name=v.get("company_name", ""), phone=v.get("phone", ""),
                 email=v.get("email", ""), source=v.get("source", "") or "Import", notes=v.get("notes", ""),
-                status="New", owner_user_id=owner,
+                status="New", owner_user_id=owner, tags=_tag_list(v),
             )
             db.add(lead)
             db.flush()
@@ -230,6 +248,7 @@ def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> 
             db.add(Customer(
                 tenant_id=context.tenant_id, company_id=context.company_id,
                 name=v["name"], gstin=v["gstin"], credit_limit=Decimal(v["credit_limit"]), active=True,
+                tags=_tag_list(v),
             ))
         created += 1
     db.commit()

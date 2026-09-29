@@ -441,6 +441,85 @@ class CrmTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             require_permission("crm.settings.write")(self.make_context(["crm.opportunity.read"]))
 
+    # --- Tags and custom fields ---------------------------------------------------
+
+    def field(self, record_type, label, field_type, options=()):
+        return routes_crm.create_custom_field(
+            crm.CustomFieldIn(record_type=record_type, label=label, field_type=field_type, options=list(options)),
+            self.context, self.db)
+
+    def test_tags_are_normalized_counted_and_filterable(self):
+        lead = self.lead(name="Tagged", tags=["VIP", " vip ", "Kerala  North", ""])
+        self.assertEqual(lead.tags, ["vip", "kerala north"])
+        self.lead(name="Other", tags=["vip"])
+        self.assertEqual({l.name for l in self.leads_out(tag="VIP")}, {"Tagged", "Other"})
+        self.assertEqual([l.name for l in self.leads_out(tag="kerala north")], ["Tagged"])
+        counts = routes_crm.list_tags("lead", self.context, self.db)
+        self.assertEqual(counts[0], {"tag": "vip", "count": 2})
+
+        lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(tags=["vip", "hot"]))
+        latest = routes_leads.lead_timeline(lead.id, self.context, self.db)[0]
+        self.assertEqual(latest["summary"], "Tags: vip, kerala north → vip, hot")
+        with self.assertRaises(ConflictError):
+            lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(tags=[f"t{i}" for i in range(21)]))
+
+        deal = self.deal(name="Tagged deal", tags=["Export"])
+        self.assertEqual([o.name for o in self.opps_out(tag="export")], ["Tagged deal"])
+        customer = customer_service.create_customer(self.db, self.context, CustomerIn(name="Tag Co", tags=["Distributor"]))
+        page = routes_customers.list_customers(Response(), q="", active=None, tag="distributor", limit=None, offset=0,
+                                               context=self.context, db=self.db)
+        self.assertEqual([c.id for c in page], [customer.id])
+        self.assertEqual(deal.tags, ["export"])
+
+    def test_custom_fields_validate_values_and_show_in_history(self):
+        budget = self.field("lead", "Budget", "number")
+        city = self.field("lead", "City", "select", ["Kozhikode", "Kannur"])
+        visit = self.field("lead", "Site visit", "date")
+        self.field("lead", "GST registered", "checkbox")
+        self.assertEqual((budget.key, city.key, visit.key), ("budget", "city", "site_visit"))
+        with self.assertRaises(HTTPException):  # same name twice
+            self.field("lead", "budget", "text")
+        with self.assertRaises(HTTPException):  # a dropdown needs choices
+            self.field("lead", "Region", "select")
+
+        lead = self.lead(name="Custom", custom={"budget": "2,50,000", "city": "Kannur", "gst_registered": True})
+        self.assertEqual(lead.custom, {"budget": 250000, "city": "Kannur", "gst_registered": True})
+        for bad in ({"budget": "lots"}, {"city": "Delhi"}, {"site_visit": "31/12/2026"}, {"nope": 1},
+                    {"gst_registered": "yes"}):
+            with self.assertRaises(ConflictError, msg=bad):
+                lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(custom=bad))
+        self.db.rollback()
+
+        lead = lead_service.update_lead(self.db, self.context, lead.id,
+                                        crm.LeadUpdate(custom={"budget": None, "site_visit": "2026-12-31"}))
+        self.assertEqual(lead.custom, {"city": "Kannur", "gst_registered": True, "site_visit": "2026-12-31"})
+        summary = routes_leads.lead_timeline(lead.id, self.context, self.db)[0]["summary"]
+        self.assertEqual(summary, "Budget: 250000 → —; Site visit: — → 2026-12-31")
+
+        # Archiving hides the field but keeps what's saved; its values can't be set any more.
+        routes_crm.update_custom_field(city.id, crm.CustomFieldUpdate(active=False), self.context, self.db)
+        self.assertNotIn("city", [f.key for f in routes_crm.list_custom_fields("lead", False, self.context, self.db)])
+        lead = lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(custom={"budget": 5}))
+        self.assertEqual(lead.custom["city"], "Kannur")
+        with self.assertRaises(ConflictError):
+            lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(custom={"city": "Kozhikode"}))
+        self.db.rollback()
+
+        # Fields belong to one record type; deals and customers have their own.
+        stage = self.field("opportunity", "Competitor", "text")
+        deal = self.deal(name="With competitor", custom={stage.key: "Acme"})
+        self.assertEqual(self.opps_out(q="With competitor")[0].custom, {"competitor": "Acme"})
+        with self.assertRaises(ConflictError):
+            self.deal(name="Wrong field", custom={"budget": 1})
+        self.db.rollback()
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+        self.assertEqual(deal.custom, {"competitor": "Acme"})
+
+    def test_csv_import_reads_a_tags_column(self):
+        self.import_csv("leads", "name,phone,tags\nCsv Tag,9011122233,VIP; Kerala | hot\n", commit=True)
+        self.assertEqual(self.leads_out(q="Csv Tag")[0].tags, ["vip", "kerala", "hot"])
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

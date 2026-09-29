@@ -4,7 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, duplicates, history
+from app.domain import crm_service, duplicates, fields, history
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import LEAD_STATUSES, Activity, Contact, Lead, Opportunity
@@ -23,6 +23,7 @@ def list_leads(
     q: str = "",
     status: str = "",
     owner: str = "",
+    tag: str = "",
     limit: int | None = None,
     offset: int = 0,
 ) -> tuple[list[Lead], int]:
@@ -37,6 +38,8 @@ def list_leads(
     elif status:
         stmt = stmt.where(Lead.status == status)
     stmt = crm_service.filter_owner(stmt, Lead.owner_user_id, owner, context)
+    if tag.strip():
+        stmt = stmt.where(Lead.tags.contains([tag.strip().lower()]))
     if q.strip():
         stmt = stmt.where(crm_service.search(q, Lead.name, Lead.company_name, Lead.email, Lead.phone))
     return crm_service.page(db, stmt.order_by(Lead.created_at.desc(), Lead.id), limit, offset)
@@ -66,6 +69,8 @@ def create_lead(db: Session, context: RequestContext, body: LeadIn) -> Lead:
         source=body.source.strip(),
         notes=body.notes,
         status="New",
+        tags=fields.normalize_tags(body.tags),
+        custom=fields.clean_custom(db, context, "lead", body.custom),
     )
     rotated = crm_service.next_rotation_owner(db, context) if body.assign_by_rotation else None
     lead.owner_user_id = rotated.id if rotated else crm_service.resolve_owner(db, context, body.owner_user_id)
@@ -88,7 +93,8 @@ def update_lead(db: Session, context: RequestContext, lead_id: UUID, body: LeadU
             raise ConflictError(f"'{data['status']}' is not a valid lead status. Use one of: {', '.join(LEAD_STATUSES)}.")
         if data["status"] == "Converted":
             raise ConflictError("Use Convert to turn a lead into a customer — it can't be set to Converted directly.")
-    changes = history.diff(lead, data)
+    changes = fields.apply_tags_and_custom(db, context, "lead", lead, data)
+    changes = {**history.diff(lead, data), **changes}
     for field, value in data.items():
         setattr(lead, field, value)
     if changes:

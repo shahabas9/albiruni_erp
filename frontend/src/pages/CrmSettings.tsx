@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import { ApiError, fetchRotation, saveRotation, type Rotation } from "../api/client";
+import {
+  ApiError,
+  createCustomField,
+  fetchCustomFields,
+  fetchRotation,
+  saveRotation,
+  updateCustomField,
+  type CustomField,
+  type CustomFieldType,
+  type RecordType,
+  type Rotation,
+} from "../api/client";
 import { StaleLimitsEditor } from "../crm/StaleLimitsEditor";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -22,6 +33,13 @@ export function CrmSettings() {
           <span className="card-title">Lead rotation</span>
         </div>
         <RotationEditor canEdit={canEdit} />
+      </div>
+
+      <div className="card settings-card">
+        <div className="card-head">
+          <span className="card-title">Custom fields</span>
+        </div>
+        <CustomFieldsEditor canEdit={canEdit} />
       </div>
 
       <div className="card settings-card">
@@ -148,6 +166,243 @@ function RotationEditor({ canEdit }: { canEdit: boolean }) {
         </div>
       )}
       {!canEdit && <p className="card-note">Changing the rotation needs the crm.settings.write permission.</p>}
+    </div>
+  );
+}
+
+const RECORD_LABELS: Record<RecordType, string> = { lead: "Leads", opportunity: "Deals", customer: "Customers" };
+const TYPE_LABELS: Record<CustomFieldType, string> = {
+  text: "Text",
+  number: "Number",
+  date: "Date",
+  select: "Dropdown",
+  checkbox: "Yes / no",
+};
+
+function splitChoices(text: string): string[] {
+  return text
+    .split(/[\n,]/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+/** Extra fields on leads, deals and customers. Type can't change once created (saved values depend on it). */
+function CustomFieldsEditor({ canEdit }: { canEdit: boolean }) {
+  const [recordType, setRecordType] = useState<RecordType>("lead");
+  const [fields, setFields] = useState<CustomField[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
+  const [fieldType, setFieldType] = useState<CustomFieldType>("text");
+  const [choices, setChoices] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draftLabel, setDraftLabel] = useState("");
+  const [draftChoices, setDraftChoices] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load(type = recordType) {
+    try {
+      setFields(await fetchCustomFields(type, true));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't load the fields.");
+    }
+  }
+
+  useEffect(() => {
+    setFields(null);
+    setEditing(null);
+    void load(recordType);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordType]);
+
+  async function act(action: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      await load();
+      return true;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save.");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    const ok = await act(() =>
+      createCustomField({
+        record_type: recordType,
+        label: label.trim(),
+        field_type: fieldType,
+        options: fieldType === "select" ? splitChoices(choices) : [],
+      }),
+    );
+    if (ok) {
+      setLabel("");
+      setChoices("");
+      setFieldType("text");
+    }
+  }
+
+  const active = (fields ?? []).filter((f) => f.active);
+  const archived = (fields ?? []).filter((f) => !f.active);
+
+  function move(index: number, by: number) {
+    const a = active[index]!;
+    const b = active[index + by]!;
+    void act(async () => {
+      await updateCustomField(a.id, { position: b.position });
+      await updateCustomField(b.id, { position: a.position });
+    });
+  }
+
+  return (
+    <div className="settings-block">
+      <div className="filters" role="tablist" aria-label="Record type">
+        {(Object.keys(RECORD_LABELS) as RecordType[]).map((t) => (
+          <button key={t} role="tab" aria-selected={recordType === t} className={recordType === t ? "on" : ""} onClick={() => setRecordType(t)}>
+            {RECORD_LABELS[t]}
+          </button>
+        ))}
+      </div>
+
+      <ol className="rotation-list">
+        {fields === null && <li className="card-note">Loading…</li>}
+        {fields !== null && active.length === 0 && (
+          <li className="card-note">No custom fields on {RECORD_LABELS[recordType].toLowerCase()} yet.</li>
+        )}
+        {active.map((f, i) =>
+          editing === f.id ? (
+            <li key={f.id} className="field-edit">
+              <label className="field">
+                <span>Name</span>
+                <input value={draftLabel} onChange={(e) => setDraftLabel(e.target.value)} />
+              </label>
+              {f.field_type === "select" && (
+                <label className="field">
+                  <span>Choices (one per line)</span>
+                  <textarea rows={4} value={draftChoices} onChange={(e) => setDraftChoices(e.target.value)} />
+                </label>
+              )}
+              <div className="form-actions">
+                <button
+                  className="primary-btn"
+                  disabled={busy || !draftLabel.trim()}
+                  onClick={async () => {
+                    const ok = await act(() =>
+                      updateCustomField(f.id, {
+                        label: draftLabel.trim(),
+                        ...(f.field_type === "select" ? { options: splitChoices(draftChoices) } : {}),
+                      }),
+                    );
+                    if (ok) setEditing(null);
+                  }}
+                >
+                  Save
+                </button>
+                <button className="secondary-btn" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+              </div>
+            </li>
+          ) : (
+            <li key={f.id}>
+              <span className="grow">
+                <b>{f.label}</b>
+                <span className="badge muted">{TYPE_LABELS[f.field_type]}</span>
+                {f.field_type === "select" && <small className="card-note">{f.options.join(", ")}</small>}
+              </span>
+              {canEdit && (
+                <span className="rotation-actions">
+                  <button className="ghost-btn sm" disabled={busy || i === 0} onClick={() => move(i, -1)} aria-label={`Move ${f.label} up`}>
+                    ↑
+                  </button>
+                  <button
+                    className="ghost-btn sm"
+                    disabled={busy || i === active.length - 1}
+                    onClick={() => move(i, 1)}
+                    aria-label={`Move ${f.label} down`}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    className="ghost-btn sm"
+                    onClick={() => {
+                      setEditing(f.id);
+                      setDraftLabel(f.label);
+                      setDraftChoices(f.options.join("\n"));
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button className="ghost-btn sm" disabled={busy} onClick={() => act(() => updateCustomField(f.id, { active: false }))}>
+                    Archive
+                  </button>
+                </span>
+              )}
+            </li>
+          ),
+        )}
+      </ol>
+
+      {archived.length > 0 && (
+        <details className="archived-fields">
+          <summary>
+            {archived.length} archived field{archived.length === 1 ? "" : "s"} — hidden from forms, saved values kept
+          </summary>
+          <ul>
+            {archived.map((f) => (
+              <li key={f.id}>
+                {f.label} <span className="badge muted">{TYPE_LABELS[f.field_type]}</span>
+                {canEdit && (
+                  <button className="link-btn" disabled={busy} onClick={() => act(() => updateCustomField(f.id, { active: true }))}>
+                    Restore
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {canEdit && (
+        <div className="field-grid add-field">
+          <label className="field">
+            <span>New field on {RECORD_LABELS[recordType].toLowerCase()}</span>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Budget, City, Site visit" maxLength={80} />
+          </label>
+          <label className="field">
+            <span>Type</span>
+            <select value={fieldType} onChange={(e) => setFieldType(e.target.value as CustomFieldType)}>
+              {(Object.keys(TYPE_LABELS) as CustomFieldType[]).map((t) => (
+                <option key={t} value={t}>
+                  {TYPE_LABELS[t]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {fieldType === "select" && (
+            <label className="field full">
+              <span>Choices (one per line)</span>
+              <textarea rows={3} value={choices} onChange={(e) => setChoices(e.target.value)} placeholder={"Kozhikode\nKannur\nMalappuram"} />
+            </label>
+          )}
+          <div className="field full">
+            <button
+              className="primary-btn"
+              style={{ justifySelf: "start" }}
+              disabled={busy || !label.trim() || (fieldType === "select" && splitChoices(choices).length === 0)}
+              onClick={add}
+            >
+              Add field
+            </button>
+          </div>
+        </div>
+      )}
+      <ErrorNote message={error} />
+      {!canEdit && <p className="card-note">Changing fields needs the crm.settings.write permission.</p>}
     </div>
   );
 }

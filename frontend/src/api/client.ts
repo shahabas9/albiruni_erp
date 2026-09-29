@@ -273,6 +273,9 @@ export interface Customer {
   active: boolean;
   /** GST registration number; "" if unregistered. */
   gstin: string;
+  tags: string[];
+  /** Custom field values by field key. */
+  custom: CustomValues;
 }
 
 export interface CustomerInput {
@@ -281,9 +284,14 @@ export interface CustomerInput {
   gstin?: string;
   /** Create even though a customer with this name or GSTIN exists. */
   allow_duplicate?: boolean;
+  tags?: string[];
+  /** On update only the keys sent change; null or "" clears one. */
+  custom?: CustomValues;
 }
 
 export interface CustomerQuery {
+  /** Only records carrying this tag. */
+  tag?: string;
   /** Every word must appear in the name or GSTIN. */
   q?: string;
   active?: boolean;
@@ -445,6 +453,9 @@ export interface Lead extends FollowUpSummary {
   owner_name: string | null;
   converted_customer_id: string | null;
   converted_opportunity_id: string | null;
+  tags: string[];
+  /** Custom field values by field key. */
+  custom: CustomValues;
   created_at: string;
 }
 
@@ -461,10 +472,15 @@ export interface LeadInput {
   allow_duplicate?: boolean;
   /** Give it to the next person in the lead rotation (owner_user_id is then ignored). */
   assign_by_rotation?: boolean;
+  tags?: string[];
+  /** On update only the keys sent change; null or "" clears one. */
+  custom?: CustomValues;
 }
 
 /** owner: "me", "unassigned" or a user id. status: a status or "open". */
 export interface LeadQuery {
+  /** Only records carrying this tag. */
+  tag?: string;
   q?: string;
   status?: string;
   owner?: string;
@@ -612,6 +628,9 @@ export interface Opportunity extends FollowUpSummary {
   idle_days: number;
   /** Open deal untouched longer than its stage allows. */
   is_stale: boolean;
+  tags: string[];
+  /** Custom field values by field key. */
+  custom: CustomValues;
   created_at: string;
 }
 
@@ -634,10 +653,15 @@ export interface OpportunityInput {
   notes?: string;
   /** Anyone but yourself needs crm.opportunity.assign. */
   owner_user_id?: string | null;
+  tags?: string[];
+  /** On update only the keys sent change; null or "" clears one. */
+  custom?: CustomValues;
 }
 
 /** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */
 export interface OpportunityQuery {
+  /** Only records carrying this tag. */
+  tag?: string;
   q?: string;
   stage?: string;
   owner?: string;
@@ -881,4 +905,49 @@ export function fetchTargets(month?: string): Promise<TargetReport> {
 /** An amount of 0 removes that person's target. */
 export function saveTargets(month: string, targets: { user_id: string; amount: number }[]): Promise<TargetReport> {
   return request<TargetReport>("/api/crm/targets", { method: "PUT", body: JSON.stringify({ month, targets }) });
+}
+
+// --- CRM: tags and custom fields ---------------------------------------------
+
+export type RecordType = "lead" | "opportunity" | "customer";
+export type CustomFieldType = "text" | "number" | "date" | "select" | "checkbox";
+export type CustomValue = string | number | boolean | null;
+export type CustomValues = Record<string, CustomValue>;
+
+export interface CustomField {
+  id: string;
+  record_type: RecordType;
+  /** Values are stored under this; it never changes. */
+  key: string;
+  label: string;
+  field_type: CustomFieldType;
+  /** Choices, for "select". */
+  options: string[];
+  position: number;
+  /** Archived fields are hidden from forms; their saved values are kept. */
+  active: boolean;
+}
+
+export function fetchCustomFields(recordType?: RecordType, includeArchived = false): Promise<CustomField[]> {
+  return request<CustomField[]>(`/api/crm/fields${query({ record_type: recordType, include_archived: includeArchived || undefined })}`);
+}
+
+export function createCustomField(body: {
+  record_type: RecordType;
+  label: string;
+  field_type: CustomFieldType;
+  options?: string[];
+}): Promise<CustomField> {
+  return request<CustomField>("/api/crm/fields", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateCustomField(
+  id: string,
+  body: Partial<{ label: string; options: string[]; position: number; active: boolean }>,
+): Promise<CustomField> {
+  return request<CustomField>(`/api/crm/fields/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function fetchTags(recordType: RecordType): Promise<{ tag: string; count: number }[]> {
+  return request<{ tag: string; count: number }[]>(`/api/crm/tags${query({ record_type: recordType })}`);
 }

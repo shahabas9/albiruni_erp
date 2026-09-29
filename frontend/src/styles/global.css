@@ -3059,3 +3059,136 @@ td .sub {
 tr.me-row td {
   background: var(--accent-soft);
 }
+
+/* ================= Tags & custom fields ================= */
+
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--violet-soft);
+  color: var(--violet);
+  border: 0;
+  cursor: default;
+}
+
+button.tag-chip {
+  cursor: pointer;
+}
+
+button.tag-chip:hover {
+  text-decoration: underline;
+}
+
+.tag-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+  cursor: pointer;
+}
+
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.tag-input:focus-within {
+  outline: 2px solid var(--accent);
+  border-color: transparent;
+}
+
+.field .tag-input input {
+  flex: 1 1 120px;
+  width: auto;
+  border: 0;
+  padding: 4px;
+  outline: none;
+  background: transparent;
+}
+
+.field.check-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  align-self: end;
+  padding-bottom: 10px;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+.custom-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px 16px;
+  margin: 12px 0 0;
+}
+
+.custom-values dt {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+.custom-values dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.field-edit {
+  display: grid !important;
+  gap: 10px;
+}
+
+.archived-fields {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.archived-fields summary {
+  cursor: pointer;
+}
+
+.archived-fields ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.archived-fields li {
+  margin: 4px 0;
+}
+
+.archived-fields .link-btn {
+  margin-left: 8px;
+  padding: 0;
+}
+
+.add-field {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}

@@ -200,6 +200,18 @@ close that month × probability). `PUT` sets targets (`crm.settings.write`;
 an amount of 0 removes one). Shown under CRM → Targets and, for your own
 target, on the dashboard.
 
+**Tags and custom fields.** Leads, deals and customers carry `tags`
+(lower-cased, trimmed, de-duplicated, at most 20 of 40 characters) and
+`custom` values. Lists filter with `?tag=`; `GET /api/crm/tags?record_type=`
+counts the tags in use. Custom fields are defined per company and record
+type (`GET/POST /api/crm/fields`, `PATCH /api/crm/fields/{id}`;
+`crm.settings.write` to change): text, number, date, dropdown (`select`,
+with choices) or yes/no (`checkbox`). Values are validated against their
+field; sending `null` or `""` clears one, and an update changes only the keys
+sent. A field's key and type never change; archiving hides it from forms but
+keeps saved values. Changes show in record history under the field's name.
+CSV import reads a Tags column (separated by `,`, `;` or `|`).
+
 **Record history.** Creating, editing, re-staging, reassigning or
 converting a lead or deal, logging or completing a follow-up, and raising a
 quotation each write a `crm_events` row in the same transaction: who, when,

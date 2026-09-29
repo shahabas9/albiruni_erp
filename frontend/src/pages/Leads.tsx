@@ -15,6 +15,7 @@ import {
   type DuplicateMatch,
   type Lead,
   type LeadStatus,
+  type CustomValues,
   type Rotation,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
@@ -22,6 +23,7 @@ import { CsvImport } from "../components/CsvImport";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
+import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { FollowUpModal } from "../crm/forms";
 import { Timeline } from "../crm/Timeline";
 import { Drawer, DuplicateWarning, FollowUpBadge, Modal, OwnerPicker, Pager, SearchBox, ownerParam, type OwnerFilter } from "../crm/ui";
@@ -46,6 +48,7 @@ export function Leads() {
   const [historyFor, setHistoryFor] = useState<Lead | null>(null);
   const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
   const [status, setStatus] = useState(params.get("status") ?? "");
+  const [tag, setTag] = useState(params.get("tag") ?? "");
   const [search, setSearch] = useState("");
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
@@ -55,12 +58,12 @@ export function Leads() {
   const statusParam = owner === "unassigned" && !status ? "open" : status;
   const list = usePaged(
     (limit, offset) =>
-      fetchLeads({ q: search, status: statusParam, owner: ownerParam(owner), limit, offset }),
-    `${search}|${statusParam}|${owner}`,
+      fetchLeads({ q: search, status: statusParam, owner: ownerParam(owner), tag, limit, offset }),
+    `${search}|${statusParam}|${owner}|${tag}`,
     version,
   );
   const visible = list.rows;
-  const filtered = Boolean(search || status || owner !== "all");
+  const filtered = Boolean(search || status || tag || owner !== "all");
 
   async function assign(lead: Lead, ownerId: string | null) {
     try {
@@ -99,6 +102,7 @@ export function Leads() {
             </option>
           ))}
         </select>
+        <TagFilter recordType="lead" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, company, phone, email" />
         {can("crm.lead.write") && (
           <div style={{ display: "flex", gap: 8 }}>
@@ -150,6 +154,7 @@ export function Leads() {
                           <span className="sub">
                             {[l.company_name ? l.name : "", l.source].filter(Boolean).join(" · ") || "—"}
                           </span>
+                          <TagChips tags={l.tags} onClick={setTag} />
                         </div>
                         {l.status !== "Converted" && (
                           <ContactActions phone={l.phone} name={l.name} target={{ lead_id: l.id }} onLogged={reload} />
@@ -272,6 +277,9 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
   const [phone, setPhone] = useState(lead?.phone ?? "");
   const [source, setSource] = useState(lead?.source ?? "");
   const [status, setStatus] = useState<LeadStatus>(lead?.status ?? "New");
+  const [tags, setTags] = useState<string[]>(lead?.tags ?? []);
+  const customFields = useCustomFields("lead");
+  const [custom, setCustom] = useState<CustomValues>(lead?.custom ?? {});
   const [error, setError] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
@@ -281,7 +289,16 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
     setError(null);
     try {
       if (lead) {
-        await updateLead(lead.id, { name, company_name: companyName, email, phone, source, status });
+        await updateLead(lead.id, {
+          name,
+          company_name: companyName,
+          email,
+          phone,
+          source,
+          status,
+          tags,
+          custom: changedCustom(lead.custom, custom),
+        });
       } else {
         await createLead({
           name,
@@ -291,6 +308,8 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
           source,
           owner_user_id: ownerId ?? null,
           assign_by_rotation: byRotation,
+          tags,
+          custom,
           allow_duplicate: allowDuplicate,
         });
       }
@@ -347,6 +366,11 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
             </select>
           </label>
         )}
+        <CustomFieldInputs fields={customFields} values={custom} onChange={setCustom} />
+        <div className="field full">
+          <span>Tags</span>
+          <TagInput value={tags} onChange={setTags} recordType="lead" />
+        </div>
       </div>
       {error && <div className="error-banner">{error}</div>}
       {duplicates && (
