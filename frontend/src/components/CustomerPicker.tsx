@@ -37,12 +37,20 @@ export function CustomerPicker({
   const [error, setError] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
+  // True from the first keystroke until that search's results are in. The
+  // selection is cleared meanwhile, so Save (which needs a customer) can't
+  // file the record under the customer picked before the search.
+  const [pending, setPending] = useState(false);
 
   useEffect(() => {
     let current = true;
     fetchCustomers({ q: search, active: true, limit: PICK_LIMIT })
       .then((page) => current && setResult({ q: search, rows: page.rows }))
-      .catch((err) => current && setError(err instanceof ApiError ? err.message : "Couldn't load customers."));
+      .catch((err) => {
+        if (!current) return;
+        setPending(false);
+        setError(err instanceof ApiError ? err.message : "Couldn't load customers.");
+      });
     return () => {
       current = false;
     };
@@ -53,24 +61,42 @@ export function CustomerPicker({
     onChange(customer.id);
   }
 
+  function clear() {
+    setSelected(null);
+    if (value) onChange("");
+  }
+
   // The selection is always visible in the list: with no search, keep it
   // (or take the first customer); while searching, follow the first match,
   // and clear it when nothing matches rather than keep a hidden choice.
-  useEffect(() => {
-    if (!result) return;
-    const inList = result.rows.some((c) => c.id === value);
-    if (result.q) {
+  function applyResult(r: { q: string; rows: Customer[] }, current: string) {
+    const inList = r.rows.some((c) => c.id === current);
+    if (r.q) {
       if (inList) return;
-      if (result.rows[0]) pick(result.rows[0]);
-      else if (value) {
-        setSelected(null);
-        onChange("");
-      }
-    } else if (!value && result.rows[0]) {
-      pick(result.rows[0]);
+      if (r.rows[0]) pick(r.rows[0]);
+      else clear();
+    } else if (!current && r.rows[0]) {
+      pick(r.rows[0]);
     }
+  }
+
+  useEffect(() => {
+    if (!result || result.q !== search) return; // an older search's answer
+    setPending(false);
+    applyResult(result, value);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
+
+  function onTyping(text: string) {
+    if (result && text === result.q) {
+      // Back to what's already listed: no new search will run, so apply it now.
+      setPending(false);
+      applyResult(result, "");
+      return;
+    }
+    setPending(true);
+    clear();
+  }
 
   /** Select a customer and make it the one match on screen (e.g. just created). */
   function show(customer: Customer) {
@@ -159,7 +185,7 @@ export function CustomerPicker({
   return (
     <div className="field">
       <span>Customer</span>
-      <SearchBox value={search} onChange={onSearch} placeholder="Search customers…" />
+      <SearchBox value={search} onChange={onSearch} onTyping={onTyping} placeholder="Search customers…" />
       <select
         value={value}
         aria-label="Customer"
@@ -173,9 +199,13 @@ export function CustomerPicker({
           if (customer) pick(customer);
         }}
       >
-        {!value && <option value="">{options === null ? "Loading…" : search ? "No match" : "No customers yet"}</option>}
+        {!value && (
+          <option value="">
+            {pending ? "Searching…" : options === null ? "Loading…" : search ? "No match" : "No customers yet"}
+          </option>
+        )}
         {selectedMissing && <option value={selected.id}>{selected.name}</option>}
-        {shown.map((c) => (
+        {!pending && shown.map((c) => (
           <option key={c.id} value={c.id}>
             {c.name}
           </option>

@@ -183,10 +183,13 @@ export function Pager({
 export function SearchBox({
   value,
   onChange,
+  onTyping,
   placeholder,
 }: {
   value: string;
   onChange: (value: string) => void;
+  /** Every keystroke, before the pause that triggers onChange. */
+  onTyping?: (text: string) => void;
   placeholder: string;
 }) {
   const [text, setText] = useState(value);
@@ -199,7 +202,16 @@ export function SearchBox({
   return (
     <label className="search-box">
       <Icon name="search" size={16} />
-      <input type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} aria-label={placeholder} />
+      <input
+        type="search"
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          onTyping?.(e.target.value.trim());
+        }}
+        placeholder={placeholder}
+        aria-label={placeholder}
+      />
     </label>
   );
 }
