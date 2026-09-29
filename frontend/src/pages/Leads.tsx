@@ -9,11 +9,13 @@ import {
   fetchLeadCustomerMatches,
   fetchLeadTimeline,
   fetchLeads,
+  fetchRotation,
   updateLead,
   type CustomerMatch,
   type DuplicateMatch,
   type Lead,
   type LeadStatus,
+  type Rotation,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
@@ -255,6 +257,15 @@ export function Leads() {
 
 /** New leads are owned by whoever creates them; reassign from the Owner column. */
 function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | null; onDone: () => void }) {
+  // New leads: yours, or the next person in the lead rotation when it's on.
+  const [rotation, setRotation] = useState<Rotation | null>(null);
+  const [byRotation, setByRotation] = useState(false);
+  useEffect(() => {
+    if (lead) return;
+    fetchRotation()
+      .then((r) => setRotation(r.enabled ? r : null))
+      .catch(() => setRotation(null));
+  }, [lead]);
   const [name, setName] = useState(lead?.name ?? "");
   const [companyName, setCompanyName] = useState(lead?.company_name ?? "");
   const [email, setEmail] = useState(lead?.email ?? "");
@@ -279,6 +290,7 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
           phone,
           source,
           owner_user_id: ownerId ?? null,
+          assign_by_rotation: byRotation,
           allow_duplicate: allowDuplicate,
         });
       }
@@ -314,6 +326,15 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
           <span>Source</span>
           <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="e.g. Referral, Website" />
         </label>
+        {!lead && rotation && (
+          <label className="field">
+            <span>Owner</span>
+            <select value={byRotation ? "rotation" : "me"} onChange={(e) => setByRotation(e.target.value === "rotation")}>
+              <option value="me">Me</option>
+              <option value="rotation">Next in rotation ({rotation.next_user_name})</option>
+            </select>
+          </label>
+        )}
         {lead && (
           <label className="field">
             <span>Status</span>

@@ -213,15 +213,19 @@ def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> 
             continue
         v = row.values
         if kind == "leads":
+            # A blank Owner goes to the lead rotation when it's on, else to the importer.
+            rotated = None if v.get("owner_user_id") else crm_service.next_rotation_owner(db, context)
+            owner = UUID(v["owner_user_id"]) if v.get("owner_user_id") else rotated.id if rotated else context.user.id
             lead = Lead(
                 tenant_id=context.tenant_id, company_id=context.company_id,
                 name=v["name"], company_name=v.get("company_name", ""), phone=v.get("phone", ""),
                 email=v.get("email", ""), source=v.get("source", "") or "Import", notes=v.get("notes", ""),
-                status="New", owner_user_id=UUID(v["owner_user_id"]) if v.get("owner_user_id") else context.user.id,
+                status="New", owner_user_id=owner,
             )
             db.add(lead)
             db.flush()
-            history.record(db, context, "lead", lead.id, "created", f"Lead imported from CSV (line {row.line})")
+            by = f" — assigned by rotation to {rotated.display_name}" if rotated else ""
+            history.record(db, context, "lead", lead.id, "created", f"Lead imported from CSV (line {row.line}){by}")
         else:
             db.add(Customer(
                 tenant_id=context.tenant_id, company_id=context.company_id,

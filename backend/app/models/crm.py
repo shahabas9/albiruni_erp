@@ -173,3 +173,5 @@ class CrmSettings(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
     # stage -> days an open deal may sit untouched before it's flagged; 0 = never
     stale_after_days: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # {"enabled": bool, "user_ids": [ordered ids], "last_user_id": id | None}
+    lead_rotation: Mapped[dict] = mapped_column(JSONB, default=dict)

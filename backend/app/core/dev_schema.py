@@ -64,6 +64,7 @@ def ensure_dev_schema() -> None:
                 "owner_id": "UUID REFERENCES users(id)",
             },
             "quotations": {"opportunity_id": "UUID REFERENCES opportunities(id)"},
+            "crm_settings": {"lead_rotation": "JSONB NOT NULL DEFAULT '{}'::jsonb"},
         }
         before_activity = columns("activities")
         for table, definitions in additions.items():

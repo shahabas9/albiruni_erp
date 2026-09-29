@@ -459,6 +459,8 @@ export interface LeadInput {
   owner_user_id?: string | null;
   /** Create even though a lead with this phone or email exists. */
   allow_duplicate?: boolean;
+  /** Give it to the next person in the lead rotation (owner_user_id is then ignored). */
+  assign_by_rotation?: boolean;
 }
 
 /** owner: "me", "unassigned" or a user id. status: a status or "open". */
@@ -824,4 +826,23 @@ export interface CrmSummary {
 /** owner narrows the deal figures ("me", "unassigned" or a user id). */
 export function fetchCrmSummary(params: { owner?: string; closed_days?: number } = {}): Promise<CrmSummary> {
   return request<CrmSummary>(`/api/crm/summary${query(params)}`);
+}
+
+// --- CRM: lead rotation ------------------------------------------------------
+
+/** Who new leads go to in turn. */
+export interface Rotation {
+  enabled: boolean;
+  /** In rotation order. */
+  user_ids: string[];
+  next_user_id: string | null;
+  next_user_name: string | null;
+}
+
+export function fetchRotation(): Promise<Rotation> {
+  return request<Rotation>("/api/crm/rotation");
+}
+
+export function saveRotation(body: { enabled: boolean; user_ids: string[] }): Promise<Rotation> {
+  return request<Rotation>("/api/crm/rotation", { method: "PUT", body: JSON.stringify(body) });
 }

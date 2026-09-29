@@ -2921,3 +2921,69 @@ td .sub {
   font-size: 12.5px;
   text-align: center;
 }
+
+/* ================= CRM settings ================= */
+
+.settings-card {
+  margin-bottom: 18px;
+  max-width: 760px;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.rotation-list {
+  list-style: none;
+  margin: 14px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.rotation-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ink);
+  flex-wrap: wrap;
+}
+
+.rotation-list li.card-note {
+  border-style: dashed;
+  color: var(--ink-dim);
+}
+
+.rotation-list .grow {
+  flex: 1 1 140px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rotation-pos {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-grid;
+  place-items: center;
+}
+
+.rotation-actions {
+  display: inline-flex;
+  gap: 4px;
+}

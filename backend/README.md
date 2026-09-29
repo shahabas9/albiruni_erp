@@ -186,6 +186,13 @@ one. `GET /api/leads/{id}/customer-matches` lists the customers the lead
 might already be — same name, or a contact with its phone or email — so the
 user picks.
 
+**Lead rotation.** `GET/PUT /api/crm/rotation` (`crm.settings.write` to
+change) holds an ordered list of people who get new leads in turn. It
+applies to leads created with `assign_by_rotation: true`, CSV rows with a
+blank Owner, and web enquiries; deactivated members are skipped. The next
+person is chosen under a row lock, so leads arriving together go to
+different people. The web app edits it under CRM → Settings.
+
 **Record history.** Creating, editing, re-staging, reassigning or
 converting a lead or deal, logging or completing a follow-up, and raising a
 quotation each write a `crm_events` row in the same transaction: who, when,

@@ -65,6 +65,91 @@ def owner_names(db: Session, owner_ids: set[UUID | None]) -> dict[UUID, str]:
     return {u.id: u.display_name for u in db.execute(select(User).where(User.id.in_(ids))).scalars()}
 
 
+# --- Lead rotation --------------------------------------------------------------
+
+
+def _settings_row(db: Session, context: RequestContext, *, lock: bool = False) -> CrmSettings | None:
+    stmt = select(CrmSettings).where(
+        CrmSettings.company_id == context.company_id, CrmSettings.tenant_id == context.tenant_id
+    )
+    return db.execute(stmt.with_for_update() if lock else stmt).scalar_one_or_none()
+
+
+def _rotation_pool(db: Session, context: RequestContext, user_ids: list[str]) -> list[User]:
+    """The rotation's members in order, skipping anyone deactivated or moved away."""
+
+    ids = []
+    for raw in user_ids:
+        try:
+            ids.append(UUID(str(raw)))
+        except ValueError:
+            continue
+    if not ids:
+        return []
+    users = {
+        u.id: u
+        for u in db.execute(
+            select(User).where(
+                User.id.in_(ids), User.tenant_id == context.tenant_id,
+                User.company_id == context.company_id, User.active.is_(True),
+            )
+        ).scalars()
+    }
+    return [users[i] for i in ids if i in users]
+
+
+def rotation_status(db: Session, context: RequestContext) -> dict:
+    row = _settings_row(db, context)
+    rotation = (row.lead_rotation if row else None) or {}
+    pool = _rotation_pool(db, context, rotation.get("user_ids", []))
+    last = str(rotation.get("last_user_id") or "")
+    ids = [str(u.id) for u in pool]
+    up_next = pool[(ids.index(last) + 1) % len(pool)] if last in ids else (pool[0] if pool else None)
+    return {
+        "enabled": bool(rotation.get("enabled")) and bool(pool),
+        "user_ids": [str(u.id) for u in pool],
+        "next_user_id": str(up_next.id) if up_next else None,
+        "next_user_name": up_next.display_name if up_next else None,
+    }
+
+
+def set_rotation(db: Session, context: RequestContext, enabled: bool, user_ids: list[UUID]) -> dict:
+    if len(set(user_ids)) != len(user_ids):
+        raise ConflictError("Each person can be in the rotation once.")
+    pool = _rotation_pool(db, context, [str(i) for i in user_ids])
+    if len(pool) != len(user_ids):
+        raise ConflictError("Everyone in the rotation must be an active user of this company.")
+    if enabled and not pool:
+        raise ConflictError("Add at least one person before turning the rotation on.")
+    row = _settings_row(db, context, lock=True)
+    if row is None:
+        row = CrmSettings(company_id=context.company_id, tenant_id=context.tenant_id, stale_after_days={})
+        db.add(row)
+    last = (row.lead_rotation or {}).get("last_user_id")
+    row.lead_rotation = {"enabled": enabled, "user_ids": [str(i) for i in user_ids], "last_user_id": last}
+    db.commit()
+    return rotation_status(db, context)
+
+
+def next_rotation_owner(db: Session, context: RequestContext) -> User | None:
+    """The next person in the lead rotation (and moves the rotation on), or
+    None when it's off. Locks the settings row until the caller's commit, so
+    two leads arriving together go to two different people."""
+
+    row = _settings_row(db, context, lock=True)
+    rotation = (row.lead_rotation if row else None) or {}
+    if not rotation.get("enabled"):
+        return None
+    pool = _rotation_pool(db, context, rotation.get("user_ids", []))
+    if not pool:
+        return None
+    ids = [str(u.id) for u in pool]
+    last = str(rotation.get("last_user_id") or "")
+    chosen = pool[(ids.index(last) + 1) % len(pool)] if last in ids else pool[0]
+    row.lead_rotation = {**rotation, "last_user_id": str(chosen.id)}
+    return chosen
+
+
 # --- Listing ------------------------------------------------------------------
 
 MAX_PAGE = 200

@@ -356,6 +356,52 @@ class CrmTests(unittest.TestCase):
         self.assertIsNone(result.due_at)
         self.assertFalse(result.is_overdue)
 
+    # --- Lead rotation ----------------------------------------------------------
+
+    def colleague(self, name, permissions=("*",)):
+        other = self.make_context(list(permissions), *self._tenant_and_company())
+        other.user.display_name = name
+        self.db.commit()
+        return other.user
+
+    def test_rotation_hands_new_leads_out_in_turn(self):
+        asha, binu = self.colleague("Asha"), self.colleague("Binu")
+        self.assertFalse(routes_crm.get_rotation(self.context, self.db)["enabled"])
+        with self.assertRaises(HTTPException):  # can't switch it on empty
+            routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[]), self.context, self.db)
+        status = routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[asha.id, binu.id]), self.context, self.db)
+        self.assertEqual(status["next_user_name"], "Asha")
+
+        owners = [self.lead(name=f"R{i}", assign_by_rotation=True).owner_user_id for i in range(3)]
+        self.assertEqual(owners, [asha.id, binu.id, asha.id])
+        self.assertIn("assigned by rotation to Asha",
+                      routes_leads.lead_timeline(self.leads_out(q="R0")[0].id, self.context, self.db)[0]["summary"])
+        # Without the flag the form's owner applies as before.
+        self.assertEqual(self.lead(name="Mine", owner_user_id=self.context.user.id).owner_user_id, self.context.user.id)
+
+        # A deactivated member is skipped, not handed leads.
+        self.db.get(User, binu.id).active = False
+        self.db.commit()
+        self.assertEqual([self.lead(name=f"S{i}", assign_by_rotation=True).owner_user_id for i in range(2)],
+                         [asha.id, asha.id])
+
+        # CSV rows with no Owner go round too; rows naming an owner don't.
+        self.db.get(User, binu.id).active = True
+        self.db.commit()
+        self.import_csv("leads", "name,phone,owner\nCsv A,9000011111,\nCsv B,9000022222,Asha\nCsv C,9000033333,\n",
+                        commit=True)
+        by_name = {l.name: l.owner_user_id for l in self.leads_out(q="Csv")}
+        self.assertEqual(by_name, {"Csv A": binu.id, "Csv B": asha.id, "Csv C": asha.id})
+
+        # Off: rotation leads are unassigned; outsiders can't join; only settings writers change it.
+        routes_crm.put_rotation(crm.RotationIn(enabled=False, user_ids=[asha.id]), self.context, self.db)
+        self.assertIsNone(self.lead(name="Off", assign_by_rotation=True).owner_user_id)
+        with self.assertRaises(HTTPException):
+            routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[self.make_context(["*"]).user.id]),
+                                    self.context, self.db)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

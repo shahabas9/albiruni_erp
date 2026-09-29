@@ -66,11 +66,13 @@ def create_lead(db: Session, context: RequestContext, body: LeadIn) -> Lead:
         source=body.source.strip(),
         notes=body.notes,
         status="New",
-        owner_user_id=crm_service.resolve_owner(db, context, body.owner_user_id),
     )
+    rotated = crm_service.next_rotation_owner(db, context) if body.assign_by_rotation else None
+    lead.owner_user_id = rotated.id if rotated else crm_service.resolve_owner(db, context, body.owner_user_id)
     db.add(lead)
     db.flush()
-    history.record(db, context, "lead", lead.id, "created", f"Lead created: {_label(lead)}")
+    by = f" — assigned by rotation to {rotated.display_name}" if rotated else ""
+    history.record(db, context, "lead", lead.id, "created", f"Lead created: {_label(lead)}{by}")
     db.commit()
     db.refresh(lead)
     return lead

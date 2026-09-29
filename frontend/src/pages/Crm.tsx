@@ -4,18 +4,16 @@ import {
   ApiError,
   fetchCrmSummary,
   fetchOpportunities,
-  fetchStaleLimits,
-  saveStaleLimits,
   updateOpportunity,
   type CrmSummary,
   type Opportunity,
   type OpportunityStage,
   type Page,
-  type StaleLimits,
 } from "../api/client";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { LostReasonModal } from "../crm/forms";
+import { StaleLimitsEditor } from "../crm/StaleLimitsEditor";
 import { ErrorNote, FollowUpBadge, IdleBadge, Modal, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { inrShort } from "../lib/format";
@@ -282,89 +280,11 @@ function Stat({
   );
 }
 
-const LIMIT_HINTS: Record<keyof StaleLimits, string> = {
-  New: "A fresh deal nobody has called",
-  Qualified: "Qualified, but no proposal yet",
-  Proposal: "Quote sent, waiting on the customer",
-  Negotiation: "Closing — goes cold fastest",
-};
-
-/** Per-company "going stale" limits: days a deal may sit untouched in each stage. */
+/** Per-company "going stale" limits, in a dialog. */
 function StaleLimitsModal({ canEdit, onClose, onSaved }: { canEdit: boolean; onClose: () => void; onSaved: () => void }) {
-  const [limits, setLimits] = useState<StaleLimits | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    fetchStaleLimits()
-      .then(setLimits)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load the limits."));
-  }, []);
-
-  async function save() {
-    if (!limits) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await saveStaleLimits(limits);
-      onSaved();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
-    <Modal
-      title="When is a deal going stale?"
-      onClose={onClose}
-      footer={
-        canEdit ? (
-          <>
-            <button type="button" className="ghost-btn" onClick={onClose}>
-              Cancel
-            </button>
-            <button className="primary-btn" disabled={!limits || saving} onClick={save}>
-              {saving ? "Saving…" : "Save for the company"}
-            </button>
-          </>
-        ) : (
-          <button className="primary-btn" onClick={onClose}>
-            Close
-          </button>
-        )
-      }
-    >
-      <p className="card-note" style={{ marginTop: 0 }}>
-        A deal is flagged when nothing — a call, a follow-up, a quotation or a stage change — has touched it for this many days.
-        Use 0 to never flag a stage.{!canEdit && " Changing these needs the crm.settings.write permission."}
-      </p>
-      {limits && (
-        <div className="limits-grid">
-          {BOARD.map((stage) => {
-            const key = stage as keyof StaleLimits;
-            return (
-              <label className="field" key={stage}>
-                <span>{stage}</span>
-                <div className="input-suffix">
-                  <input
-                    type="number"
-                    min={0}
-                    max={365}
-                    value={limits[key]}
-                    disabled={!canEdit}
-                    onChange={(e) => setLimits({ ...limits, [key]: Math.max(0, Math.min(365, Number(e.target.value) || 0)) })}
-                  />
-                  <span>{limits[key] === 0 ? "off" : "days"}</span>
-                </div>
-                <small>{LIMIT_HINTS[key]}</small>
-              </label>
-            );
-          })}
-        </div>
-      )}
-      <ErrorNote message={error} />
+    <Modal title="When is a deal going stale?" onClose={onClose}>
+      <StaleLimitsEditor canEdit={canEdit} onSaved={onSaved} onCancel={onClose} />
     </Modal>
   );
 }

@@ -12,7 +12,7 @@ from app.core.deps import RequestContext, require_any_permission, require_permis
 from app.domain import activity_service, crm_service
 from app.domain.errors import ConflictError
 from app.models.crm import OPEN_STAGES, Activity, Lead, Opportunity
-from app.schemas.crm import CrmSummary, LostReasonCount, StaleLimits, StageTotal
+from app.schemas.crm import CrmSummary, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -36,6 +36,30 @@ def put_settings(
 ):
     try:
         return crm_service.set_stale_limits(db, context, body.model_dump())
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/rotation", response_model=RotationOut)
+def get_rotation(
+    context: RequestContext = Depends(require_any_permission("crm.lead.read", "crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Who new leads go to in turn, and who's next. Leads use it when created
+    with assign_by_rotation, from CSV rows with no Owner, and from the web
+    enquiry form."""
+
+    return crm_service.rotation_status(db, context)
+
+
+@router.put("/rotation", response_model=RotationOut)
+def put_rotation(
+    body: RotationIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return crm_service.set_rotation(db, context, body.enabled, body.user_ids)
     except ConflictError as exc:
         raise http_error(exc) from exc
 

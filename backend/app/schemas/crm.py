@@ -19,6 +19,8 @@ class LeadIn(BaseModel):
     owner_user_id: UUID | None = None
     # Create even though a lead with the same phone or email exists.
     allow_duplicate: bool = False
+    # Give it to the next person in the lead rotation (owner_user_id is then ignored).
+    assign_by_rotation: bool = False
 
 
 class LeadUpdate(BaseModel):
@@ -282,3 +284,15 @@ class CrmSummary(BaseModel):
     open_followups: int = 0
     overdue_followups: int = 0
     overdue_items: list[ActivityOut] = []
+
+
+class RotationIn(BaseModel):
+    enabled: bool
+    user_ids: list[UUID]
+
+
+class RotationOut(BaseModel):
+    enabled: bool
+    user_ids: list[UUID]
+    next_user_id: UUID | None
+    next_user_name: str | None
