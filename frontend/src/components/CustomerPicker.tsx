@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ApiError, createCustomer, type Customer } from "../api/client";
+import { ApiError, createCustomer, type Customer, type DuplicateMatch } from "../api/client";
+import { DuplicateWarning } from "../crm/ui";
 
 const CREATE_NEW = "__create_new__";
 
@@ -22,19 +23,27 @@ export function CustomerPicker({
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
 
-  async function confirmCreate() {
+  function close() {
+    setCreating(false);
+    setName("");
+    setError(null);
+    setDuplicates(null);
+  }
+
+  async function confirmCreate(allowDuplicate = false) {
     setSaving(true);
     setError(null);
     try {
-      const customer = await createCustomer({ name, credit_limit: 0 });
+      const customer = await createCustomer({ name, credit_limit: 0, allow_duplicate: allowDuplicate });
       onCustomerCreated(customer);
       onChange(customer.id);
-      setCreating(false);
-      setName("");
+      close();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't create customer.");
+      if (err instanceof ApiError && err.duplicates) setDuplicates(err.duplicates);
+      else setError(err instanceof ApiError ? err.message : "Couldn't create customer.");
     } finally {
       setSaving(false);
     }
@@ -47,7 +56,7 @@ export function CustomerPicker({
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <input
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => (setName(e.target.value), setDuplicates(null))}
             autoFocus
             placeholder="Company or account name"
             style={{ flex: "1 1 180px" }}
@@ -57,8 +66,8 @@ export function CustomerPicker({
             type="button"
             className="primary-btn"
             style={{ flex: "none" }}
-            disabled={!name.trim() || saving}
-            onClick={confirmCreate}
+            disabled={!name.trim() || saving || Boolean(duplicates)}
+            onClick={() => confirmCreate()}
           >
             {saving ? "Adding…" : "Add"}
           </button>
@@ -66,16 +75,31 @@ export function CustomerPicker({
             type="button"
             className="secondary-btn"
             style={{ flex: "none" }}
-            onClick={() => {
-              setCreating(false);
-              setName("");
-              setError(null);
-            }}
+            onClick={close}
           >
             Cancel
           </button>
         </div>
         {error && <div className="error-banner">{error}</div>}
+        {duplicates && (
+          <DuplicateWarning
+            noun="customer"
+            matches={duplicates}
+            busy={saving}
+            onCreate={() => confirmCreate(true)}
+            onBack={() => setDuplicates(null)}
+            onUse={(id) => {
+              if (!customers.some((c) => c.id === id)) {
+                // Only active customers are listed here.
+                setDuplicates(null);
+                setError("That customer is inactive — reactivate it on the Customers page first.");
+                return;
+              }
+              onChange(id);
+              close();
+            }}
+          />
+        )}
       </label>
     );
   }

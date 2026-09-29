@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, opportunity_service
+from app.domain import crm_service, history, opportunity_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.sales_service import DomainValidationError, persist_quotation, price_quotation
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
@@ -46,7 +46,14 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
     quotation = persist_quotation(db, context, pricing, created_by=context.user.id)
     if opportunity is not None:
         quotation.opportunity_id = opportunity.id
+        stage_before = opportunity.stage
         crm_service.advance_on_quotation(opportunity)
+        moved = f"; stage {stage_before} → {opportunity.stage}" if opportunity.stage != stage_before else ""
+        history.record(
+            db, context, "opportunity", opportunity.id, "quotation_created",
+            f"Quotation {quotation.number} raised (₹{pricing.total:,.0f}){moved}",
+            {"stage": [stage_before, opportunity.stage]} if moved else None,
+        )
 
     return {
         "quotation_id": str(quotation.id),

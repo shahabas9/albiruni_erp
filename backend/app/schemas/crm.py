@@ -17,6 +17,8 @@ class LeadIn(BaseModel):
     notes: str = ""
     # Assigning someone other than yourself needs crm.lead.assign.
     owner_user_id: UUID | None = None
+    # Create even though a lead with the same phone or email exists.
+    allow_duplicate: bool = False
 
 
 class LeadUpdate(BaseModel):
@@ -61,6 +63,8 @@ class LeadOut(FollowUpSummary):
 
 
 class ConvertLeadIn(BaseModel):
+    # Link to this existing customer; None creates a new one. Never guessed by name.
+    customer_id: UUID | None = None
     create_opportunity: bool = True
     opportunity_name: str = ""
     opportunity_value: float = Field(default=0, ge=0)
@@ -210,3 +214,57 @@ class ActivityOut(BaseModel):
     owner_id: UUID | None
     owner_name: str | None
     created_at: datetime
+
+
+class CustomerMatchOut(BaseModel):
+    """An existing customer a lead might really be, and why."""
+
+    id: UUID
+    name: str
+    gstin: str
+    reasons: list[str]
+
+
+class TimelineEntry(BaseModel):
+    id: UUID
+    at: datetime
+    record_type: str
+    action: str
+    summary: str
+    changes: dict
+    source: str
+    actor_name: str | None
+
+
+class StaleLimits(BaseModel):
+    New: int = Field(ge=0, le=365)
+    Qualified: int = Field(ge=0, le=365)
+    Proposal: int = Field(ge=0, le=365)
+    Negotiation: int = Field(ge=0, le=365)
+
+
+class StageTotal(BaseModel):
+    stage: str
+    count: int
+    value: float
+
+
+class CrmSummary(BaseModel):
+    """Headline CRM numbers for the dashboard, sidebar and bell — computed on
+    the server so those screens never need every lead, deal and follow-up.
+    Sections the caller can't read come back empty/zero."""
+
+    open_deals: int = 0
+    open_value: float = 0
+    weighted_value: float = 0
+    by_stage: list[StageTotal] = []
+    stale_deals: int = 0
+    stale_value: float = 0
+    won_deals: int = 0
+    won_value: float = 0
+    lost_deals: int = 0
+    won_this_month_value: float = 0
+    unassigned: int = 0
+    open_followups: int = 0
+    overdue_followups: int = 0
+    overdue_items: list[ActivityOut] = []

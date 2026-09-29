@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
 from app.domain import customer_service
+from app.api.routes_leads import http_error
+from app.domain.duplicates import DuplicateError
 from app.domain.errors import NotFoundError
 from app.schemas.customers import CustomerIn, CustomerOut, CustomerUpdate
 
@@ -30,7 +32,10 @@ def create_customer(
     context: RequestContext = Depends(require_permission("sales.customer.write")),
     db: Session = Depends(get_db),
 ):
-    return _to_out(customer_service.create_customer(db, context, body))
+    try:
+        return _to_out(customer_service.create_customer(db, context, body))
+    except DuplicateError as exc:
+        raise http_error(exc) from exc
 
 
 @router.patch("/{customer_id}", response_model=CustomerOut)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer } from "../api/client";
+import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
+import { DuplicateWarning } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 
 export function Customers() {
@@ -127,20 +128,22 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
   const [creditLimit, setCreditLimit] = useState(String(customer?.credit_limit ?? 0));
   const [gstin, setGstin] = useState(customer?.gstin ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
 
-  async function save() {
+  async function save(allowDuplicate = false) {
     setSaving(true);
     setError(null);
     try {
       if (customer) {
         await updateCustomer(customer.id, { name, credit_limit: Number(creditLimit), gstin });
       } else {
-        await createCustomer({ name, credit_limit: Number(creditLimit), gstin });
+        await createCustomer({ name, credit_limit: Number(creditLimit), gstin, allow_duplicate: allowDuplicate });
       }
       onDone();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save.");
+      if (err instanceof ApiError && err.duplicates) setDuplicates(err.duplicates);
+      else setError(err instanceof ApiError ? err.message : "Couldn't save.");
     } finally {
       setSaving(false);
     }
@@ -151,7 +154,7 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
       <div className="field-grid">
         <label className="field">
           <span>Name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          <input value={name} onChange={(e) => (setName(e.target.value), setDuplicates(null))} autoFocus />
         </label>
         <label className="field">
           <span>Credit limit (₹)</span>
@@ -161,7 +164,7 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
           <span>GSTIN (optional)</span>
           <input
             value={gstin}
-            onChange={(e) => setGstin(e.target.value.toUpperCase())}
+            onChange={(e) => (setGstin(e.target.value.toUpperCase()), setDuplicates(null))}
             maxLength={15}
             placeholder="e.g. 32ABCDE1234F1Z9"
             style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
@@ -169,8 +172,11 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
         </label>
       </div>
       {error && <div className="error-banner">{error}</div>}
-      <div className="form-actions">
-        <button className="primary-btn" disabled={!name.trim() || saving} onClick={save}>
+      {duplicates && (
+        <DuplicateWarning noun="customer" matches={duplicates} busy={saving} onCreate={() => save(true)} onBack={() => setDuplicates(null)} />
+      )}
+      <div className="form-actions" hidden={Boolean(duplicates)}>
+        <button className="primary-btn" disabled={!name.trim() || saving} onClick={() => save()}>
           {saving ? "Saving…" : "Save"}
         </button>
         <button className="secondary-btn" onClick={onDone}>

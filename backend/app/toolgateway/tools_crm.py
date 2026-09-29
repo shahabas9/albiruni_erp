@@ -111,6 +111,7 @@ def list_due_followups(db: Session, context: RequestContext, args: dict[str, Any
     if _mine(context, args):
         stmt = stmt.where(Activity.owner_id == context.user.id)
     rows = list(db.execute(stmt).scalars())
+    labels = activity_service.related_labels(db, context, rows)
     overdue = [a for a in rows if crm_service.is_overdue(a, now)]
     today = [a for a in rows if a not in overdue]
 
@@ -122,7 +123,7 @@ def list_due_followups(db: Session, context: RequestContext, args: dict[str, Any
             f"due today at {a.due_at.astimezone(tz):%H:%M}")
         items.append({
             "title": a.subject,
-            "subtitle": f"{activity_service.related_label(db, context, a)} · {when}",
+            "subtitle": f"{labels[a.id]} · {when}",
             "tone": "bad" if late else None,
             "link": f"/crm?opp={a.opportunity_id}" if a.opportunity_id else "/activities?show=overdue",
         })
@@ -153,8 +154,9 @@ def _open_deals(db: Session, context: RequestContext, args: dict[str, Any]) -> l
 def list_stale_deals(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
     deals = _open_deals(db, context, args)
     touches = crm_service.last_touches(db, context, deals)
+    limits = crm_service.stale_limits(db, context)
     stale = sorted(
-        ((o, crm_service.idle_status(o, touches[o.id])) for o in deals),
+        ((o, crm_service.idle_status(o, touches[o.id], limits)) for o in deals),
         key=lambda pair: pair[1]["idle_days"],
         reverse=True,
     )

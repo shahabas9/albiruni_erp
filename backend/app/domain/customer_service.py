@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
+from app.domain import duplicates
 from app.domain.errors import NotFoundError
 from app.models.sales import Customer
 from app.schemas.customers import CustomerIn, CustomerUpdate
@@ -26,10 +27,16 @@ def get_customer(db: Session, context: RequestContext, customer_id: UUID) -> Cus
 
 
 def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> Customer:
+    if not body.allow_duplicate:
+        matches = duplicates.customer_matches(db, context, name=body.name, gstin=body.gstin)
+        if matches:
+            raise duplicates.DuplicateError(
+                "A customer with this name or GSTIN already exists.", duplicates.describe_customers(matches)
+            )
     customer = Customer(
         tenant_id=context.tenant_id,
         company_id=context.company_id,
-        name=body.name,
+        name=body.name.strip(),
         credit_limit=body.credit_limit,
         gstin=body.gstin,
         active=True,

@@ -9,17 +9,18 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from uuid import uuid4
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.api import routes_activities, routes_ask, routes_imports, routes_leads, routes_opportunities
+from app.api import routes_activities, routes_ask, routes_crm, routes_imports, routes_leads, routes_opportunities
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext, require_any_permission, require_permission
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import activity_service, crm_service, lead_service, opportunity_service
+from app.domain import activity_service, crm_service, customer_service, lead_service, opportunity_service
+from app.domain.duplicates import DuplicateError
 from app.domain.errors import ConflictError
-from app.models.crm import Activity, Lead, Opportunity
+from app.models.crm import Activity, Contact, Lead, Opportunity
 from app.models.identity import Role, User
 from app.models.sales import Customer, Item
 from app.models.tenant import Company, Tenant
@@ -60,6 +61,20 @@ class CrmTests(unittest.TestCase):
         self.db.flush()
         return RequestContext(user, tenant.id, company.id, permissions, "en-IN")
 
+    def leads_out(self, context=None, **kw):
+        args = {"q": "", "status_": "", "owner": "", "limit": None, "offset": 0, **kw}
+        return routes_leads.list_leads(Response(), **args, context=context or self.context, db=self.db)
+
+    def opps_out(self, context=None, **kw):
+        args = {"q": "", "stage": "", "owner": "", "closed_since": None, "stale": False, "limit": None,
+                "offset": 0, **kw}
+        return routes_opportunities.list_opportunities(Response(), **args, context=context or self.context, db=self.db)
+
+    def activities_out(self, **kw):
+        args = {"show": "all", "open_only": False, "owner": "", "lead_id": None, "customer_id": None,
+                "opportunity_id": None, "limit": None, "offset": 0, **kw}
+        return routes_activities.list_activities(Response(), **args, context=self.context, db=self.db)
+
     def lead(self, **fields):
         return lead_service.create_lead(self.db, self.context, crm.LeadIn(
             name=fields.pop("name", "Contact"), company_name=fields.pop("company_name", "Customer Co"), **fields))
@@ -81,18 +96,137 @@ class CrmTests(unittest.TestCase):
         self.db.refresh(task)
         self.assertEqual((task.opportunity_id, task.lead_id), (opp.id, None))
 
-        listed = routes_leads.list_leads(self.context, self.db)[0]
+        listed = self.leads_out()[0]
         self.assertEqual(listed.converted_opportunity_id, opp.id)
         self.assertEqual(listed.owner_name, "Test user")
         with self.assertRaises(ConflictError):
             lead_service.convert_lead(self.db, self.context, lead.id, crm.ConvertLeadIn())
 
-    def test_conversion_reuses_a_same_named_customer(self):
+    def test_conversion_never_merges_by_name_but_offers_the_match(self):
         existing = crm_service.find_or_create_customer(self.db, self.context, "Coastal Traders")
+        self.db.add(Contact(tenant_id=self.context.tenant_id, company_id=self.context.company_id,
+                            customer_id=existing.id, name="Ravi", phone="0495 2701234", email=""))
         self.db.commit()
-        lead = self.lead(company_name="coastal traders")
+        lead = self.lead(company_name="coastal traders", phone="+91 495 270 1234")
+
+        matches = lead_service.customer_matches(self.db, self.context, lead.id)
+        self.assertEqual([m["id"] for m in matches], [existing.id])
+        self.assertEqual(matches[0]["reasons"], ["Same name", "Contact Ravi has this phone"])
+
+        # No customer_id: a new customer, even though the name matches.
         _, customer, _, _ = lead_service.convert_lead(self.db, self.context, lead.id, crm.ConvertLeadIn())
-        self.assertEqual(customer.id, existing.id)
+        self.assertNotEqual(customer.id, existing.id)
+
+        # Picking the existing one links to it.
+        other = self.lead(name="Anu", company_name="Coastal Traders", phone="98470 99999")
+        _, linked, contact, _ = lead_service.convert_lead(
+            self.db, self.context, other.id, crm.ConvertLeadIn(customer_id=existing.id))
+        self.assertEqual((linked.id, contact.customer_id), (existing.id, existing.id))
+
+    def test_new_lead_and_customer_warn_about_duplicates(self):
+        first = self.lead(name="Nisha", phone="+91 94460 44556", email="Nisha@Example.test")
+        with self.assertRaises(DuplicateError) as caught:
+            self.lead(name="Nisha R", phone="09446044556")
+        self.assertEqual(caught.exception.matches[0]["id"], str(first.id))
+        with self.assertRaises(DuplicateError):
+            self.lead(name="Someone", email="nisha@example.test")
+        # Via the route: 409 with the matches, so the form can offer "create anyway".
+        with self.assertRaises(HTTPException) as http:
+            routes_leads.create_lead(crm.LeadIn(name="Nisha", phone="9446044556"), self.context, self.db)
+        self.assertEqual(http.exception.status_code, 409)
+        self.assertEqual(http.exception.detail["duplicates"][0]["id"], str(first.id))
+        again = self.lead(name="Nisha (2nd branch)", phone="9446044556", allow_duplicate=True)
+        self.assertNotEqual(again.id, first.id)
+
+        customer_service.create_customer(self.db, self.context, CustomerIn(name="Rahman Traders"))
+        with self.assertRaises(DuplicateError):
+            customer_service.create_customer(self.db, self.context, CustomerIn(name=" rahman traders "))
+        customer_service.create_customer(self.db, self.context, CustomerIn(name="Rahman Traders", allow_duplicate=True))
+
+    def test_history_records_who_changed_what_and_where(self):
+        lead = self.lead(name="Hist", company_name="History Co")
+        lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(status="Contacted"))
+        other = self.make_context(["*"], tenant=self.db.get(Tenant, self.context.tenant_id),
+                                  company=self.db.get(Company, self.context.company_id))
+        other.user.display_name = "Fathima"
+        lead_service.assign_lead(self.db, self.context, lead.id, other.user.id)
+        _, _, _, opp = lead_service.convert_lead(self.db, self.context, lead.id, crm.ConvertLeadIn(opportunity_name="Big"))
+        # Ask ERP actions are marked as such.
+        preview = routes_ask.ask(AskRequest(text="log a call with History Co — no answer"), self.context, self.db)
+        routes_ask.confirm(ConfirmRequest(preview_token=preview["preview_token"]), self.context, self.db)
+        opportunity_service.update_opportunity(self.db, self.context, opp.id,
+                                               crm.OpportunityUpdate(stage="Lost", lost_reason="Price too high"))
+
+        timeline = routes_opportunities.opportunity_timeline(opp.id, self.context, self.db)
+        actions = [(e["action"], e["source"]) for e in timeline]
+        self.assertEqual(actions, [
+            ("stage_changed", "app"), ("activity_logged", "ask_erp"), ("converted", "app"), ("created", "app"),
+            ("owner_changed", "app"), ("status_changed", "app"), ("created", "app"),
+        ])
+        lost = timeline[0]
+        self.assertEqual(lost["changes"]["stage"], ["Qualified", "Lost"])
+        self.assertIn("Lost reason: — → Price too high", lost["summary"])
+        self.assertEqual(lost["actor_name"], "Test user")
+        self.assertEqual(timeline[4]["summary"], "Owner: Unassigned → Fathima")
+
+        # Someone who can read leads but not deals doesn't see the deal's history.
+        reader = self.make_context(["crm.lead.read"], tenant=self.db.get(Tenant, self.context.tenant_id),
+                                   company=self.db.get(Company, self.context.company_id))
+        lead_only = routes_leads.lead_timeline(lead.id, reader, self.db)
+        self.assertEqual({e["record_type"] for e in lead_only}, {"lead"})
+
+    def test_stale_limits_are_per_company_and_zero_turns_them_off(self):
+        deal = self.deal()
+        deal.stage_changed_at = deal.created_at = crm_service.now_utc() - timedelta(days=8)
+        self.db.commit()
+        self.assertTrue(self.opps_out()[0].is_stale)  # default New = 7 days
+
+        crm_service.set_stale_limits(self.db, self.context, {"New": 10})
+        self.assertFalse(self.opps_out()[0].is_stale)
+        crm_service.set_stale_limits(self.db, self.context, {"New": 0})
+        self.assertFalse(self.opps_out()[0].is_stale)
+        self.assertEqual(crm_service.stale_limits(self.db, self.context)["Qualified"], 10)
+        with self.assertRaises(ConflictError):
+            crm_service.set_stale_limits(self.db, self.context, {"Won": 3})
+        with self.assertRaises(HTTPException):  # needs crm.settings.write
+            require_permission("crm.settings.write")(self.make_context(["crm.opportunity.read"]))
+
+    def test_lists_page_filter_and_count(self):
+        for i in range(5):
+            self.lead(name=f"Paged {i}", company_name=f"Paging Co {i}", phone=f"98470 0000{i}")
+        response = Response()
+        page = routes_leads.list_leads(response, q="paging co", status_="open", owner="", limit=2, offset=2,
+                                       context=self.context, db=self.db)
+        self.assertEqual(response.headers["X-Total-Count"], "5")
+        self.assertEqual([l.name for l in page], ["Paged 2", "Paged 1"])
+        self.assertEqual(len(self.leads_out(q="Paging Kannur")), 0)  # every word must match
+        self.assertEqual(len(self.leads_out(q="co 3")), 1)
+        self.assertEqual(len(self.leads_out(owner="unassigned")), 5)
+        self.assertEqual(len(self.leads_out(owner="me")), 0)
+
+        old = self.deal(name="Old win")
+        opportunity_service.update_opportunity(self.db, self.context, old.id, crm.OpportunityUpdate(stage="Won"))
+        old.stage_changed_at = crm_service.now_utc() - timedelta(days=200)
+        self.db.commit()
+        self.deal(name="Open one")
+        board = self.opps_out(closed_since=date.today() - timedelta(days=90))
+        self.assertEqual([o.name for o in board], ["Open one"])
+        self.assertEqual([o.name for o in self.opps_out(stage="closed")], ["Old win"])
+
+    def test_summary_counts_without_loading_every_record(self):
+        deal = self.deal(value=1000)
+        self.lead(name="No owner")
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Late", opportunity_id=deal.id, due_date=date.today() - timedelta(days=2)))
+        out = routes_crm.summary(self.context, self.db)
+        self.assertEqual((out.open_deals, out.open_value, out.overdue_followups), (1, 1000, 1))
+        self.assertEqual(out.unassigned, 2)  # the lead and the deal
+        self.assertEqual(out.overdue_items[0].related_label, f"Opportunity: {deal.name}")
+
+        reader = self.make_context(["crm.activity.read"], tenant=self.db.get(Tenant, self.context.tenant_id),
+                                   company=self.db.get(Company, self.context.company_id))
+        limited = routes_crm.summary(reader, self.db)
+        self.assertEqual((limited.open_deals, limited.unassigned, limited.overdue_followups), (0, 0, 1))
 
     def test_lost_leads_and_direct_converted_status_are_refused(self):
         lead = self.lead()
@@ -142,14 +276,14 @@ class CrmTests(unittest.TestCase):
             crm.ActivityIn(type="Email", subject="Reply", due_at=past, lead_id=lead.id))
         self.assertEqual(task.due_date, past.date())
         self.assertEqual(task.owner_id, self.context.user.id)  # lead unowned -> creator
-        listed = routes_activities.list_activities(False, self.context, self.db)[0]
+        listed = self.activities_out()[0]
         self.assertTrue(listed.is_overdue)
-        summary = routes_leads.list_leads(self.context, self.db)[0]
+        summary = self.leads_out()[0]
         self.assertEqual((summary.open_activities, summary.overdue_activities), (1, 1))
 
         activity_service.update_activity(self.db, self.context, task.id, crm.ActivityUpdate(done=True))
         self.assertIsNotNone(task.completed_at)
-        self.assertEqual(routes_activities.list_activities(True, self.context, self.db), [])
+        self.assertEqual(self.activities_out(show="open"), [])
         activity_service.update_activity(self.db, self.context, task.id, crm.ActivityUpdate(done=False, due_date=None))
         self.assertIsNone(task.completed_at)
         self.assertIsNone(task.due_at)
@@ -170,7 +304,7 @@ class CrmTests(unittest.TestCase):
         self.db.commit()
         activity_service.create_activity(self.db, self.context,
             crm.ActivityIn(type="Note", subject="Customer note", customer_id=customer.id))
-        result = routes_activities.list_activities(False, self.context, self.db)[0]
+        result = self.activities_out()[0]
         self.assertEqual(result.related_label, "Customer: Customer notes")
         self.assertIsNone(result.due_at)
         self.assertFalse(result.is_overdue)
@@ -188,7 +322,7 @@ class CrmTests(unittest.TestCase):
 
         result = routes_opportunities.quote_opportunity(opp.id, body, self.context, self.db)
         self.assertEqual((result["total"], result["opportunity_id"]), (300.0, str(opp.id)))
-        listed = routes_opportunities.list_opportunities(self.context, self.db)[0]
+        listed = self.opps_out()[0]
         self.assertEqual((listed.stage, [q.number for q in listed.quotations]), ("Proposal", [result["number"]]))
 
         opportunity_service.update_opportunity(self.db, self.context, opp.id, crm.OpportunityUpdate(stage="Lost", lost_reason="No budget"))
@@ -225,13 +359,13 @@ class CrmTests(unittest.TestCase):
         opp.created_at = old
         opp.stage_changed_at = old
         self.db.commit()
-        listed = routes_opportunities.list_opportunities(self.context, self.db)[0]
+        listed = self.opps_out()[0]
         self.assertTrue(listed.is_stale)
         self.assertEqual(listed.idle_days, 30)
 
         activity_service.create_activity(self.db, self.context,
             crm.ActivityIn(type="Call", subject="Checked in", opportunity_id=opp.id, done=True))
-        listed = routes_opportunities.list_opportunities(self.context, self.db)[0]
+        listed = self.opps_out()[0]
         self.assertFalse(listed.is_stale)
         self.assertEqual(listed.idle_days, 0)
 
@@ -240,7 +374,7 @@ class CrmTests(unittest.TestCase):
         opp.stage_changed_at = old
         self.db.commit()
         # Closed deals never count as stale.
-        self.assertFalse(routes_opportunities.list_opportunities(self.context, self.db)[0].is_stale)
+        self.assertFalse(self.opps_out()[0].is_stale)
 
     def test_logging_a_call_that_already_happened(self):
         lead = self.lead()
@@ -249,7 +383,7 @@ class CrmTests(unittest.TestCase):
         self.assertTrue(call.done)
         self.assertIsNotNone(call.completed_at)
         self.assertFalse(crm_service.is_overdue(call))
-        self.assertEqual(routes_leads.list_leads(self.context, self.db)[0].open_activities, 0)
+        self.assertEqual(self.leads_out()[0].open_activities, 0)
 
     # --- Ask ERP: CRM commands ------------------------------------------------------
 
@@ -355,13 +489,15 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(by_line[5]["status"], "duplicate")
         self.assertIn("valid email", by_line[6]["messages"][0])
         self.assertIn("Nobody", by_line[7]["messages"][0])
-        self.assertEqual(len(lead_service.list_leads(self.db, self.context)), 1)  # dry run wrote nothing
+        self.assertEqual(len(lead_service.list_leads(self.db, self.context)[0]), 1)  # dry run wrote nothing
 
         done = self.import_csv("leads", csv_text, commit=True)
         self.assertEqual(done["created"], 2)
-        leads = {l.name: l for l in lead_service.list_leads(self.db, self.context)}
+        leads = {l.name: l for l in lead_service.list_leads(self.db, self.context)[0]}
         self.assertEqual(leads["Shafeeq"].source, "Import")
         self.assertEqual(leads["Shafeeq"].owner_user_id, self.context.user.id)  # importer owns by default
+        imported = routes_leads.lead_timeline(leads["Shafeeq"].id, self.context, self.db)[0]
+        self.assertEqual((imported["action"], imported["source"]), ("created", "import"))
         self.assertEqual(self.import_csv("leads", csv_text)["ok"], 0)  # re-import finds them all
 
         writer = self.make_context(["crm.lead.write"], *self._tenant_and_company())

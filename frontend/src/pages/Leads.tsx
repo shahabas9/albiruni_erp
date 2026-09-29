@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ApiError,
@@ -6,17 +6,25 @@ import {
   assignLead,
   convertLead,
   createLead,
+  fetchLeadCustomerMatches,
+  fetchLeadTimeline,
+  fetchLeads,
   updateLead,
+  type CustomerMatch,
+  type DuplicateMatch,
   type Lead,
   type LeadStatus,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
+import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
 import { FollowUpModal } from "../crm/forms";
-import { FollowUpBadge, OwnerPicker } from "../crm/ui";
+import { Timeline } from "../crm/Timeline";
+import { Drawer, DuplicateWarning, FollowUpBadge, Modal, OwnerPicker, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
+import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
 type OwnerFilter = "all" | "mine" | "unassigned";
 
@@ -32,13 +40,27 @@ export function Leads() {
   const [params] = useSearchParams();
   const [showForm, setShowForm] = useState(params.get("new") === "1");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [converting, setConverting] = useState<Lead | null>(null);
   const [followUpFor, setFollowUpFor] = useState<Lead | null>(null);
   const [importing, setImporting] = useState(false);
+  const [historyFor, setHistoryFor] = useState<Lead | null>(null);
   const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
+  const [status, setStatus] = useState(params.get("status") ?? "");
+  const [search, setSearch] = useState("");
+  const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
-  const { leads, loading, error: loadError, assignees, refresh: reload, can } = useAppData();
+  const { version, assignees, refresh: reload, can } = useAppData();
   const openOpp = useOpenOpportunity();
+  // "Unassigned" means open leads nobody owns; converted/lost ones don't need an owner.
+  const statusParam = owner === "unassigned" && !status ? "open" : status;
+  const list = usePaged(
+    (limit, offset) =>
+      fetchLeads({ q: search, status: statusParam, owner: owner === "all" ? "" : owner, limit, offset }),
+    `${search}|${statusParam}|${owner}`,
+    version,
+  );
+  const visible = list.rows;
+  const filtered = Boolean(search || status || owner !== "all");
 
   async function assign(lead: Lead, ownerId: string | null) {
     try {
@@ -49,13 +71,6 @@ export function Leads() {
     }
   }
 
-  const visible =
-    owner === "mine"
-      ? leads.filter((l) => l.owner_user_id === user?.id)
-      : owner === "unassigned"
-        ? leads.filter((l) => !l.owner_user_id && l.status !== "Converted" && l.status !== "Lost")
-        : leads;
-
 
   return (
     <section>
@@ -65,7 +80,7 @@ export function Leads() {
         <p className="page-sub">Raw, unqualified interest. Give every lead an owner and a next step; convert a qualified one into a Customer, Contact and Opportunity in one step.</p>
       </div>
 
-      {(error ?? loadError) && <div className="error-banner">{error ?? loadError}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
 
       <div className="toolbar">
         <div className="filters" aria-label="Owner filter">
@@ -75,6 +90,16 @@ export function Leads() {
             </button>
           ))}
         </div>
+        <select className="filter-select" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status filter">
+          <option value="">All statuses</option>
+          <option value="open">Open (not converted or lost)</option>
+          {LEAD_STATUSES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <SearchBox value={search} onChange={onSearch} placeholder="Search name, company, phone, email" />
         {can("crm.lead.write") && (
           <div style={{ display: "flex", gap: 8 }}>
             <button className="ghost-btn" onClick={() => setImporting(true)}>
@@ -90,15 +115,9 @@ export function Leads() {
 
       {showForm && <LeadForm ownerId={user?.id ?? null} onDone={() => { setShowForm(false); reload(); }} />}
 
-      {!loading && leads.length === 0 && !showForm && (
+      {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          No leads yet — add one above.
-        </div>
-      )}
-
-      {leads.length > 0 && visible.length === 0 && (
-        <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          No leads match this filter.
+          {filtered ? "No leads match this filter." : "No leads yet — add one above."}
         </div>
       )}
 
@@ -120,20 +139,6 @@ export function Leads() {
                   <tr key={l.id}>
                     <td colSpan={5}>
                       <LeadForm lead={l} onDone={() => { setEditingId(null); reload(); }} />
-                    </td>
-                  </tr>
-                ) : convertingId === l.id ? (
-                  <tr key={l.id}>
-                    <td colSpan={5}>
-                      <ConvertForm
-                        lead={l}
-                        onDone={async (opportunityId) => {
-                          setConvertingId(null);
-                          await reload();
-                          if (opportunityId) openOpp(opportunityId);
-                        }}
-                        onCancel={() => setConvertingId(null)}
-                      />
                     </td>
                   </tr>
                 ) : (
@@ -170,6 +175,9 @@ export function Leads() {
                       )}
                     </td>
                     <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button className="ghost-btn sm" onClick={() => setHistoryFor(l)} title="History" aria-label="History">
+                        <Icon name="clock" size={14} />
+                      </button>
                       {l.status === "Converted" && l.converted_opportunity_id && (
                         <button className="ghost-btn sm" onClick={() => openOpp(l.converted_opportunity_id!)}>
                           Open deal
@@ -192,7 +200,7 @@ export function Leads() {
                               className="primary-btn sm"
                               disabled={l.status === "Lost"}
                               title={l.status === "Lost" ? "Re-qualify this lead before converting" : undefined}
-                              onClick={() => setConvertingId(l.id)}
+                              onClick={() => setConverting(l)}
                             >
                               Convert
                             </button>
@@ -206,6 +214,31 @@ export function Leads() {
             </tbody>
           </table>
         </div>
+      )}
+      <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
+
+      {converting && (
+        <Modal title={`Convert ${converting.company_name || converting.name}`} onClose={() => setConverting(null)} wide>
+          <ConvertForm
+            lead={converting}
+            onDone={async (opportunityId) => {
+              setConverting(null);
+              await reload();
+              if (opportunityId) openOpp(opportunityId);
+            }}
+            onCancel={() => setConverting(null)}
+          />
+        </Modal>
+      )}
+
+      {historyFor && (
+        <Drawer
+          title={historyFor.company_name || historyFor.name}
+          subtitle={`History · ${historyFor.status}`}
+          onClose={() => setHistoryFor(null)}
+        >
+          <Timeline load={() => fetchLeadTimeline(historyFor.id)} version={version} />
+        </Drawer>
       )}
 
       {followUpFor && (
@@ -231,20 +264,30 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
   const [source, setSource] = useState(lead?.source ?? "");
   const [status, setStatus] = useState<LeadStatus>(lead?.status ?? "New");
   const [error, setError] = useState<string | null>(null);
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
 
-  async function save() {
+  async function save(allowDuplicate = false) {
     setSaving(true);
     setError(null);
     try {
       if (lead) {
         await updateLead(lead.id, { name, company_name: companyName, email, phone, source, status });
       } else {
-        await createLead({ name, company_name: companyName, email, phone, source, owner_user_id: ownerId ?? null });
+        await createLead({
+          name,
+          company_name: companyName,
+          email,
+          phone,
+          source,
+          owner_user_id: ownerId ?? null,
+          allow_duplicate: allowDuplicate,
+        });
       }
       onDone();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save.");
+      if (err instanceof ApiError && err.duplicates) setDuplicates(err.duplicates);
+      else setError(err instanceof ApiError ? err.message : "Couldn't save.");
     } finally {
       setSaving(false);
     }
@@ -263,11 +306,11 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
         </label>
         <label className="field">
           <span>Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input type="email" value={email} onChange={(e) => (setEmail(e.target.value), setDuplicates(null))} />
         </label>
         <label className="field">
           <span>Phone</span>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <input value={phone} onChange={(e) => (setPhone(e.target.value), setDuplicates(null))} />
         </label>
         <label className="field">
           <span>Source</span>
@@ -287,8 +330,17 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
         )}
       </div>
       {error && <div className="error-banner">{error}</div>}
-      <div className="form-actions">
-        <button className="primary-btn" disabled={!name.trim() || saving} onClick={save}>
+      {duplicates && (
+        <DuplicateWarning
+          noun="lead"
+          matches={duplicates}
+          busy={saving}
+          onCreate={() => save(true)}
+          onBack={() => setDuplicates(null)}
+        />
+      )}
+      <div className="form-actions" hidden={Boolean(duplicates)}>
+        <button className="primary-btn" disabled={!name.trim() || saving} onClick={() => save()}>
           {saving ? "Saving…" : "Save"}
         </button>
         <button className="secondary-btn" onClick={onDone}>
@@ -312,12 +364,33 @@ function ConvertForm({
   const [value, setValue] = useState("0");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [matches, setMatches] = useState<CustomerMatch[] | null>(null);
+  // "new" = create a customer; otherwise an existing customer's id. Unset until
+  // the user chooses when there are look-alikes — never guessed.
+  const [customerChoice, setCustomerChoice] = useState<string | null>(null);
+  const newName = lead.company_name || lead.name;
+
+  useEffect(() => {
+    fetchLeadCustomerMatches(lead.id)
+      .then((found) => {
+        setMatches(found);
+        if (found.length === 0) setCustomerChoice("new");
+      })
+      .catch(() => {
+        setMatches([]);
+        setCustomerChoice("new");
+      });
+  }, [lead.id]);
 
   async function save() {
     setSaving(true);
     setError(null);
     try {
-      const result = await convertLead(lead.id, { create_opportunity: createOpportunity, opportunity_value: Number(value) });
+      const result = await convertLead(lead.id, {
+        customer_id: customerChoice === "new" ? null : customerChoice,
+        create_opportunity: createOpportunity,
+        opportunity_value: Number(value),
+      });
       onDone(result.opportunity_id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't convert.");
@@ -327,12 +400,38 @@ function ConvertForm({
   }
 
   return (
-    <div className="card form-card">
+    <div className="convert-form">
       <p style={{ margin: 0, fontSize: 13, color: "var(--ink-dim)" }}>
-        Converts <b style={{ color: "var(--ink)" }}>{lead.name}</b> into a Customer (
-        <span className="mono">{lead.company_name || lead.name}</span>) and a Contact.
+        Converts <b style={{ color: "var(--ink)" }}>{lead.name}</b> into a Contact on a Customer.
       </p>
-      <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {matches === null ? (
+        <p className="card-note">Checking for existing customers…</p>
+      ) : (
+        <fieldset className="choice-list">
+          {matches.length > 0 && (
+            <legend>
+              {matches.length === 1 ? "An existing customer looks like this lead" : `${matches.length} existing customers look like this lead`} — is it one of them?
+            </legend>
+          )}
+          {matches.map((m) => (
+            <label key={m.id} className={customerChoice === m.id ? "on" : ""}>
+              <input type="radio" name={`customer-${lead.id}`} checked={customerChoice === m.id} onChange={() => setCustomerChoice(m.id)} />
+              <span>
+                <b>Add to {m.name}</b>
+                <small>{[m.gstin, ...m.reasons].filter(Boolean).join(" · ")}</small>
+              </span>
+            </label>
+          ))}
+          <label className={customerChoice === "new" ? "on" : ""}>
+            <input type="radio" name={`customer-${lead.id}`} checked={customerChoice === "new"} onChange={() => setCustomerChoice("new")} />
+            <span>
+              <b>Create a new customer “{newName}”</b>
+              {matches.length > 0 && <small>A different business that happens to share the name or number</small>}
+            </span>
+          </label>
+        </fieldset>
+      )}
+      <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8, justifyContent: "flex-start" }}>
         <input type="checkbox" checked={createOpportunity} onChange={(e) => setCreateOpportunity(e.target.checked)} />
         <span>Also open an Opportunity</span>
       </label>
@@ -344,8 +443,8 @@ function ConvertForm({
       )}
       {error && <div className="error-banner">{error}</div>}
       <div className="form-actions">
-        <button className="primary-btn" disabled={saving} onClick={save}>
-          {saving ? "Converting…" : "Confirm conversion"}
+        <button className="primary-btn" disabled={saving || !customerChoice} onClick={save}>
+          {saving ? "Converting…" : customerChoice ? "Confirm conversion" : "Choose a customer above"}
         </button>
         <button className="secondary-btn" onClick={onCancel}>
           Cancel

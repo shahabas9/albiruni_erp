@@ -10,7 +10,7 @@ CRM usually works without editing.
 import csv
 import io
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
@@ -18,7 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service
+from app.domain import crm_service, history
+from app.domain.duplicates import phone_key
 from app.domain.gstin import normalize_gstin
 from app.models.crm import Lead
 from app.models.sales import Customer
@@ -68,11 +69,6 @@ def _norm_header(h: str) -> str:
     return re.sub(r"[^a-z0-9/]+", " ", h.lower()).strip()
 
 
-def _phone_key(phone: str) -> str:
-    digits = re.sub(r"\D", "", phone)
-    return digits[-10:] if len(digits) >= 10 else ""
-
-
 def parse(kind: str, text: str) -> tuple[list[Row], dict[str, str]]:
     if kind not in COLUMNS:
         raise CsvImportError(f"Can't import '{kind}'. Use leads or customers.")
@@ -117,7 +113,7 @@ def _validate_leads(db: Session, context: RequestContext, rows: list[Row]) -> No
     existing = db.execute(
         select(Lead.phone, Lead.email).where(Lead.tenant_id == context.tenant_id, Lead.company_id == context.company_id)
     ).all()
-    seen_phones = {_phone_key(p) for p, _ in existing if _phone_key(p)}
+    seen_phones = {phone_key(p) for p, _ in existing if phone_key(p)}
     seen_emails = {e.lower() for _, e in existing if e}
     users = {
         key.lower(): u
@@ -152,7 +148,7 @@ def _validate_leads(db: Session, context: RequestContext, rows: list[Row]) -> No
                 v["owner_user_id"] = str(user.id)
         if row.status == "error":
             continue
-        key = _phone_key(phone)
+        key = phone_key(phone)
         if (key and key in seen_phones) or (email and email.lower() in seen_emails):
             row.status = "duplicate"
             row.messages.append("Already exists (same phone or email) — will be skipped.")
@@ -210,18 +206,22 @@ def validate(db: Session, context: RequestContext, kind: str, rows: list[Row]) -
 def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> int:
     """Writes every "ok" row in one transaction; returns how many were created."""
 
+    context = replace(context, channel="import")
     created = 0
     for row in rows:
         if row.status != "ok":
             continue
         v = row.values
         if kind == "leads":
-            db.add(Lead(
+            lead = Lead(
                 tenant_id=context.tenant_id, company_id=context.company_id,
                 name=v["name"], company_name=v.get("company_name", ""), phone=v.get("phone", ""),
                 email=v.get("email", ""), source=v.get("source", "") or "Import", notes=v.get("notes", ""),
                 status="New", owner_user_id=UUID(v["owner_user_id"]) if v.get("owner_user_id") else context.user.id,
-            ))
+            )
+            db.add(lead)
+            db.flush()
+            history.record(db, context, "lead", lead.id, "created", f"Lead imported from CSV (line {row.line})")
         else:
             db.add(Customer(
                 tenant_id=context.tenant_id, company_id=context.company_id,

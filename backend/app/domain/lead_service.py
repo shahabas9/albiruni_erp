@@ -1,23 +1,45 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service
+from app.domain import crm_service, duplicates, history
+from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import LEAD_STATUSES, Activity, Contact, Lead, Opportunity
 from app.models.sales import Customer
 from app.schemas.crm import ConvertLeadIn, LeadIn, LeadUpdate
 
 
-def list_leads(db: Session, context: RequestContext) -> list[Lead]:
-    stmt = (
-        select(Lead)
-        .where(Lead.tenant_id == context.tenant_id, Lead.company_id == context.company_id)
-        .order_by(Lead.created_at.desc())
-    )
-    return list(db.execute(stmt).scalars().all())
+def _label(lead: Lead) -> str:
+    return lead.company_name or lead.name
+
+
+def list_leads(
+    db: Session,
+    context: RequestContext,
+    *,
+    q: str = "",
+    status: str = "",
+    owner: str = "",
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[list[Lead], int]:
+    """Leads matching the filters, newest first, and how many match in total.
+
+    status: a status, or "open" (not Converted/Lost). owner: "me",
+    "unassigned" or a user id. q: name, company, phone or email."""
+
+    stmt = select(Lead).where(Lead.tenant_id == context.tenant_id, Lead.company_id == context.company_id)
+    if status == "open":
+        stmt = stmt.where(Lead.status.notin_(("Converted", "Lost")))
+    elif status:
+        stmt = stmt.where(Lead.status == status)
+    stmt = crm_service.filter_owner(stmt, Lead.owner_user_id, owner, context)
+    if q.strip():
+        stmt = stmt.where(crm_service.search(q, Lead.name, Lead.company_name, Lead.email, Lead.phone))
+    return crm_service.page(db, stmt.order_by(Lead.created_at.desc(), Lead.id), limit, offset)
 
 
 def get_lead(db: Session, context: RequestContext, lead_id: UUID) -> Lead:
@@ -28,6 +50,12 @@ def get_lead(db: Session, context: RequestContext, lead_id: UUID) -> Lead:
 
 
 def create_lead(db: Session, context: RequestContext, body: LeadIn) -> Lead:
+    if not body.allow_duplicate:
+        matches = duplicates.lead_matches(db, context, phone=body.phone, email=body.email)
+        if matches:
+            raise duplicates.DuplicateError(
+                "A lead with this phone or email already exists.", duplicates.describe_leads(matches)
+            )
     lead = Lead(
         tenant_id=context.tenant_id,
         company_id=context.company_id,
@@ -41,6 +69,8 @@ def create_lead(db: Session, context: RequestContext, body: LeadIn) -> Lead:
         owner_user_id=crm_service.resolve_owner(db, context, body.owner_user_id),
     )
     db.add(lead)
+    db.flush()
+    history.record(db, context, "lead", lead.id, "created", f"Lead created: {_label(lead)}")
     db.commit()
     db.refresh(lead)
     return lead
@@ -56,8 +86,12 @@ def update_lead(db: Session, context: RequestContext, lead_id: UUID, body: LeadU
             raise ConflictError(f"'{data['status']}' is not a valid lead status. Use one of: {', '.join(LEAD_STATUSES)}.")
         if data["status"] == "Converted":
             raise ConflictError("Use Convert to turn a lead into a customer — it can't be set to Converted directly.")
+    changes = history.diff(lead, data)
     for field, value in data.items():
         setattr(lead, field, value)
+    if changes:
+        action = "status_changed" if list(changes) == ["status"] else "updated"
+        history.record(db, context, "lead", lead.id, action, history.describe(changes), changes)
     db.commit()
     db.refresh(lead)
     return lead
@@ -67,7 +101,11 @@ def assign_lead(db: Session, context: RequestContext, lead_id: UUID, owner_user_
     lead = get_lead(db, context, lead_id)
     if lead.status == "Converted":
         raise ConflictError("This lead has already been converted — reassign its opportunity instead.")
-    lead.owner_user_id = crm_service.resolve_owner(db, context, owner_user_id)
+    new_owner = crm_service.resolve_owner(db, context, owner_user_id)
+    if new_owner != lead.owner_user_id:
+        summary, changes = history.owner_change(db, lead.owner_user_id, new_owner)
+        history.record(db, context, "lead", lead.id, "owner_changed", summary, changes)
+    lead.owner_user_id = new_owner
     db.commit()
     db.refresh(lead)
     return lead
@@ -76,9 +114,10 @@ def assign_lead(db: Session, context: RequestContext, lead_id: UUID, owner_user_
 def convert_lead(
     db: Session, context: RequestContext, lead_id: UUID, body: ConvertLeadIn
 ) -> tuple[Lead, Customer, Contact, Opportunity | None]:
-    """Lead -> Customer (reused if one with the same name exists) + Contact,
-    and optionally an Opportunity that inherits the lead's owner and open
-    follow-ups. Atomic: all of it commits or none does."""
+    """Lead -> Customer + Contact, and optionally an Opportunity that inherits
+    the lead's owner and open follow-ups. The customer is the one the user
+    picked (body.customer_id) or a new one — never matched by name, since two
+    businesses can share one. Atomic: all of it commits or none does."""
 
     lead = get_lead(db, context, lead_id)
     if lead.status == "Converted":
@@ -86,7 +125,20 @@ def convert_lead(
     if lead.status == "Lost":
         raise ConflictError("This lead is marked Lost — re-qualify it before converting.")
 
-    customer = crm_service.find_or_create_customer(db, context, lead.company_name or lead.name)
+    if body.customer_id is not None:
+        customer = get_customer(db, context, body.customer_id)
+        if not customer.active:
+            raise ConflictError(f"{customer.name} is inactive — reactivate it or create a new customer.")
+    else:
+        customer = Customer(
+            tenant_id=context.tenant_id,
+            company_id=context.company_id,
+            name=_label(lead).strip(),
+            credit_limit=0,
+            active=True,
+        )
+        db.add(customer)
+        db.flush()
     contact = Contact(
         tenant_id=context.tenant_id,
         company_id=context.company_id,
@@ -114,6 +166,10 @@ def convert_lead(
         db.add(opportunity)
         db.flush()
         lead.converted_opportunity_id = opportunity.id
+        history.record(
+            db, context, "opportunity", opportunity.id, "created",
+            f"Deal created from lead {_label(lead)} (stage Qualified)",
+        )
         open_followups = select(Activity).where(Activity.lead_id == lead.id, Activity.done.is_(False))
         for activity in db.execute(open_followups).scalars():
             activity.opportunity_id = opportunity.id
@@ -121,9 +177,51 @@ def convert_lead(
 
     lead.status = "Converted"
     lead.converted_customer_id = customer.id
+    linked = "linked to existing customer" if body.customer_id else "new customer"
+    history.record(db, context, "lead", lead.id, "converted", f"Converted — {linked} {customer.name}")
 
     db.commit()
     for record in (lead, customer, contact, opportunity):
         if record is not None:
             db.refresh(record)
     return lead, customer, contact, opportunity
+
+
+def customer_matches(db: Session, context: RequestContext, lead_id: UUID) -> list[dict]:
+    """Existing customers this lead might already be: same name, or a contact
+    with the same phone or email. Shown at conversion so the user decides."""
+
+    lead = get_lead(db, context, lead_id)
+    reasons: dict[UUID, list[str]] = {}
+    found: dict[UUID, Customer] = {}
+
+    def add(customer: Customer, reason: str) -> None:
+        found[customer.id] = customer
+        if reason not in reasons.setdefault(customer.id, []):
+            reasons[customer.id].append(reason)
+
+    for c in duplicates.customer_matches(db, context, name=_label(lead)):
+        add(c, "Same name")
+    key, email = duplicates.phone_key(lead.phone), (lead.email or "").strip().lower()
+    conditions = []
+    if key:
+        conditions.append(func.right(func.regexp_replace(Contact.phone, r"\D", "", "g"), 10) == key)
+    if email:
+        conditions.append(func.lower(Contact.email) == email)
+    if conditions:
+        rows = db.execute(
+            select(Contact, Customer)
+            .join(Customer, Customer.id == Contact.customer_id)
+            .where(Contact.tenant_id == context.tenant_id, Contact.company_id == context.company_id, or_(*conditions))
+            .limit(20)
+        ).all()
+        for contact, customer in rows:
+            if key and duplicates.phone_key(contact.phone) == key:
+                add(customer, f"Contact {contact.name} has this phone")
+            if email and (contact.email or "").strip().lower() == email:
+                add(customer, f"Contact {contact.name} has this email")
+    return [
+        {"id": c.id, "name": c.name, "gstin": c.gstin or "", "reasons": reasons[c.id]}
+        for c in sorted(found.values(), key=lambda c: c.name.lower())
+        if c.active
+    ]

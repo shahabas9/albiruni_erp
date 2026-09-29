@@ -1,19 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import {
   ApiError,
-  fetchActivities,
   fetchAssignees,
   fetchAuditEvents,
-  fetchLeads,
-  fetchOpportunities,
+  fetchCrmSummary,
   fetchSalesItems,
   fetchQuotations,
-  type Activity,
   type Assignee,
   type AuditEvent,
+  type CrmSummary,
   type Item,
-  type Lead,
-  type Opportunity,
   type Quotation,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
@@ -21,9 +17,11 @@ import { useAuth } from "../auth/AuthProvider";
 interface AppDataContextValue {
   quotes: Quotation[];
   auditLog: AuditEvent[];
-  leads: Lead[];
-  opportunities: Opportunity[];
-  activities: Activity[];
+  /** Headline CRM numbers (counts, totals, the most overdue follow-ups) —
+   * screens that list leads, deals or follow-ups fetch their own pages. */
+  crm: CrmSummary | null;
+  /** Bumped on every refresh(); pages with their own lists refetch when it changes. */
+  version: number;
   assignees: Assignee[];
   items: Item[];
   loading: boolean;
@@ -40,9 +38,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const { status, user } = useAuth();
   const [quotes, setQuotes] = useState<Quotation[]>([]);
   const [auditLog, setAuditLog] = useState<AuditEvent[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [activities, setActivities] = useState<Activity[]>([]);
+  const [crm, setCrm] = useState<CrmSummary | null>(null);
+  const [version, setVersion] = useState(0);
   const [assignees, setAssignees] = useState<Assignee[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
@@ -63,16 +60,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     // Only ask for what this role can read, and let each module fail on its
     // own — a missing permission on Audit shouldn't blank the CRM.
     const skip = <T,>(): Promise<T[]> => Promise.resolve([]);
-    const [q, a, l, o, act, asg, it] = await Promise.allSettled([
+    const anyCrm = can("crm.lead.read") || can("crm.opportunity.read") || can("crm.activity.read");
+    setVersion((v) => v + 1);
+    const [q, a, c, asg, it] = await Promise.allSettled([
       can("sales.quotation.read") ? fetchQuotations() : skip<Quotation>(),
       can("audit.read") ? fetchAuditEvents() : skip<AuditEvent>(),
-      can("crm.lead.read") ? fetchLeads() : skip<Lead>(),
-      can("crm.opportunity.read") ? fetchOpportunities() : skip<Opportunity>(),
-      // Open follow-ups only: what the overdue badges, bell and drawer need.
-      can("crm.activity.read") ? fetchActivities(true) : skip<Activity>(),
-      can("crm.lead.read") || can("crm.opportunity.read") || can("crm.activity.read")
-        ? fetchAssignees()
-        : skip<Assignee>(),
+      anyCrm ? fetchCrmSummary() : Promise.resolve(null),
+      anyCrm ? fetchAssignees() : skip<Assignee>(),
       can("sales.quotation.read") ? fetchSalesItems() : skip<Item>(),
     ]);
     const message = (reason: unknown) => reason instanceof ApiError ? reason.message : "Couldn't reach the Albiruni API.";
@@ -80,12 +74,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     setAuditError(a.status === "rejected" ? message(a.reason) : can("audit.read") ? null : "Missing permission: audit.read");
     if (q.status === "fulfilled") setQuotes(q.value);
     if (a.status === "fulfilled") setAuditLog(a.value);
-    if (l.status === "fulfilled") setLeads(l.value);
-    if (o.status === "fulfilled") setOpportunities(o.value);
-    if (act.status === "fulfilled") setActivities(act.value);
+    if (c.status === "fulfilled") setCrm(c.value);
     if (asg.status === "fulfilled") setAssignees(asg.value);
     if (it.status === "fulfilled") setItems(it.value);
-    if ([q, a, l, o, act, asg, it].some((r) => r.status === "rejected")) {
+    if ([q, a, c, asg, it].some((r) => r.status === "rejected")) {
       setError("Couldn't reach part of the Albiruni API — is the backend running?");
     }
     setLoading(false);
@@ -99,9 +91,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       setAuditError(null);
       setQuotes([]);
       setAuditLog([]);
-      setLeads([]);
-      setOpportunities([]);
-      setActivities([]);
+      setCrm(null);
       setAssignees([]);
       setItems([]);
     }
@@ -109,7 +99,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
   return (
     <AppDataContext.Provider
-      value={{ quotes, auditLog, leads, opportunities, activities, assignees, items, loading, error, quotesError, auditError, refresh, can }}
+      value={{ quotes, auditLog, crm, version, assignees, items, loading, error, quotesError, auditError, refresh, can }}
     >
       {children}
     </AppDataContext.Provider>

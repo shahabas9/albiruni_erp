@@ -1,22 +1,33 @@
-import { useState, type DragEvent } from "react";
+import { useEffect, useState, type DragEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, updateOpportunity, type Opportunity, type OpportunityStage } from "../api/client";
-import { useAuth } from "../auth/AuthProvider";
+import {
+  ApiError,
+  fetchOpportunities,
+  fetchStaleLimits,
+  saveStaleLimits,
+  updateOpportunity,
+  type Opportunity,
+  type OpportunityStage,
+  type StaleLimits,
+} from "../api/client";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { LostReasonModal } from "../crm/forms";
-import { ErrorNote, FollowUpBadge, IdleBadge } from "../crm/ui";
+import { ErrorNote, FollowUpBadge, IdleBadge, Modal } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { inrShort } from "../lib/format";
 
 type OwnerFilter = "all" | "mine" | "unassigned";
 
 const BOARD: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
+// The board shows every open deal plus those closed in this window; older
+// closed deals live on the Opportunities list.
+const CLOSED_WINDOW_DAYS = 90;
 
-function byOwner(rows: Opportunity[], filter: OwnerFilter, me: string | undefined) {
-  if (filter === "mine") return rows.filter((r) => r.owner_user_id === me);
-  if (filter === "unassigned") return rows.filter((r) => !r.owner_user_id);
-  return rows;
+function isoDaysAgo(days: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 const weighted = (o: Opportunity) => (o.value * o.probability_pct) / 100;
@@ -29,8 +40,7 @@ function isThisMonth(iso: string, now = new Date()) {
 
 /** The pipeline board: drag deals between stages, drop on Won/Lost to close them. */
 export function Crm() {
-  const { user } = useAuth();
-  const { opportunities, activities, error: loadError, refresh, can } = useAppData();
+  const { crm, version, refresh, can } = useAppData();
   const openOpp = useOpenOpportunity();
   const navigate = useNavigate();
   const [owner, setOwner] = useState<OwnerFilter>("all");
@@ -38,14 +48,26 @@ export function Crm() {
   const [overStage, setOverStage] = useState<OpportunityStage | null>(null);
   const [losing, setLosing] = useState<Opportunity | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [editingLimits, setEditingLimits] = useState(false);
+
+  useEffect(() => {
+    let current = true;
+    fetchOpportunities({ closed_since: isoDaysAgo(CLOSED_WINDOW_DAYS), owner: owner === "all" ? "" : owner })
+      .then((page) => current && (setOpportunities(page.rows), setLoadError(null)))
+      .catch((err) => current && setLoadError(err instanceof ApiError ? err.message : "Couldn't load the pipeline."));
+    return () => {
+      current = false;
+    };
+  }, [owner, version]);
 
   const canMove = can("crm.opportunity.write");
-  const visible = byOwner(opportunities, owner, user?.id);
-  const open = visible.filter((o) => BOARD.includes(o.stage));
-  const won = visible.filter((o) => o.stage === "Won");
-  const lost = visible.filter((o) => o.stage === "Lost");
+  const open = opportunities.filter((o) => BOARD.includes(o.stage));
+  const won = opportunities.filter((o) => o.stage === "Won");
+  const lost = opportunities.filter((o) => o.stage === "Lost");
   const stale = open.filter((o) => o.is_stale);
-  const overdue = activities.filter((a) => a.is_overdue).length;
+  const overdue = crm?.overdue_followups ?? 0;
   const winRate = won.length + lost.length ? Math.round((won.length / (won.length + lost.length)) * 100) : null;
 
   async function move(opp: Opportunity, stage: OpportunityStage) {
@@ -117,13 +139,18 @@ export function Crm() {
         <Stat
           label="Won this month"
           value={inrShort(sum(won.filter((o) => isThisMonth(o.stage_changed_at)), (o) => o.value))}
-          sub={winRate === null ? "No closed deals yet" : `${winRate}% win rate on closed deals`}
+          sub={winRate === null ? `No deals closed in ${CLOSED_WINDOW_DAYS} days` : `${winRate}% win rate, last ${CLOSED_WINDOW_DAYS} days`}
         />
         <Stat
           label="Going stale"
           value={String(stale.length)}
           sub={stale.length ? `${inrShort(sum(stale, (o) => o.value))} not touched recently` : "Every open deal has recent activity"}
           tone={stale.length ? "warn" : undefined}
+          action={
+            <button className="link-btn" style={{ padding: 0 }} onClick={() => setEditingLimits(true)}>
+              {can("crm.settings.write") ? "Set limits" : "See limits"}
+            </button>
+          }
         />
       </div>
 
@@ -185,6 +212,17 @@ export function Crm() {
 
       <WinLoss won={won} lost={lost} onOpen={openOpp} />
 
+      {editingLimits && (
+        <StaleLimitsModal
+          canEdit={can("crm.settings.write")}
+          onClose={() => setEditingLimits(false)}
+          onSaved={async () => {
+            setEditingLimits(false);
+            await refresh();
+          }}
+        />
+      )}
+
       {losing && (
         <LostReasonModal
           dealName={losing.name}
@@ -200,13 +238,113 @@ export function Crm() {
   );
 }
 
-function Stat({ label, value, sub, tone }: { label: string; value: string; sub: string; tone?: "warn" }) {
+function Stat({
+  label,
+  value,
+  sub,
+  tone,
+  action,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone?: "warn";
+  action?: ReactNode;
+}) {
   return (
     <div className={`card stat${tone ? ` ${tone}` : ""}`}>
       <div className="stat-label">{label}</div>
       <div className="stat-value num">{value}</div>
       <div className="stat-sub">{sub}</div>
+      {action && <div className="stat-action">{action}</div>}
     </div>
+  );
+}
+
+const LIMIT_HINTS: Record<keyof StaleLimits, string> = {
+  New: "A fresh deal nobody has called",
+  Qualified: "Qualified, but no proposal yet",
+  Proposal: "Quote sent, waiting on the customer",
+  Negotiation: "Closing — goes cold fastest",
+};
+
+/** Per-company "going stale" limits: days a deal may sit untouched in each stage. */
+function StaleLimitsModal({ canEdit, onClose, onSaved }: { canEdit: boolean; onClose: () => void; onSaved: () => void }) {
+  const [limits, setLimits] = useState<StaleLimits | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetchStaleLimits()
+      .then(setLimits)
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load the limits."));
+  }, []);
+
+  async function save() {
+    if (!limits) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await saveStaleLimits(limits);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="When is a deal going stale?"
+      onClose={onClose}
+      footer={
+        canEdit ? (
+          <>
+            <button type="button" className="ghost-btn" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="primary-btn" disabled={!limits || saving} onClick={save}>
+              {saving ? "Saving…" : "Save for the company"}
+            </button>
+          </>
+        ) : (
+          <button className="primary-btn" onClick={onClose}>
+            Close
+          </button>
+        )
+      }
+    >
+      <p className="card-note" style={{ marginTop: 0 }}>
+        A deal is flagged when nothing — a call, a follow-up, a quotation or a stage change — has touched it for this many days.
+        Use 0 to never flag a stage.{!canEdit && " Changing these needs the crm.settings.write permission."}
+      </p>
+      {limits && (
+        <div className="limits-grid">
+          {BOARD.map((stage) => {
+            const key = stage as keyof StaleLimits;
+            return (
+              <label className="field" key={stage}>
+                <span>{stage}</span>
+                <div className="input-suffix">
+                  <input
+                    type="number"
+                    min={0}
+                    max={365}
+                    value={limits[key]}
+                    disabled={!canEdit}
+                    onChange={(e) => setLimits({ ...limits, [key]: Math.max(0, Math.min(365, Number(e.target.value) || 0)) })}
+                  />
+                  <span>{limits[key] === 0 ? "off" : "days"}</span>
+                </div>
+                <small>{LIMIT_HINTS[key]}</small>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      <ErrorNote message={error} />
+    </Modal>
   );
 }
 

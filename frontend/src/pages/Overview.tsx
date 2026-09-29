@@ -35,24 +35,20 @@ export function Overview() {
   const { user } = useAuth();
   const { ask } = useAskErp();
   const navigate = useNavigate();
-  const { quotes, opportunities, leads, activities, loading, can } = useAppData();
+  const { quotes, crm, loading, can } = useAppData();
 
   const series = monthlyQuoted(quotes, 6);
   const thisMonth = series[series.length - 1]!.value;
   const lastMonth = series[series.length - 2]!.value;
   const quotedDelta = pctChange(thisMonth, lastMonth);
 
-  const openOpps = opportunities.filter((o) => OPEN_STAGES.includes(o.stage));
-  const pipelineValue = openOpps.reduce((s, o) => s + o.value, 0);
-  const won = opportunities.filter((o) => o.stage === "Won");
-  const lost = opportunities.filter((o) => o.stage === "Lost");
-  const winRate = won.length + lost.length > 0 ? Math.round((won.length / (won.length + lost.length)) * 100) : null;
+  const won = crm?.won_deals ?? 0;
+  const lost = crm?.lost_deals ?? 0;
+  const winRate = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : null;
   const pending = quotes.filter((q) => q.status === "Pending approval");
-  const overdue = activities.filter((a) => a.is_overdue);
-  const unassigned =
-    leads.filter((l) => !l.owner_user_id && l.status !== "Converted" && l.status !== "Lost").length +
-    openOpps.filter((o) => !o.owner_user_id).length;
-  const stale = openOpps.filter((o) => o.is_stale);
+  const overdueCount = crm?.overdue_followups ?? 0;
+  const unassigned = crm?.unassigned ?? 0;
+  const staleCount = crm?.stale_deals ?? 0;
 
   const dash = loading && quotes.length === 0 ? "…" : null;
 
@@ -84,13 +80,12 @@ export function Overview() {
             </>
           )}
         </Kpi>
-        <Kpi icon="target" label="Open pipeline" value={dash ?? inrShort(pipelineValue)}>
+        <Kpi icon="target" label="Open pipeline" value={dash ?? inrShort(crm?.open_value ?? 0)}>
           <span>
-            {openOpps.length} open deal{openOpps.length === 1 ? "" : "s"} · weighted{" "}
-            {inrShort(openOpps.reduce((s, o) => s + (o.value * o.probability_pct) / 100, 0))}
+            {crm?.open_deals ?? 0} open deal{crm?.open_deals === 1 ? "" : "s"} · weighted {inrShort(crm?.weighted_value ?? 0)}
           </span>
         </Kpi>
-        <Kpi icon="wallet" label="Won deals" value={dash ?? inrShort(won.reduce((s, o) => s + o.value, 0))}>
+        <Kpi icon="wallet" label="Won deals" value={dash ?? inrShort(crm?.won_value ?? 0)}>
           <Icon name="clock" size={15} />
           <span>{winRate === null ? "No closed deals yet" : `${winRate}% win rate on closed deals`}</span>
         </Kpi>
@@ -115,7 +110,7 @@ export function Overview() {
           <StageBars
             rows={OPEN_STAGES.map((s) => ({
               label: s,
-              value: openOpps.filter((o) => o.stage === s).reduce((sum, o) => sum + o.value, 0),
+              value: crm?.by_stage.find((b) => b.stage === s)?.value ?? 0,
             }))}
           />
         </div>
@@ -130,12 +125,12 @@ export function Overview() {
             </button>
           </div>
           <div className="attention-list">
-            {overdue.length > 0 && (
+            {overdueCount > 0 && (
               <Attention
                 tone="bad"
                 icon="alert"
-                title={`${overdue.length} follow-up${overdue.length === 1 ? "" : "s"} overdue`}
-                sub={overdue
+                title={`${overdueCount} follow-up${overdueCount === 1 ? "" : "s"} overdue`}
+                sub={(crm?.overdue_items ?? [])
                   .slice(0, 2)
                   .map((a) => a.related_label)
                   .join(", ")}
@@ -151,13 +146,13 @@ export function Overview() {
                 onView={() => navigate("/sales?status=pending")}
               />
             )}
-            {stale.length > 0 && (
+            {staleCount > 0 && (
               <Attention
                 tone="warn"
                 icon="clock"
-                title={`${stale.length} deal${stale.length === 1 ? "" : "s"} going stale`}
-                sub={`${inrShort(stale.reduce((s, o) => s + o.value, 0))} with no recent activity`}
-                onView={() => navigate("/crm")}
+                title={`${staleCount} deal${staleCount === 1 ? "" : "s"} going stale`}
+                sub={`${inrShort(crm?.stale_value ?? 0)} with no recent activity`}
+                onView={() => navigate("/opportunities?stale=1")}
               />
             )}
             {unassigned > 0 && (
@@ -169,7 +164,7 @@ export function Overview() {
                 onView={() => navigate("/leads?owner=unassigned")}
               />
             )}
-            {overdue.length === 0 && pending.length === 0 && unassigned === 0 && stale.length === 0 && (
+            {overdueCount === 0 && pending.length === 0 && unassigned === 0 && staleCount === 0 && (
               <Attention tone="ok" icon="check" title="All clear" sub="No overdue follow-ups, approvals, stale or unowned deals." />
             )}
           </div>

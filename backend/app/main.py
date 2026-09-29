@@ -9,6 +9,7 @@ from app.core.dev_schema import ensure_dev_schema
 # Import routers
 from app.api import (
     routes_activities,
+    routes_crm,
     routes_admin,
     routes_ask,
     routes_audit,
@@ -45,6 +46,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],  # list totals for paging
 )
 
 app.include_router(routes_setup.router)
@@ -61,6 +63,7 @@ app.include_router(routes_contacts.router)
 app.include_router(routes_opportunities.router)
 app.include_router(routes_activities.router)
 app.include_router(routes_activities.assignees_router)
+app.include_router(routes_crm.router)
 
 
 @app.get("/api/health")
