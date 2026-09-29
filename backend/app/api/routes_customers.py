@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/customers", tags=["customers"])
 
 
 def _to_out(c) -> CustomerOut:
-    return CustomerOut(id=c.id, name=c.name, credit_limit=float(c.credit_limit), active=c.active)
+    return CustomerOut(id=c.id, name=c.name, credit_limit=float(c.credit_limit), active=c.active, gstin=c.gstin)
 
 
 @router.get("", response_model=list[CustomerOut])

@@ -52,6 +52,7 @@ export function Overview() {
   const unassigned =
     leads.filter((l) => !l.owner_user_id && l.status !== "Converted" && l.status !== "Lost").length +
     openOpps.filter((o) => !o.owner_user_id).length;
+  const stale = openOpps.filter((o) => o.is_stale);
 
   const dash = loading && quotes.length === 0 ? "…" : null;
 
@@ -85,7 +86,8 @@ export function Overview() {
         </Kpi>
         <Kpi icon="target" label="Open pipeline" value={dash ?? inrShort(pipelineValue)}>
           <span>
-            {openOpps.length} open deal{openOpps.length === 1 ? "" : "s"}
+            {openOpps.length} open deal{openOpps.length === 1 ? "" : "s"} · weighted{" "}
+            {inrShort(openOpps.reduce((s, o) => s + (o.value * o.probability_pct) / 100, 0))}
           </span>
         </Kpi>
         <Kpi icon="wallet" label="Won deals" value={dash ?? inrShort(won.reduce((s, o) => s + o.value, 0))}>
@@ -149,6 +151,15 @@ export function Overview() {
                 onView={() => navigate("/sales?status=pending")}
               />
             )}
+            {stale.length > 0 && (
+              <Attention
+                tone="warn"
+                icon="clock"
+                title={`${stale.length} deal${stale.length === 1 ? "" : "s"} going stale`}
+                sub={`${inrShort(stale.reduce((s, o) => s + o.value, 0))} with no recent activity`}
+                onView={() => navigate("/crm")}
+              />
+            )}
             {unassigned > 0 && (
               <Attention
                 tone="warn"
@@ -158,8 +169,8 @@ export function Overview() {
                 onView={() => navigate("/leads?owner=unassigned")}
               />
             )}
-            {overdue.length === 0 && pending.length === 0 && unassigned === 0 && (
-              <Attention tone="ok" icon="check" title="All clear" sub="No overdue follow-ups, approvals or unowned deals." />
+            {overdue.length === 0 && pending.length === 0 && unassigned === 0 && stale.length === 0 && (
+              <Attention tone="ok" icon="check" title="All clear" sub="No overdue follow-ups, approvals, stale or unowned deals." />
             )}
           </div>
         </div>

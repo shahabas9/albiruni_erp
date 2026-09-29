@@ -17,6 +17,8 @@ class Customer(Base):
     name: Mapped[str] = mapped_column(String(160))
     credit_limit: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     active: Mapped[bool] = mapped_column(default=True)
+    # Indian GST registration number; empty for unregistered customers.
+    gstin: Mapped[str] = mapped_column(String(15), default="")
 
 
 class Item(Base):

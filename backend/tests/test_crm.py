@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.api import routes_activities, routes_leads, routes_opportunities
@@ -22,6 +23,7 @@ from app.models.identity import Role, User
 from app.models.sales import Item
 from app.models.tenant import Company, Tenant
 from app.schemas import crm
+from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.toolgateway import tools_sales  # noqa: F401 — registers the quotation tool
 
 
@@ -186,10 +188,76 @@ class CrmTests(unittest.TestCase):
         listed = routes_opportunities.list_opportunities(self.context, self.db)[0]
         self.assertEqual((listed.stage, [q.number for q in listed.quotations]), ("Proposal", [result["number"]]))
 
-        opportunity_service.update_opportunity(self.db, self.context, opp.id, crm.OpportunityUpdate(stage="Lost"))
+        opportunity_service.update_opportunity(self.db, self.context, opp.id, crm.OpportunityUpdate(stage="Lost", lost_reason="No budget"))
         with self.assertRaises(HTTPException) as refused:
             routes_opportunities.quote_opportunity(opp.id, body, self.context, self.db)
         self.assertEqual(refused.exception.status_code, 422)
+
+    # --- Lost reasons, stage dates, idle deals -------------------------------
+
+    def deal(self, **fields):
+        customer = crm_service.find_or_create_customer(self.db, self.context, fields.pop("customer", "Deal customer"))
+        self.db.commit()
+        return opportunity_service.create_opportunity(self.db, self.context,
+            crm.OpportunityIn(customer_id=customer.id, name=fields.pop("name", "Deal"), **fields))
+
+    def test_losing_a_deal_needs_a_reason_and_reopening_clears_it(self):
+        opp = self.deal()
+        first_change = opp.stage_changed_at
+        with self.assertRaises(ConflictError):
+            opportunity_service.update_opportunity(self.db, self.context, opp.id, crm.OpportunityUpdate(stage="Lost"))
+        lost = opportunity_service.update_opportunity(self.db, self.context, opp.id,
+            crm.OpportunityUpdate(stage="Lost", lost_reason="  Price too high "))
+        self.assertEqual((lost.stage, lost.lost_reason), ("Lost", "Price too high"))
+        self.assertGreater(lost.stage_changed_at, first_change)
+        # Editing a lost deal without touching the stage doesn't demand a new reason.
+        opportunity_service.update_opportunity(self.db, self.context, opp.id, crm.OpportunityUpdate(value=10))
+        reopened = opportunity_service.update_opportunity(self.db, self.context, opp.id,
+            crm.OpportunityUpdate(stage="Negotiation"))
+        self.assertEqual(reopened.lost_reason, "")
+
+    def test_untouched_deals_go_stale_and_any_touch_revives_them(self):
+        opp = self.deal()
+        old = datetime.now(timezone.utc) - timedelta(days=30)
+        opp.created_at = old
+        opp.stage_changed_at = old
+        self.db.commit()
+        listed = routes_opportunities.list_opportunities(self.context, self.db)[0]
+        self.assertTrue(listed.is_stale)
+        self.assertEqual(listed.idle_days, 30)
+
+        activity_service.create_activity(self.db, self.context,
+            crm.ActivityIn(type="Call", subject="Checked in", opportunity_id=opp.id, done=True))
+        listed = routes_opportunities.list_opportunities(self.context, self.db)[0]
+        self.assertFalse(listed.is_stale)
+        self.assertEqual(listed.idle_days, 0)
+
+        opportunity_service.update_opportunity(self.db, self.context, opp.id,
+            crm.OpportunityUpdate(stage="Won"))
+        opp.stage_changed_at = old
+        self.db.commit()
+        # Closed deals never count as stale.
+        self.assertFalse(routes_opportunities.list_opportunities(self.context, self.db)[0].is_stale)
+
+    def test_logging_a_call_that_already_happened(self):
+        lead = self.lead()
+        call = activity_service.create_activity(self.db, self.context,
+            crm.ActivityIn(type="WhatsApp", subject="WhatsApp — sent price list", lead_id=lead.id, done=True))
+        self.assertTrue(call.done)
+        self.assertIsNotNone(call.completed_at)
+        self.assertFalse(crm_service.is_overdue(call))
+        self.assertEqual(routes_leads.list_leads(self.context, self.db)[0].open_activities, 0)
+
+    # --- GSTIN -------------------------------------------------------------------
+
+    def test_gstin_is_normalised_and_checksummed(self):
+        self.assertEqual(CustomerIn(name="A", gstin=" 27aapfu0939f1zv ").gstin, "27AAPFU0939F1ZV")
+        self.assertEqual(CustomerIn(name="A").gstin, "")
+        for bad in ("27AAPFU0939F1ZX", "27AAPFU0939F1Z", "99AAPFU0939F1ZV"):
+            with self.assertRaises(ValidationError):
+                CustomerIn(name="A", gstin=bad)
+        self.assertIsNone(CustomerUpdate(name="B").gstin)
+        self.assertEqual(CustomerUpdate(gstin="").gstin, "")
 
     # --- Upgrades -----------------------------------------------------------------
 

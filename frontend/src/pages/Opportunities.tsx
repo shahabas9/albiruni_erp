@@ -14,7 +14,7 @@ import {
 import { CustomerPicker } from "../components/CustomerPicker";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
-import { FollowUpBadge, OwnerPicker } from "../crm/ui";
+import { FollowUpBadge, IdleBadge, OwnerPicker } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 
 type OwnerFilter = "all" | "mine" | "unassigned";
@@ -200,7 +200,11 @@ export function Opportunities() {
                       <OwnerPicker value={o.owner_user_id} assignees={assignees} canAssign={can("crm.opportunity.assign")} onChange={(id) => assign(o, id)} />
                     </td>
                     <td>
-                      <FollowUpBadge overdue={o.overdue_activities} open={o.open_activities} nextDueAt={o.next_due_at} />
+                      {o.is_stale ? (
+                        <IdleBadge days={o.idle_days} />
+                      ) : (
+                        <FollowUpBadge overdue={o.overdue_activities} open={o.open_activities} nextDueAt={o.next_due_at} />
+                      )}
                     </td>
                     <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                       {can("crm.opportunity.write") && customers && (

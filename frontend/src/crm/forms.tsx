@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import {
   ACTIVITY_TYPES,
   ApiError,
+  LOST_REASONS,
   createActivity,
   quoteOpportunity,
   type ActivityType,
@@ -204,5 +205,45 @@ export function QuoteForm({
         <Icon name="file" size={16} /> {busy ? "Creating…" : `Create quotation for ${opportunity.customer_name}`}
       </button>
     </form>
+  );
+}
+
+/** Asks why a deal was lost before it's marked Lost — the reason feeds the win/loss report. */
+export function LostReasonModal({
+  dealName,
+  onClose,
+  onConfirm,
+}: {
+  dealName: string;
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  const { busy, error, submit } = useSubmit(() => onConfirm(reason.trim()), () => undefined);
+
+  return (
+    <Modal
+      title={`Why was “${dealName}” lost?`}
+      onClose={onClose}
+      footer={<Footer onClose={onClose} busy={busy} label="Mark as lost" formId="lost-form" />}
+    >
+      <ErrorNote message={error} />
+      <form id="lost-form" onSubmit={submit} className="fields">
+        <div className="field full">
+          Common reasons
+          <div className="reason-chips">
+            {LOST_REASONS.map((r) => (
+              <button type="button" key={r} className={reason === r ? "on" : ""} onClick={() => setReason(r)}>
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="field full">
+          Reason
+          <input required value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Pick one above or type your own" />
+        </label>
+      </form>
+    </Modal>
   );
 }

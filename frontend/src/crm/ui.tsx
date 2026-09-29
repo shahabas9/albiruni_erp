@@ -132,6 +132,16 @@ export function FollowUpBadge({
   return <span className="followup none">No follow-up</span>;
 }
 
+/** An open deal nobody has touched for longer than its stage allows. */
+export function IdleBadge({ days }: { days: number }) {
+  return (
+    <span className="followup idle" title="No stage change, follow-up or quotation recently — this deal is going cold">
+      <Icon name="clock" size={14} />
+      Idle {days} day{days === 1 ? "" : "s"}
+    </span>
+  );
+}
+
 export function ErrorNote({ message }: { message: string | null }) {
   if (!message) return null;
   return <div className="notice bad">{message}</div>;

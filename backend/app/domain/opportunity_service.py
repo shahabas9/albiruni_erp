@@ -39,6 +39,7 @@ def create_opportunity(db: Session, context: RequestContext, body: OpportunityIn
         probability_pct=body.probability_pct,
         expected_close_date=body.expected_close_date,
         notes=body.notes,
+        stage_changed_at=crm_service.now_utc(),
         owner_user_id=crm_service.resolve_owner(db, context, body.owner_user_id),
     )
     db.add(opp)
@@ -50,8 +51,20 @@ def create_opportunity(db: Session, context: RequestContext, body: OpportunityIn
 def update_opportunity(db: Session, context: RequestContext, opportunity_id: UUID, body: OpportunityUpdate) -> Opportunity:
     opp = get_opportunity(db, context, opportunity_id)
     data = body.model_dump(exclude_unset=True)
-    if "stage" in data and data["stage"] not in OPPORTUNITY_STAGES:
-        raise ConflictError(f"'{data['stage']}' is not a valid stage. Use one of: {', '.join(OPPORTUNITY_STAGES)}.")
+    if "lost_reason" in data:
+        data["lost_reason"] = (data["lost_reason"] or "").strip()
+    stage = data.get("stage", opp.stage)
+    if stage not in OPPORTUNITY_STAGES:
+        raise ConflictError(f"'{stage}' is not a valid stage. Use one of: {', '.join(OPPORTUNITY_STAGES)}.")
+    if stage == "Lost":
+        # Required on the way into Lost; older Lost deals without one stay editable.
+        moving_to_lost = opp.stage != "Lost" or "lost_reason" in data
+        if moving_to_lost and not data.get("lost_reason", opp.lost_reason):
+            raise ConflictError("Say why this deal was lost — pick or type a reason.")
+    else:
+        data["lost_reason"] = ""  # a reopened or won deal carries no lost reason
+    if stage != opp.stage:
+        opp.stage_changed_at = crm_service.now_utc()
     for field, value in data.items():
         setattr(opp, field, value)
     db.commit()

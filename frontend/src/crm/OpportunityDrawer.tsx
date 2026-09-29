@@ -1,11 +1,20 @@
-import { useState } from "react";
-import { ApiError, assignOpportunity, updateActivity, updateOpportunity, type OpportunityStage } from "../api/client";
+import { useEffect, useState } from "react";
+import {
+  ApiError,
+  assignOpportunity,
+  fetchContacts,
+  updateActivity,
+  updateOpportunity,
+  type Contact,
+  type OpportunityStage,
+} from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { Icon } from "../components/Icon";
 import { useAppData } from "../data/AppDataProvider";
-import { dateTime, inr, quoteStatusClass, relativeDue } from "../lib/format";
-import { FollowUpModal, QuoteForm } from "./forms";
-import { Drawer, ErrorNote, FollowUpBadge, OwnerPicker } from "./ui";
+import { dateTime, inr, quoteStatusClass, relativeDue, shortDate } from "../lib/format";
+import { ContactActions } from "./ContactActions";
+import { FollowUpModal, LostReasonModal, QuoteForm } from "./forms";
+import { Drawer, ErrorNote, FollowUpBadge, IdleBadge, OwnerPicker } from "./ui";
 
 const OPEN_FLOW: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
 
@@ -16,8 +25,18 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [followUpOpen, setFollowUpOpen] = useState(false);
+  const [lostOpen, setLostOpen] = useState(false);
 
   const opp = opportunities.find((o) => o.id === opportunityId);
+  const customerId = opp?.customer_id;
+  const canSeeContacts = can("crm.contact.read");
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  useEffect(() => {
+    if (!customerId || !canSeeContacts) return;
+    fetchContacts()
+      .then((all) => setContacts(all.filter((c) => c.customer_id === customerId)))
+      .catch(() => setContacts([]));
+  }, [customerId, canSeeContacts]);
   if (!opp) return null;
 
   const canWrite = can("crm.opportunity.write");
@@ -56,7 +75,10 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
       <div className="card">
         <div className="card-head">
           <span className="card-title">Stage</span>
-          <FollowUpBadge overdue={opp.overdue_activities} open={opp.open_activities} nextDueAt={opp.next_due_at} />
+          <span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {opp.is_stale && <IdleBadge days={opp.idle_days} />}
+            <FollowUpBadge overdue={opp.overdue_activities} open={opp.open_activities} nextDueAt={opp.next_due_at} />
+          </span>
         </div>
         <div className="stage-steps">
           {OPEN_FLOW.map((s, i) => (
@@ -76,12 +98,24 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
               key={s}
               disabled={!canWrite}
               className={`${s === "Lost" ? "lost " : ""}${opp.stage === s ? "on" : ""}`}
-              onClick={() => run(() => updateOpportunity(opp.id, { stage: s }))}
+              onClick={() =>
+                s === "Lost" && opp.stage !== "Lost" ? setLostOpen(true) : run(() => updateOpportunity(opp.id, { stage: s }))
+              }
             >
               {s === "Won" ? "✓ Won" : "✕ Lost"}
             </button>
           ))}
         </div>
+        {opp.stage === "Lost" && (
+          <p className="card-note" style={{ margin: "10px 0 0" }}>
+            Lost {shortDate(opp.stage_changed_at)} — <b style={{ color: "var(--bad)" }}>{opp.lost_reason || "no reason recorded"}</b>
+          </p>
+        )}
+        {opp.stage === "Won" && (
+          <p className="card-note" style={{ margin: "10px 0 0" }}>
+            Won {shortDate(opp.stage_changed_at)}
+          </p>
+        )}
         <div className="fields" style={{ marginTop: 16 }}>
           <div className="field">
             Owner
@@ -150,6 +184,40 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
         )}
       </div>
 
+      {canSeeContacts && (
+        <div className="card">
+          <div className="card-head">
+            <span className="card-title">People at {opp.customer_name}</span>
+          </div>
+          {contacts.length === 0 ? (
+            <p className="card-note" style={{ margin: 0 }}>
+              No contacts yet — add them on the Contacts page to call or WhatsApp from here.
+            </p>
+          ) : (
+            <div className="mini-list">
+              {contacts.map((c) => (
+                <div className="row" key={c.id}>
+                  <Icon name="user" size={18} />
+                  <div className="grow">
+                    {c.name}
+                    <small>{[c.title, c.phone || "no phone"].filter(Boolean).join(" · ")}</small>
+                  </div>
+                  <ContactActions
+                    phone={c.phone}
+                    name={c.name}
+                    target={{ opportunity_id: opp.id }}
+                    onLogged={async () => {
+                      await refresh();
+                      setNotice(`Logged your contact with ${c.name}.`);
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="card">
         <div className="card-head">
           <span className="card-title">Follow-ups</span>
@@ -187,6 +255,17 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
         )}
       </div>
 
+      {lostOpen && (
+        <LostReasonModal
+          dealName={opp.name}
+          onClose={() => setLostOpen(false)}
+          onConfirm={async (reason) => {
+            await updateOpportunity(opp.id, { stage: "Lost", lost_reason: reason });
+            setLostOpen(false);
+            await refresh();
+          }}
+        />
+      )}
       {followUpOpen && (
         <FollowUpModal
           target={{ opportunity_id: opp.id, name: opp.name }}

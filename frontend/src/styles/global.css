@@ -1153,7 +1153,7 @@ td .sub {
 
 .pipeline {
   display: grid;
-  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  grid-template-columns: repeat(4, minmax(196px, 1fr));
   gap: 14px;
   overflow-x: auto;
   padding-bottom: 6px;
@@ -1217,6 +1217,201 @@ td .sub {
   margin-top: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* Forecast strip above the board */
+.forecast-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.card.stat {
+  padding: 16px 18px;
+}
+
+.stat-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+.stat-value {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 6px 0 4px;
+}
+
+.stat-sub {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.card.stat.warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+
+.card.stat.warn .stat-value {
+  color: var(--warn);
+}
+
+@media (max-width: 1100px) {
+  .forecast-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.stage-weighted {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin: -8px 0 12px;
+}
+
+/* Drag and drop */
+.stage-col {
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.stage-col.drop-over {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+.deal-card[draggable="true"] {
+  cursor: grab;
+}
+
+.deal-card.dragging {
+  opacity: 0.45;
+}
+
+.deal-card.stale {
+  border-left: 3px solid var(--warn);
+}
+
+/* Always visible so there's a target to aim for (and no layout jump mid-drag). */
+.close-zones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.close-zones .close-zone {
+  opacity: 0.55;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.close-zones.active .close-zone {
+  opacity: 1;
+}
+
+.close-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 56px;
+  border: 2px dashed var(--line-strong);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--ink-dim);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.close-zone.won.drop-over {
+  background: var(--good-soft);
+  border-color: var(--good);
+  color: var(--good);
+}
+
+.close-zone.lost.drop-over {
+  background: var(--bad-soft);
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.bar-row .fill.lost-fill {
+  background: var(--bad);
+  opacity: 0.75;
+}
+
+.followup.idle {
+  color: var(--warn);
+}
+
+/* Call / WhatsApp buttons */
+.contact-actions {
+  display: inline-flex;
+  gap: 4px;
+  vertical-align: middle;
+}
+
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--accent-text);
+}
+
+.icon-link:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.icon-link.whatsapp {
+  color: #1c8f4d;
+}
+
+.icon-link.whatsapp:hover {
+  border-color: #25d366;
+  background: color-mix(in srgb, #25d366 12%, var(--surface));
+}
+
+.reason-chips.outcome button.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.cell-with-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+/* Lost-reason chips */
+.reason-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.reason-chips button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 11px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+
+.reason-chips button.on {
+  background: var(--bad-soft);
+  border-color: var(--bad);
+  color: var(--bad);
 }
 
 .closed-strip {
