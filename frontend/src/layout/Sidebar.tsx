@@ -182,8 +182,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           </div>
           <div className="sidebar-tagline">
             <svg viewBox="0 0 200 90" aria-hidden="true">
-              <path d="M0 90 L70 40 L95 55 L140 10 L200 70 L200 90 Z" fill="#15a88c" opacity="0.35" />
-              <path d="M40 90 L110 35 L150 65 L200 45 L200 90 Z" fill="#2fd1a8" opacity="0.25" />
+              <path d="M0 90 L70 40 L95 55 L140 10 L200 70 L200 90 Z" fill="#23b1aa" opacity="0.35" />
+              <path d="M40 90 L110 35 L150 65 L200 45 L200 90 Z" fill="#3fd0c6" opacity="0.25" />
             </svg>
             <span>
               Smarter operations

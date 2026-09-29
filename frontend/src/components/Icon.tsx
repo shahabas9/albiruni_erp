@@ -63,9 +63,9 @@ export function Icon({ name, size = 20, className }: { name: IconName; size?: nu
 export function BrandMark({ size = 30 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M16 3 29 27H3z" fill="#15a88c" />
-      <path d="M16 3 22.5 15 16 27H3z" fill="#2fd1a8" />
-      <path d="M10 27 16 16l6 11z" fill="#d7f25e" />
+      <path d="M16 3 29 27H3z" fill="#23b1aa" />
+      <path d="M16 3 22.5 15 16 27H3z" fill="#3fd0c6" />
+      <path d="M10 27 16 16l6 11z" fill="#d6f46f" />
     </svg>
   );
 }

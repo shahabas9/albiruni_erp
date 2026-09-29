@@ -21,9 +21,12 @@
   --brand-ink: #ffffff;
   --brand-soft: #e8eef4;
 
-  --accent: #10997f;
-  --accent-ink: #ffffff;
-  --accent-soft: #e1f4ef;
+  /* Teal from the design (#23b1aa). --accent fills charts, bars, icons and
+     borders; --accent-text is the same hue deepened to 4.5:1+ for small text. */
+  --accent: #1fa9a2;
+  --accent-text: #187773;
+  --accent-ink: #0f2033;
+  --accent-soft: #e0f5f3;
 
   --link: #2563c9;
 
@@ -43,14 +46,14 @@
   --nav-bg: #0f2033;
   --nav-ink: #c3cfdb;
   --nav-hover: rgba(255, 255, 255, 0.06);
-  --lime: #d7f25e;
+  --lime: #d6f46f;
   --lime-ink: #0f2033;
   --copilot-bg: #0b1a2a;
   --copilot-surface: #172a3e;
   --copilot-line: rgba(255, 255, 255, 0.1);
   --copilot-ink: #e9f0f6;
   --copilot-dim: #9fb1c3;
-  --glow: #2fe0b8;
+  --glow: #36d6cc;
 
   --radius: 14px;
   --sidebar-w: 240px;
@@ -70,13 +73,14 @@
     --line: #1f2d3e;
     --line-strong: #2d3f54;
 
-    --brand: #d7f25e;
+    --brand: #d6f46f;
     --brand-ink: #0f2033;
     --brand-soft: #1a2a3b;
 
-    --accent: #2fc9a6;
+    --accent: #2fc9c0;
+    --accent-text: #2fc9c0;
     --accent-ink: #062019;
-    --accent-soft: #0f2e29;
+    --accent-soft: #0f2e2c;
 
     --link: #7fb0ff;
 
@@ -106,13 +110,14 @@
   --line: #1f2d3e;
   --line-strong: #2d3f54;
 
-  --brand: #d7f25e;
+  --brand: #d6f46f;
   --brand-ink: #0f2033;
   --brand-soft: #1a2a3b;
 
-  --accent: #2fc9a6;
+  --accent: #2fc9c0;
+  --accent-text: #2fc9c0;
   --accent-ink: #062019;
-  --accent-soft: #0f2e29;
+  --accent-soft: #0f2e2c;
 
   --link: #7fb0ff;
 
