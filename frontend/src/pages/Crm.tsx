@@ -8,7 +8,6 @@ import {
   type CrmLeadStatus as LeadStatus,
   type CrmOpportunity as Opportunity,
   type CrmOpportunityStage as OpportunityStage,
-  type Quotation,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { Icon } from "../components/Icon";
@@ -16,14 +15,12 @@ import { ConvertLeadModal, FollowUpModal, NewLeadModal, NewOpportunityModal } fr
 import { OpportunityDrawer } from "../crm/OpportunityDrawer";
 import { ErrorNote, FollowUpBadge, OwnerPicker } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-import { useAskErp } from "../askerp/AskErpContext";
-import { dateTime, inr, inrShort, quoteStatusClass, relativeDue } from "../lib/format";
+import { dateTime, inrShort, relativeDue } from "../lib/format";
 
-type Tab = "pipeline" | "leads" | "followups" | "quotations";
+type Tab = "pipeline" | "leads" | "followups";
 type OwnerFilter = "all" | "mine" | "unassigned";
 
 const BOARD: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
-const QUOTE_FILTERS = ["all", "Draft", "Pending approval", "Sent"] as const;
 
 function byOwner<T extends { owner_id: string | null }>(rows: T[], filter: OwnerFilter, me: string | undefined) {
   if (filter === "mine") return rows.filter((r) => r.owner_id === me);
@@ -36,8 +33,7 @@ export function Crm() {
   const tab = (params.get("tab") as Tab) || "pipeline";
   const openOppId = params.get("opp");
   const { user } = useAuth();
-  const { leads, opportunities, activities, quotes, assignees, error: loadError, refresh, can } = useAppData();
-  const { open: openAsk } = useAskErp();
+  const { leads, opportunities, activities, assignees, error: loadError, refresh, can } = useAppData();
   const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
   const [modal, setModal] = useState<
     | { kind: "lead" }
@@ -81,7 +77,7 @@ export function Crm() {
     <section>
       <div className="page-head">
         <div>
-          <h1 className="page-title">CRM &amp; Sales</h1>
+          <h1 className="page-title">CRM pipeline</h1>
           <p className="page-sub">
             {openOpps.length} open deal{openOpps.length === 1 ? "" : "s"} worth{" "}
             {inrShort(openOpps.reduce((s, o) => s + o.expected_value, 0))}
@@ -111,7 +107,6 @@ export function Crm() {
             ["pipeline", "Pipeline", openOpps.length, false],
             ["leads", "Leads", leads.filter((l) => l.status !== "Converted").length, false],
             ["followups", "Follow-ups", overdue.length || activities.length, overdue.length > 0],
-            ["quotations", "Quotations", quotes.length, false],
           ] as const
         ).map(([key, label, count, alarm]) => (
           <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>
@@ -122,8 +117,7 @@ export function Crm() {
 
       <ErrorNote message={error ?? loadError} />
 
-      {tab !== "quotations" && (
-        <div className="toolbar">
+      <div className="toolbar">
           <div className="filters" aria-label="Owner filter">
             {(["all", "mine", "unassigned"] as const).map((f) => (
               <button key={f} className={owner === f ? "on" : ""} onClick={() => setOwner(f)}>
@@ -131,8 +125,7 @@ export function Crm() {
               </button>
             ))}
           </div>
-        </div>
-      )}
+      </div>
 
       {tab === "pipeline" && (
         <Pipeline
@@ -161,15 +154,6 @@ export function Crm() {
           canWrite={canWrite}
           onDone={(id) => run(() => crm.completeActivity(id))}
           onOpenOpp={openOpp}
-        />
-      )}
-
-      {tab === "quotations" && (
-        <QuotationsTable
-          quotes={quotes}
-          initialFilter={params.get("status") === "pending" ? "Pending approval" : "all"}
-          onOpenOpp={openOpp}
-          onNew={openAsk}
         />
       )}
 
@@ -432,80 +416,5 @@ function FollowUps({
         </tbody>
       </table>
     </div>
-  );
-}
-
-function QuotationsTable({
-  quotes,
-  initialFilter,
-  onOpenOpp,
-  onNew,
-}: {
-  quotes: Quotation[];
-  initialFilter: (typeof QUOTE_FILTERS)[number];
-  onOpenOpp: (id: string) => void;
-  onNew: () => void;
-}) {
-  const [filter, setFilter] = useState<(typeof QUOTE_FILTERS)[number]>(initialFilter);
-  const visible = filter === "all" ? quotes : quotes.filter((q) => q.status === filter);
-  return (
-    <>
-      <div className="toolbar">
-        <div className="filters">
-          {QUOTE_FILTERS.map((f) => (
-            <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
-              {f === "all" ? "All" : f} ({f === "all" ? quotes.length : quotes.filter((q) => q.status === f).length})
-            </button>
-          ))}
-        </div>
-        <button className="ghost-btn" onClick={onNew}>
-          <Icon name="mic" size={16} /> Quote with Ask ERP
-        </button>
-      </div>
-      {visible.length === 0 ? (
-        <div className="card empty-state">No quotations match this filter.</div>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Quotation</th>
-                <th>Customer</th>
-                <th>Opportunity</th>
-                <th>Items</th>
-                <th>Value</th>
-                <th>Status</th>
-                <th>Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((q) => (
-                <tr key={q.id}>
-                  <td className="mono">{q.number}</td>
-                  <td>{q.customer_name}</td>
-                  <td>
-                    {q.opportunity_id ? (
-                      <button className="link-btn" onClick={() => onOpenOpp(q.opportunity_id!)}>
-                        {q.opportunity_title}
-                      </button>
-                    ) : (
-                      <span className="followup none">Not linked</span>
-                    )}
-                  </td>
-                  <td>
-                    {q.lines.length} line{q.lines.length === 1 ? "" : "s"}
-                  </td>
-                  <td className="num">{inr(q.total)}</td>
-                  <td>
-                    <span className={`badge ${quoteStatusClass(q.status)}`}>{q.status}</span>
-                  </td>
-                  <td>{dateTime(q.created_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </>
   );
 }

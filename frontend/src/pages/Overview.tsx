@@ -148,7 +148,7 @@ export function Overview() {
                 icon="file"
                 title={`${pending.length} quotation${pending.length === 1 ? "" : "s"} awaiting approval`}
                 sub={`Total ${inrShort(pending.reduce((s, q) => s + q.total, 0))}`}
-                onView={() => navigate("/crm?tab=quotations&status=pending")}
+                onView={() => navigate("/sales?status=pending")}
               />
             )}
             {unassigned > 0 && (
