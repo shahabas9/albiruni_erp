@@ -9,6 +9,15 @@ import app.models  # noqa: F401 — populates Base.metadata
 from app.core.database import Base, engine
 
 
+LEGACY_CRM_PERMISSIONS = {
+    "crm.read": ["crm.lead.read", "crm.opportunity.read", "crm.contact.read", "crm.activity.read"],
+    "crm.write": [
+        "crm.lead.write", "crm.lead.convert", "crm.opportunity.write", "crm.contact.write", "crm.activity.write",
+    ],
+    "crm.assign": ["crm.lead.assign", "crm.opportunity.assign"],
+}
+
+
 def ensure_dev_schema() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
@@ -81,3 +90,16 @@ def ensure_dev_schema() -> None:
             FROM opportunities WHERE leads.converted_opportunity_id = opportunities.id
             AND leads.converted_customer_id IS NULL
         """))
+
+        # One CRM permission set: expand the retired coarse crm.read / crm.write /
+        # crm.assign grants into their per-record equivalents, then drop them.
+        for coarse, fine in LEGACY_CRM_PERMISSIONS.items():
+            conn.execute(
+                text("""
+                    UPDATE roles SET permissions = ARRAY(
+                        SELECT DISTINCT p FROM unnest(array_remove(permissions, :coarse) || CAST(:fine AS VARCHAR[])) AS p
+                    )
+                    WHERE :coarse = ANY(permissions)
+                """),
+                {"coarse": coarse, "fine": fine},
+            )

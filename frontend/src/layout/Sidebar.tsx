@@ -58,7 +58,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       label: "CRM",
       icon: "users",
       children: [
-        { to: "/crm", label: "Pipeline", permission: "crm.read" },
+        { to: "/crm", label: "Pipeline", permission: "crm.opportunity.read" },
         { to: "/leads", label: "Leads", permission: "crm.lead.read" },
         { to: "/opportunities", label: "Opportunities", permission: "crm.opportunity.read" },
         { to: "/contacts", label: "Contacts", permission: "crm.contact.read" },

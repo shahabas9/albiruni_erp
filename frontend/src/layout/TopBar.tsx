@@ -117,7 +117,7 @@ function Notifications() {
                 <b>{a.subject}</b>
                 <br />
                 <small style={{ color: "var(--bad)" }}>
-                  {a.related_name} · {relativeDue(a.due_at)}
+                  {a.related_label} · {a.due_at ? relativeDue(a.due_at) : "overdue"}
                 </small>
               </span>
             </button>

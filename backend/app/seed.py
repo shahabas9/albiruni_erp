@@ -18,21 +18,20 @@ from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
 from app.core.security import hash_password
-from app.domain import crm_service
+from app.domain import activity_service, crm_service, lead_service, opportunity_service
 from app.domain.sales_service import persist_quotation, price_quotation
 from app.models.crm import Lead
 from app.models.identity import Role, User
 from app.models.sales import Customer, Item
 from app.models.tenant import Company, Tenant
+from app.schemas import crm
 
 
-# Coarse permissions for the pipeline API plus the per-page ones the Leads,
-# Contacts, Opportunities, Activities and Customers pages check.
+# Everything the CRM pages and the Customers page check, including reassigning owners.
 CRM_PERMISSIONS = [
-    "crm.read", "crm.write", "crm.assign",
-    "crm.lead.read", "crm.lead.write", "crm.lead.convert",
+    "crm.lead.read", "crm.lead.write", "crm.lead.convert", "crm.lead.assign",
     "crm.contact.read", "crm.contact.write",
-    "crm.opportunity.read", "crm.opportunity.write",
+    "crm.opportunity.read", "crm.opportunity.write", "crm.opportunity.assign",
     "crm.activity.read", "crm.activity.write",
     "sales.customer.read", "sales.customer.write",
 ]
@@ -56,36 +55,33 @@ def seed_crm(db: Session, tenant: Tenant) -> None:
     )
     now = crm_service.now_utc()
 
-    fresh = crm_service.create_lead(
-        db, context, name="Shafeeq K", organization="Calicut Build Mart", phone="+91 98470 11223",
-        email="", source="Walk-in", owner_id=None,
-    )
-    crm_service.create_activity(
-        db, context, kind="Call", subject="Intro call — pricing for Product A", due_at=now - timedelta(days=2),
-        lead_id=fresh.id, opportunity_id=None, owner_id=None,
-    )
-    crm_service.create_lead(
-        db, context, name="Nisha R", organization="Kannur Tiles & Co", phone="+91 94460 44556",
-        email="nisha@kannurtiles.example", source="Referral", owner_id=ahmed.id,
-    )
+    fresh = lead_service.create_lead(db, context, crm.LeadIn(
+        name="Shafeeq K", company_name="Calicut Build Mart", phone="+91 98470 11223", source="Walk-in",
+    ))
+    activity_service.create_activity(db, context, crm.ActivityIn(
+        type="Call", subject="Intro call — pricing for Product A", due_at=now - timedelta(days=2), lead_id=fresh.id,
+    ))
+    lead_service.create_lead(db, context, crm.LeadIn(
+        name="Nisha R", company_name="Kannur Tiles & Co", phone="+91 94460 44556",
+        email="nisha@kannurtiles.example", source="Referral", owner_user_id=ahmed.id,
+    ))
 
-    qualified = crm_service.create_lead(
-        db, context, name="Faisal", organization="Al Faisal Trading", phone="", email="",
-        source="Existing customer", owner_id=ahmed.id,
-    )
-    opp = crm_service.convert_lead(
-        db, context, qualified, title="Al Faisal — Q4 restock", expected_value=180_000,
-        expected_close=date.today() + timedelta(days=21),
-    )
-    crm_service.create_activity(
-        db, context, kind="Meeting", subject="Walk through Q4 volumes", due_at=now + timedelta(days=1),
-        lead_id=None, opportunity_id=opp.id, owner_id=None,
-    )
+    qualified = lead_service.create_lead(db, context, crm.LeadIn(
+        name="Faisal", company_name="Al Faisal Trading", source="Existing customer", owner_user_id=ahmed.id,
+    ))
+    _, _, _, opp = lead_service.convert_lead(db, context, qualified.id, crm.ConvertLeadIn(
+        opportunity_name="Al Faisal — Q4 restock", opportunity_value=180_000,
+        expected_close_date=date.today() + timedelta(days=21),
+    ))
+    activity_service.create_activity(db, context, crm.ActivityIn(
+        type="Meeting", subject="Walk through Q4 volumes", due_at=now + timedelta(days=1), opportunity_id=opp.id,
+    ))
 
-    crm_service.create_opportunity(
-        db, context, title="Malabar Hardware — branch expansion", customer_name="Malabar Hardware",
-        expected_value=450_000, expected_close=date.today() + timedelta(days=45), owner_id=None,
-    )
+    malabar = crm_service.find_or_create_customer(db, context, "Malabar Hardware")
+    opportunity_service.create_opportunity(db, context, crm.OpportunityIn(
+        customer_id=malabar.id, name="Malabar Hardware — branch expansion", value=450_000,
+        expected_close_date=date.today() + timedelta(days=45),
+    ))
 
 
 def run() -> None:

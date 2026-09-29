@@ -83,3 +83,18 @@ def require_permission(permission: str):
         return context
 
     return _check
+
+
+def require_any_permission(*permissions: str):
+    """Like require_permission, but any one of `permissions` is enough — for
+    lookups several modules share (e.g. the CRM owner list)."""
+
+    def _check(context: RequestContext = Depends(get_current_context)) -> RequestContext:
+        if not any(context.has_permission(p) for p in permissions):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: one of {', '.join(permissions)}",
+            )
+        return context
+
+    return _check

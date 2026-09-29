@@ -69,7 +69,7 @@ export function Drawer({
   );
 }
 
-/** Owner picker. Read-only (disabled) for roles without crm.assign. */
+/** Owner picker. Read-only (disabled) without the record's assign permission (crm.lead.assign / crm.opportunity.assign). */
 export function OwnerPicker({
   value,
   assignees,
@@ -88,7 +88,7 @@ export function OwnerPicker({
       className={`select-sm${value ? "" : " unassigned"}`}
       value={value ?? ""}
       disabled={!canAssign}
-      title={canAssign ? label : "You need the crm.assign permission to reassign"}
+      title={canAssign ? label : "You don't have permission to reassign this"}
       aria-label={label}
       onClick={(e) => e.stopPropagation()}
       onChange={(e) => onChange(e.target.value || null)}

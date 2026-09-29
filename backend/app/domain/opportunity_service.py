@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
+from app.domain import crm_service
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPPORTUNITY_STAGES, Opportunity
@@ -32,12 +33,13 @@ def create_opportunity(db: Session, context: RequestContext, body: OpportunityIn
         tenant_id=context.tenant_id,
         company_id=context.company_id,
         customer_id=body.customer_id,
-        name=body.name,
+        name=body.name.strip(),
         stage="New",
         value=body.value,
         probability_pct=body.probability_pct,
         expected_close_date=body.expected_close_date,
         notes=body.notes,
+        owner_user_id=crm_service.resolve_owner(db, context, body.owner_user_id),
     )
     db.add(opp)
     db.commit()
@@ -52,6 +54,16 @@ def update_opportunity(db: Session, context: RequestContext, opportunity_id: UUI
         raise ConflictError(f"'{data['stage']}' is not a valid stage. Use one of: {', '.join(OPPORTUNITY_STAGES)}.")
     for field, value in data.items():
         setattr(opp, field, value)
+    db.commit()
+    db.refresh(opp)
+    return opp
+
+
+def assign_opportunity(
+    db: Session, context: RequestContext, opportunity_id: UUID, owner_user_id: UUID | None
+) -> Opportunity:
+    opp = get_opportunity(db, context, opportunity_id)
+    opp.owner_user_id = crm_service.resolve_owner(db, context, owner_user_id)
     db.commit()
     db.refresh(opp)
     return opp

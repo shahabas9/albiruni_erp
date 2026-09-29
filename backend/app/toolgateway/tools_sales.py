@@ -5,12 +5,13 @@ and risk level, per the "Tool & API Contract Blueprint" (Section 12).
 
 from typing import Any
 
-from sqlalchemy.orm import Session
-
 from uuid import UUID
 
+from sqlalchemy.orm import Session
+
 from app.core.deps import RequestContext
-from app.domain import crm_service
+from app.domain import crm_service, opportunity_service
+from app.domain.errors import ConflictError, NotFoundError
 from app.domain.sales_service import DomainValidationError, persist_quotation, price_quotation
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -19,7 +20,7 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
     opportunity = None
     try:
         if args.get("opportunity_id"):
-            opportunity = crm_service.get_opportunity(db, context, UUID(str(args["opportunity_id"])))
+            opportunity = opportunity_service.get_opportunity(db, context, UUID(str(args["opportunity_id"])))
             crm_service.assert_quotable(opportunity)
         pricing = price_quotation(
             db,
@@ -28,7 +29,7 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
             requested_lines=args["lines"],
             discount_pct=float(args.get("discount_pct", 0)),
         )
-    except DomainValidationError as exc:
+    except (DomainValidationError, NotFoundError, ConflictError) as exc:
         raise ToolValidationError(str(exc)) from exc
 
     expected_total = args.get("expected_total")
