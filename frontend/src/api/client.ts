@@ -172,3 +172,307 @@ export interface AuditEvent {
 export function fetchAuditEvents(): Promise<AuditEvent[]> {
   return request<AuditEvent[]>("/api/audit/events");
 }
+
+// --- Customers --------------------------------------------------------------
+
+export interface Customer {
+  id: string;
+  name: string;
+  credit_limit: number;
+  active: boolean;
+}
+
+export interface CustomerInput {
+  name: string;
+  credit_limit: number;
+}
+
+export function fetchCustomers(): Promise<Customer[]> {
+  return request<Customer[]>("/api/customers");
+}
+
+export function createCustomer(body: CustomerInput): Promise<Customer> {
+  return request<Customer>("/api/customers", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateCustomer(id: string, body: Partial<CustomerInput & { active: boolean }>): Promise<Customer> {
+  return request<Customer>(`/api/customers/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+// --- Items --------------------------------------------------------------
+
+export interface Item {
+  id: string;
+  sku: string;
+  name: string;
+  uom: string;
+  unit_price: number;
+  stock_qty: number;
+}
+
+export type ItemInput = Omit<Item, "id">;
+
+export function fetchItems(): Promise<Item[]> {
+  return request<Item[]>("/api/items");
+}
+
+export function createItem(body: ItemInput): Promise<Item> {
+  return request<Item>("/api/items", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateItem(id: string, body: Partial<ItemInput>): Promise<Item> {
+  return request<Item>(`/api/items/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+// --- Admin: roles & users -----------------------------------------------
+
+export interface Role {
+  id: string;
+  name: string;
+  permissions: string[];
+}
+
+export function fetchRoles(): Promise<Role[]> {
+  return request<Role[]>("/api/admin/roles");
+}
+
+export function createRole(body: { name: string; permissions: string[] }): Promise<Role> {
+  return request<Role>("/api/admin/roles", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateRole(id: string, body: Partial<{ name: string; permissions: string[] }>): Promise<Role> {
+  return request<Role>(`/api/admin/roles/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  display_name: string;
+  role_id: string;
+  role_name: string | null;
+  locale: string;
+  active: boolean;
+}
+
+export function fetchAdminUsers(): Promise<AdminUser[]> {
+  return request<AdminUser[]>("/api/admin/users");
+}
+
+export function createAdminUser(body: {
+  username: string;
+  display_name: string;
+  password: string;
+  role_id: string;
+}): Promise<AdminUser> {
+  return request<AdminUser>("/api/admin/users", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateAdminUser(
+  id: string,
+  body: Partial<{ display_name: string; role_id: string; password: string; active: boolean }>,
+): Promise<AdminUser> {
+  return request<AdminUser>(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+// --- Permission catalog ---------------------------------------------------
+// Not backend-enumerated (there's no registry endpoint) — this is every
+// permission string actually checked somewhere in the API today, kept next
+// to the role-creation UI so it can't silently drift out of sync.
+export const KNOWN_PERMISSIONS = [
+  "sales.quotation.read",
+  "sales.quotation.create",
+  "sales.quotation.approve",
+  "sales.customer.read",
+  "sales.customer.write",
+  "inventory.item.read",
+  "inventory.item.write",
+  "crm.lead.read",
+  "crm.lead.write",
+  "crm.lead.convert",
+  "crm.contact.read",
+  "crm.contact.write",
+  "crm.opportunity.read",
+  "crm.opportunity.write",
+  "crm.activity.read",
+  "crm.activity.write",
+  "admin.users.read",
+  "admin.users.write",
+  "audit.read",
+] as const;
+
+// --- CRM: Leads -----------------------------------------------------------
+
+export type LeadStatus = "New" | "Contacted" | "Qualified" | "Converted" | "Lost";
+export const LEAD_STATUSES: LeadStatus[] = ["New", "Contacted", "Qualified", "Converted", "Lost"];
+
+export interface Lead {
+  id: string;
+  name: string;
+  company_name: string;
+  email: string;
+  phone: string;
+  source: string;
+  status: LeadStatus;
+  notes: string;
+  owner_user_id: string | null;
+  converted_customer_id: string | null;
+  created_at: string;
+}
+
+export interface LeadInput {
+  name: string;
+  company_name?: string;
+  email?: string;
+  phone?: string;
+  source?: string;
+  notes?: string;
+}
+
+export function fetchLeads(): Promise<Lead[]> {
+  return request<Lead[]>("/api/leads");
+}
+
+export function createLead(body: LeadInput): Promise<Lead> {
+  return request<Lead>("/api/leads", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateLead(
+  id: string,
+  body: Partial<LeadInput & { status: LeadStatus }>,
+): Promise<Lead> {
+  return request<Lead>(`/api/leads/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export interface ConvertLeadResult {
+  lead_id: string;
+  customer_id: string;
+  contact_id: string;
+  opportunity_id: string | null;
+}
+
+export function convertLead(
+  id: string,
+  body: { create_opportunity: boolean; opportunity_value: number },
+): Promise<ConvertLeadResult> {
+  return request<ConvertLeadResult>(`/api/leads/${id}/convert`, { method: "POST", body: JSON.stringify(body) });
+}
+
+// --- CRM: Contacts ----------------------------------------------------------
+
+export interface Contact {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  name: string;
+  title: string;
+  email: string;
+  phone: string;
+}
+
+export function fetchContacts(): Promise<Contact[]> {
+  return request<Contact[]>("/api/contacts");
+}
+
+export function createContact(body: {
+  customer_id: string;
+  name: string;
+  title?: string;
+  email?: string;
+  phone?: string;
+}): Promise<Contact> {
+  return request<Contact>("/api/contacts", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateContact(
+  id: string,
+  body: Partial<{ name: string; title: string; email: string; phone: string }>,
+): Promise<Contact> {
+  return request<Contact>(`/api/contacts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+// --- CRM: Opportunities -------------------------------------------------------
+
+export type OpportunityStage = "New" | "Qualified" | "Proposal" | "Negotiation" | "Won" | "Lost";
+export const OPPORTUNITY_STAGES: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"];
+
+export interface Opportunity {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  name: string;
+  stage: OpportunityStage;
+  value: number;
+  probability_pct: number;
+  expected_close_date: string | null;
+  notes: string;
+  owner_user_id: string | null;
+  created_at: string;
+}
+
+export interface OpportunityInput {
+  customer_id: string;
+  name: string;
+  value?: number;
+  probability_pct?: number;
+  expected_close_date?: string | null;
+  notes?: string;
+}
+
+export function fetchOpportunities(): Promise<Opportunity[]> {
+  return request<Opportunity[]>("/api/opportunities");
+}
+
+export function createOpportunity(body: OpportunityInput): Promise<Opportunity> {
+  return request<Opportunity>("/api/opportunities", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateOpportunity(
+  id: string,
+  body: Partial<OpportunityInput & { stage: OpportunityStage }>,
+): Promise<Opportunity> {
+  return request<Opportunity>(`/api/opportunities/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+// --- CRM: Activities ----------------------------------------------------------
+
+export type ActivityType = "Call" | "Meeting" | "Task" | "Note";
+export const ACTIVITY_TYPES: ActivityType[] = ["Call", "Meeting", "Task", "Note"];
+
+export interface Activity {
+  id: string;
+  type: ActivityType;
+  subject: string;
+  notes: string;
+  due_date: string | null;
+  done: boolean;
+  lead_id: string | null;
+  customer_id: string | null;
+  opportunity_id: string | null;
+  related_label: string;
+  created_at: string;
+}
+
+export interface ActivityInput {
+  type: ActivityType;
+  subject: string;
+  notes?: string;
+  due_date?: string | null;
+  lead_id?: string | null;
+  customer_id?: string | null;
+  opportunity_id?: string | null;
+}
+
+export function fetchActivities(): Promise<Activity[]> {
+  return request<Activity[]>("/api/activities");
+}
+
+export function createActivity(body: ActivityInput): Promise<Activity> {
+  return request<Activity>("/api/activities", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateActivity(
+  id: string,
+  body: Partial<{ subject: string; notes: string; due_date: string | null; done: boolean }>,
+): Promise<Activity> {
+  return request<Activity>(`/api/activities/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}

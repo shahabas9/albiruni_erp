@@ -48,6 +48,11 @@ def get_current_context(
     user = db.get(User, UUID(payload["sub"]))
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if not user.active:
+        # Re-checked on every request (not just at login) so deactivating a
+        # user ends their session immediately, even one already holding a
+        # valid, unexpired token.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This account has been deactivated")
 
     role = db.get(Role, user.role_id)
     permissions = role.permissions if role else []

@@ -17,6 +17,11 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     user = db.execute(select(User).where(User.username == form.username)).scalar_one_or_none()
     if user is None or not verify_password(form.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+    if not user.active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated. Contact your administrator.",
+        )
 
     token = create_access_token(subject=str(user.id), extra_claims={"tenant_id": str(user.tenant_id)})
 

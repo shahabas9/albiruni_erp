@@ -40,7 +40,7 @@ function formatDateTime(iso: string) {
 export function Sales() {
   const { t } = useLanguage();
   const { open } = useAskErp();
-  const { quotes, loading, error } = useAppData();
+  const { quotes, loading, quotesError: error } = useAppData();
   const [filter, setFilter] = useState<"all" | QuoteStatus>("all");
 
   const visible = filter === "all" ? quotes : quotes.filter((q) => q.status === filter);

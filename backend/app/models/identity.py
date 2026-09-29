@@ -34,3 +34,4 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(120))
     hashed_password: Mapped[str] = mapped_column(String(200))
     locale: Mapped[str] = mapped_column(String(10), default="en-IN")
+    active: Mapped[bool] = mapped_column(default=True)

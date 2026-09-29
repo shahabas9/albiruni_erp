@@ -14,7 +14,7 @@ function formatDateTime(iso: string) {
 
 export function AuditTrail() {
   const { t } = useLanguage();
-  const { auditLog, loading, error } = useAppData();
+  const { auditLog, loading, auditError: error } = useAppData();
 
   return (
     <section>
