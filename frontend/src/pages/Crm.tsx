@@ -2,41 +2,32 @@ import { useEffect, useState, type DragEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ApiError,
+  fetchCrmSummary,
   fetchOpportunities,
   fetchStaleLimits,
   saveStaleLimits,
   updateOpportunity,
+  type CrmSummary,
   type Opportunity,
   type OpportunityStage,
+  type Page,
   type StaleLimits,
 } from "../api/client";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { LostReasonModal } from "../crm/forms";
-import { ErrorNote, FollowUpBadge, IdleBadge, Modal } from "../crm/ui";
+import { ErrorNote, FollowUpBadge, IdleBadge, Modal, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { inrShort } from "../lib/format";
 
-type OwnerFilter = "all" | "mine" | "unassigned";
-
 const BOARD: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
-// The board shows every open deal plus those closed in this window; older
-// closed deals live on the Opportunities list.
+// Each column shows its newest deals; totals and the rest come from the
+// server, so the board costs the same with 50 open deals or 50,000.
+const COLUMN_LIMIT = 30;
+// Win/loss figures cover deals closed in this window.
 const CLOSED_WINDOW_DAYS = 90;
 
-function isoDaysAgo(days: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-const weighted = (o: Opportunity) => (o.value * o.probability_pct) / 100;
-const sum = (rows: Opportunity[], f: (o: Opportunity) => number) => rows.reduce((s, o) => s + f(o), 0);
-
-function isThisMonth(iso: string, now = new Date()) {
-  const d = new Date(iso);
-  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-}
+type Columns = Partial<Record<OpportunityStage, Page<Opportunity>>>;
 
 /** The pipeline board: drag deals between stages, drop on Won/Lost to close them. */
 export function Crm() {
@@ -49,13 +40,23 @@ export function Crm() {
   const [losing, setLosing] = useState<Opportunity | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [columns, setColumns] = useState<Columns>({});
+  const [board, setBoard] = useState<CrmSummary | null>(null);
   const [editingLimits, setEditingLimits] = useState(false);
 
   useEffect(() => {
     let current = true;
-    fetchOpportunities({ closed_since: isoDaysAgo(CLOSED_WINDOW_DAYS), owner: owner === "all" ? "" : owner })
-      .then((page) => current && (setOpportunities(page.rows), setLoadError(null)))
+    const ownerArg = ownerParam(owner);
+    Promise.all([
+      fetchCrmSummary({ owner: ownerArg, closed_days: CLOSED_WINDOW_DAYS }),
+      ...BOARD.map((stage) => fetchOpportunities({ stage, owner: ownerArg, limit: COLUMN_LIMIT })),
+    ])
+      .then(([summary, ...pages]) => {
+        if (!current) return;
+        setBoard(summary as CrmSummary);
+        setColumns(Object.fromEntries(BOARD.map((stage, i) => [stage, pages[i] as Page<Opportunity>])));
+        setLoadError(null);
+      })
       .catch((err) => current && setLoadError(err instanceof ApiError ? err.message : "Couldn't load the pipeline."));
     return () => {
       current = false;
@@ -63,12 +64,12 @@ export function Crm() {
   }, [owner, version]);
 
   const canMove = can("crm.opportunity.write");
-  const open = opportunities.filter((o) => BOARD.includes(o.stage));
-  const won = opportunities.filter((o) => o.stage === "Won");
-  const lost = opportunities.filter((o) => o.stage === "Lost");
-  const stale = open.filter((o) => o.is_stale);
+  const shown = BOARD.flatMap((stage) => columns[stage]?.rows ?? []);
+  const stageTotal = (stage: OpportunityStage) => board?.by_stage.find((b) => b.stage === stage);
   const overdue = crm?.overdue_followups ?? 0;
-  const winRate = won.length + lost.length ? Math.round((won.length / (won.length + lost.length)) * 100) : null;
+  const closedCount = (board?.recent_won ?? 0) + (board?.recent_lost ?? 0);
+  const winRate = closedCount ? Math.round(((board?.recent_won ?? 0) / closedCount) * 100) : null;
+  const staleCount = board?.stale_deals ?? 0;
 
   async function move(opp: Opportunity, stage: OpportunityStage) {
     if (opp.stage === stage) return;
@@ -95,7 +96,7 @@ export function Crm() {
     onDragLeave: () => setOverStage((s) => (s === stage ? null : s)),
     onDrop: (e: DragEvent) => {
       e.preventDefault();
-      const opp = opportunities.find((o) => o.id === e.dataTransfer.getData("text/plain"));
+      const opp = shown.find((o) => o.id === e.dataTransfer.getData("text/plain"));
       setDragId(null);
       setOverStage(null);
       if (opp) void move(opp, stage);
@@ -134,22 +135,33 @@ export function Crm() {
       </div>
 
       <div className="forecast-strip">
-        <Stat label="Open pipeline" value={inrShort(sum(open, (o) => o.value))} sub={`${open.length} open deal${open.length === 1 ? "" : "s"}`} />
-        <Stat label="Weighted forecast" value={inrShort(sum(open, weighted))} sub="Each deal's value × its probability" />
+        <Stat
+          label="Open pipeline"
+          value={inrShort(board?.open_value ?? 0)}
+          sub={`${board?.open_deals ?? 0} open deal${board?.open_deals === 1 ? "" : "s"}`}
+        />
+        <Stat label="Weighted forecast" value={inrShort(board?.weighted_value ?? 0)} sub="Each deal's value × its probability" />
         <Stat
           label="Won this month"
-          value={inrShort(sum(won.filter((o) => isThisMonth(o.stage_changed_at)), (o) => o.value))}
+          value={inrShort(board?.won_this_month_value ?? 0)}
           sub={winRate === null ? `No deals closed in ${CLOSED_WINDOW_DAYS} days` : `${winRate}% win rate, last ${CLOSED_WINDOW_DAYS} days`}
         />
         <Stat
           label="Going stale"
-          value={String(stale.length)}
-          sub={stale.length ? `${inrShort(sum(stale, (o) => o.value))} not touched recently` : "Every open deal has recent activity"}
-          tone={stale.length ? "warn" : undefined}
+          value={String(staleCount)}
+          sub={staleCount ? `${inrShort(board?.stale_value ?? 0)} not touched recently` : "Every open deal has recent activity"}
+          tone={staleCount ? "warn" : undefined}
           action={
-            <button className="link-btn" style={{ padding: 0 }} onClick={() => setEditingLimits(true)}>
-              {can("crm.settings.write") ? "Set limits" : "See limits"}
-            </button>
+            <span style={{ display: "inline-flex", gap: 12 }}>
+              {staleCount > 0 && (
+                <button className="link-btn" style={{ padding: 0 }} onClick={() => navigate("/opportunities?stale=1")}>
+                  See them
+                </button>
+              )}
+              <button className="link-btn" style={{ padding: 0 }} onClick={() => setEditingLimits(true)}>
+                {can("crm.settings.write") ? "Set limits" : "See limits"}
+              </button>
+            </span>
           }
         />
       </div>
@@ -168,13 +180,17 @@ export function Crm() {
 
       <div className="pipeline">
         {BOARD.map((stage) => {
-          const deals = open.filter((o) => o.stage === stage);
+          const deals = columns[stage]?.rows ?? [];
+          const total = stageTotal(stage);
+          const more = (columns[stage]?.total ?? 0) - deals.length;
           return (
             <div className={`stage-col${overStage === stage ? " drop-over" : ""}`} key={stage} {...dropZone(stage)}>
               <h4>
-                {stage} <span>{inrShort(sum(deals, (o) => o.value))}</span>
+                {stage} <span>{inrShort(total?.value ?? 0)}</span>
               </h4>
-              <div className="stage-weighted">Weighted {inrShort(sum(deals, weighted))}</div>
+              <div className="stage-weighted">
+                {total?.count ?? 0} deal{total?.count === 1 ? "" : "s"} · weighted {inrShort(total?.weighted ?? 0)}
+              </div>
               {deals.length === 0 && <p className="card-note">{dragId ? "Drop here" : "No deals"}</p>}
               {deals.map((o) => (
                 <DealCard
@@ -194,6 +210,11 @@ export function Crm() {
                   }}
                 />
               ))}
+              {more > 0 && (
+                <button className="link-btn column-more" onClick={() => navigate(`/opportunities?stage=${stage}`)}>
+                  +{more} more in {stage} — see all
+                </button>
+              )}
             </div>
           );
         })}
@@ -210,7 +231,7 @@ export function Crm() {
         </div>
       )}
 
-      <WinLoss won={won} lost={lost} onOpen={openOpp} />
+      {board && <WinLoss summary={board} onOpen={openOpp} />}
 
       {editingLimits && (
         <StaleLimitsModal
@@ -405,15 +426,10 @@ function DealCard({
 }
 
 /** Closed deals and, for lost ones, why — the point of recording a reason. */
-function WinLoss({ won, lost, onOpen }: { won: Opportunity[]; lost: Opportunity[]; onOpen: (id: string) => void }) {
-  if (won.length + lost.length === 0) return null;
-  const reasons = new Map<string, number>();
-  for (const o of lost) {
-    const key = o.lost_reason || "No reason recorded";
-    reasons.set(key, (reasons.get(key) ?? 0) + 1);
-  }
-  const rows = [...reasons.entries()].sort((a, b) => b[1] - a[1]);
-  const max = Math.max(...rows.map(([, n]) => n), 1);
+function WinLoss({ summary, onOpen }: { summary: CrmSummary; onOpen: (id: string) => void }) {
+  if (summary.recent_won + summary.recent_lost === 0) return null;
+  const max = Math.max(...summary.lost_reasons.map((r) => r.count), 1);
+  const days = summary.closed_days;
 
   return (
     <div className="overview-row even" style={{ marginTop: 20 }}>
@@ -421,22 +437,22 @@ function WinLoss({ won, lost, onOpen }: { won: Opportunity[]; lost: Opportunity[
         <div className="card-head">
           <span className="card-title">Why deals are lost</span>
           <span className="card-note">
-            {lost.length} lost · {inrShort(sum(lost, (o) => o.value))}
+            {summary.recent_lost} lost · {inrShort(summary.recent_lost_value)} · last {days} days
           </span>
         </div>
-        {rows.length === 0 ? (
-          <p className="card-note" style={{ margin: 0 }}>No lost deals yet.</p>
+        {summary.lost_reasons.length === 0 ? (
+          <p className="card-note" style={{ margin: 0 }}>No lost deals in the last {days} days.</p>
         ) : (
           <div className="bars">
-            {rows.map(([reason, n]) => (
+            {summary.lost_reasons.map(({ reason, count }) => (
               <div className="bar-row" key={reason}>
                 <span className="label" title={reason}>
                   {reason}
                 </span>
                 <div className="track">
-                  <div className="fill lost-fill" style={{ width: `${(n / max) * 100}%` }} />
+                  <div className="fill lost-fill" style={{ width: `${(count / max) * 100}%` }} />
                 </div>
-                <span className="value num">{n}</span>
+                <span className="value num">{count}</span>
               </div>
             ))}
           </div>
@@ -446,25 +462,22 @@ function WinLoss({ won, lost, onOpen }: { won: Opportunity[]; lost: Opportunity[
         <div className="card-head">
           <span className="card-title">Recently closed</span>
           <span className="card-note">
-            {won.length} won · {inrShort(sum(won, (o) => o.value))}
+            {summary.recent_won} won · {inrShort(summary.recent_won_value)}
           </span>
         </div>
         <div className="mini-list">
-          {[...won, ...lost]
-            .sort((a, b) => b.stage_changed_at.localeCompare(a.stage_changed_at))
-            .slice(0, 6)
-            .map((o) => (
-              <div className="row" key={o.id}>
-                <span className={`badge ${o.stage === "Won" ? "good" : "bad"}`}>{o.stage}</span>
-                <div className="grow">
-                  <button className="link-btn" style={{ padding: 0 }} onClick={() => onOpen(o.id)}>
-                    {o.name}
-                  </button>
-                  <small>{o.stage === "Lost" ? o.lost_reason || "No reason recorded" : o.customer_name}</small>
-                </div>
-                <b className="num">{inrShort(o.value)}</b>
+          {summary.recently_closed.map((o) => (
+            <div className="row" key={o.id}>
+              <span className={`badge ${o.stage === "Won" ? "good" : "bad"}`}>{o.stage}</span>
+              <div className="grow">
+                <button className="link-btn" style={{ padding: 0 }} onClick={() => onOpen(o.id)}>
+                  {o.name}
+                </button>
+                <small>{o.stage === "Lost" ? o.lost_reason || "No reason recorded" : o.customer_name}</small>
               </div>
-            ))}
+              <b className="num">{inrShort(o.value)}</b>
+            </div>
+          ))}
         </div>
       </div>
     </div>

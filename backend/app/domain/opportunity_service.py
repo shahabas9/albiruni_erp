@@ -28,9 +28,8 @@ def list_opportunities(
     """Deals matching the filters, newest first, and how many match in total.
 
     stage: a stage, "open" or "closed". closed_since: open deals plus those
-    won/lost on or after that date (what the pipeline board shows).
-    stale_only needs every candidate's last touch, so it filters in Python
-    and ignores the SQL paging until the end."""
+    won/lost on or after that date. stale_only: open deals idle past their
+    stage's limit."""
 
     stmt = (
         select(Opportunity)
@@ -50,15 +49,9 @@ def list_opportunities(
     stmt = crm_service.filter_owner(stmt, Opportunity.owner_user_id, owner, context)
     if q.strip():
         stmt = stmt.where(crm_service.search(q, Opportunity.name, Customer.name))
-    stmt = stmt.order_by(Opportunity.created_at.desc(), Opportunity.id)
-    if not stale_only:
-        return crm_service.page(db, stmt, limit, offset)
-    deals = list(db.execute(stmt).scalars())
-    touches = crm_service.last_touches(db, context, deals)
-    limits = crm_service.stale_limits(db, context)
-    stale = [o for o in deals if crm_service.idle_status(o, touches[o.id], limits)["is_stale"]]
-    end = None if limit is None else offset + limit
-    return stale[offset:end], len(stale)
+    if stale_only:
+        stmt = crm_service.stale_only(stmt, context, crm_service.stale_limits(db, context))
+    return crm_service.page(db, stmt.order_by(Opportunity.created_at.desc(), Opportunity.id), limit, offset)
 
 
 def get_opportunity(db: Session, context: RequestContext, opportunity_id: UUID) -> Opportunity:

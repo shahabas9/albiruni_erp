@@ -248,3 +248,10 @@ export function DuplicateWarning({
     </div>
   );
 }
+
+export type OwnerFilter = "all" | "mine" | "unassigned";
+
+/** The API's `owner` parameter for an owner filter button. */
+export function ownerParam(filter: OwnerFilter): string {
+  return filter === "all" ? "" : filter === "mine" ? "me" : "unassigned";
+}

@@ -1,11 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import contact_service
+from app.domain import contact_service, crm_service
 from app.domain.errors import NotFoundError
 from app.models.crm import Contact
 from app.schemas.crm import ContactIn, ContactOut, ContactUpdate
@@ -22,10 +22,21 @@ def _to_out(c: Contact) -> ContactOut:
 
 @router.get("", response_model=list[ContactOut])
 def list_contacts(
+    response: Response,
+    q: str = "",
+    customer_id: UUID | None = None,
+    limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
+    offset: int = Query(0, ge=0),
     context: RequestContext = Depends(require_permission("crm.contact.read")),
     db: Session = Depends(get_db),
 ):
-    return [_to_out(c) for c in contact_service.list_contacts(db, context)]
+    """By name. The total matching count is in the X-Total-Count header."""
+
+    contacts, total = contact_service.list_contacts(
+        db, context, q=q, customer_id=customer_id, limit=limit, offset=offset
+    )
+    response.headers["X-Total-Count"] = str(total)
+    return [_to_out(c) for c in contacts]
 
 
 @router.post("", response_model=ContactOut)

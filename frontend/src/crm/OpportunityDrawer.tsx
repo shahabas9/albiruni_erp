@@ -60,8 +60,8 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
   const [contacts, setContacts] = useState<Contact[]>([]);
   useEffect(() => {
     if (!customerId || !canSeeContacts) return;
-    fetchContacts()
-      .then((all) => setContacts(all.filter((c) => c.customer_id === customerId)))
+    fetchContacts({ customer_id: customerId, limit: 50 })
+      .then((page) => setContacts(page.rows))
       .catch(() => setContacts([]));
   }, [customerId, canSeeContacts]);
   if (!opp) {

@@ -12,17 +12,21 @@ from uuid import uuid4
 from fastapi import HTTPException, Response
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from app.api import routes_activities, routes_ask, routes_crm, routes_imports, routes_leads, routes_opportunities
+from app.api import (
+    routes_activities, routes_ask, routes_contacts, routes_crm, routes_customers, routes_imports, routes_leads,
+    routes_opportunities,
+)
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext, require_any_permission, require_permission
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import activity_service, crm_service, customer_service, lead_service, opportunity_service
+from app.domain import activity_service, crm_service, customer_service, lead_service, opportunity_service, sales_service
 from app.domain.duplicates import DuplicateError
 from app.domain.errors import ConflictError
 from app.models.crm import Activity, Contact, Lead, Opportunity
 from app.models.identity import Role, User
-from app.models.sales import Customer, Item
+from app.models.sales import Customer, Item, Quotation
 from app.models.tenant import Company, Tenant
 from app.schemas import crm
 from app.schemas.ask import AskRequest, ConfirmRequest
@@ -180,11 +184,22 @@ class CrmTests(unittest.TestCase):
         deal.stage_changed_at = deal.created_at = crm_service.now_utc() - timedelta(days=8)
         self.db.commit()
         self.assertTrue(self.opps_out()[0].is_stale)  # default New = 7 days
+        # The SQL filter (lists, summary) agrees with the per-deal flag.
+        self.assertEqual(len(self.opps_out(stale=True)), 1)
+        self.assertEqual(routes_crm.summary("", 90, self.context, self.db).stale_deals, 1)
 
         crm_service.set_stale_limits(self.db, self.context, {"New": 10})
         self.assertFalse(self.opps_out()[0].is_stale)
+        self.assertEqual(len(self.opps_out(stale=True)), 0)
         crm_service.set_stale_limits(self.db, self.context, {"New": 0})
         self.assertFalse(self.opps_out()[0].is_stale)
+        self.assertEqual(len(self.opps_out(stale=True)), 0)
+
+        # A recent follow-up revives it for the SQL filter too.
+        crm_service.set_stale_limits(self.db, self.context, {"New": 7})
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Checked in", opportunity_id=deal.id, done=True))
+        self.assertEqual((len(self.opps_out(stale=True)), self.opps_out()[0].is_stale), (0, False))
         self.assertEqual(crm_service.stale_limits(self.db, self.context)["Qualified"], 10)
         with self.assertRaises(ConflictError):
             crm_service.set_stale_limits(self.db, self.context, {"Won": 3})
@@ -213,19 +228,51 @@ class CrmTests(unittest.TestCase):
         self.assertEqual([o.name for o in board], ["Open one"])
         self.assertEqual([o.name for o in self.opps_out(stage="closed")], ["Old win"])
 
+    def test_summary_filters_deals_by_owner_and_reports_recent_closes(self):
+        mine = self.deal(name="Mine", value=500, owner_user_id=self.context.user.id)
+        self.deal(name="Nobody's", value=700)
+        opportunity_service.update_opportunity(self.db, self.context, mine.id,
+                                               crm.OpportunityUpdate(stage="Lost", lost_reason="Price too high"))
+        team = routes_crm.summary("", 90, self.context, self.db)
+        self.assertEqual((team.open_deals, team.recent_lost, team.recent_lost_value), (1, 1, 500))
+        self.assertEqual([(r.reason, r.count) for r in team.lost_reasons], [("Price too high", 1)])
+        self.assertEqual([o.name for o in team.recently_closed], ["Mine"])
+        own = routes_crm.summary("me", 90, self.context, self.db)
+        self.assertEqual((own.open_deals, own.recent_lost), (0, 1))
+        self.assertEqual(routes_crm.summary("unassigned", 90, self.context, self.db).open_value, 700)
+
+    def test_customer_and_contact_lists_page_and_search(self):
+        for i in range(4):
+            customer = crm_service.find_or_create_customer(self.db, self.context, f"Paging Traders {i}")
+            self.db.add(Contact(tenant_id=self.context.tenant_id, company_id=self.context.company_id,
+                                customer_id=customer.id, name=f"Person {i}", phone=f"9000000{i:03d}"))
+        self.db.commit()
+        response = Response()
+        page = routes_customers.list_customers(response, q="paging traders", active=None, limit=2, offset=2,
+                                               context=self.context, db=self.db)
+        self.assertEqual((response.headers["X-Total-Count"], [c.name for c in page]),
+                         ("4", ["Paging Traders 2", "Paging Traders 3"]))
+        response = Response()
+        contacts = routes_contacts.list_contacts(response, q="traders 1", customer_id=None, limit=50, offset=0,
+                                                 context=self.context, db=self.db)
+        self.assertEqual(([c.name for c in contacts], response.headers["X-Total-Count"]), (["Person 1"], "1"))
+        only = routes_contacts.list_contacts(Response(), q="", customer_id=contacts[0].customer_id, limit=None,
+                                             offset=0, context=self.context, db=self.db)
+        self.assertEqual([c.name for c in only], ["Person 1"])
+
     def test_summary_counts_without_loading_every_record(self):
         deal = self.deal(value=1000)
         self.lead(name="No owner")
         activity_service.create_activity(self.db, self.context, crm.ActivityIn(
             type="Call", subject="Late", opportunity_id=deal.id, due_date=date.today() - timedelta(days=2)))
-        out = routes_crm.summary(self.context, self.db)
+        out = routes_crm.summary("", 90, self.context, self.db)
         self.assertEqual((out.open_deals, out.open_value, out.overdue_followups), (1, 1000, 1))
         self.assertEqual(out.unassigned, 2)  # the lead and the deal
         self.assertEqual(out.overdue_items[0].related_label, f"Opportunity: {deal.name}")
 
         reader = self.make_context(["crm.activity.read"], tenant=self.db.get(Tenant, self.context.tenant_id),
                                    company=self.db.get(Company, self.context.company_id))
-        limited = routes_crm.summary(reader, self.db)
+        limited = routes_crm.summary("", 90, reader, self.db)
         self.assertEqual((limited.open_deals, limited.unassigned, limited.overdue_followups), (0, 0, 1))
 
     def test_lost_leads_and_direct_converted_status_are_refused(self):
@@ -308,6 +355,37 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(result.related_label, "Customer: Customer notes")
         self.assertIsNone(result.due_at)
         self.assertFalse(result.is_overdue)
+
+    # --- Quotation numbers ------------------------------------------------------
+
+    def test_quotation_numbers_count_per_tenant_and_year(self):
+        year = datetime.now(timezone.utc).year
+        other = self.make_context(["*"])  # a second business, its own tenant
+        first = sales_service.next_quotation_number(self.db, self.context)
+        self.assertEqual(first, f"QT-{year}-00001")
+        self.assertEqual(sales_service.next_quotation_number(self.db, other), f"QT-{year}-00001")
+        self.assertEqual(sales_service.next_quotation_number(self.db, self.context), f"QT-{year}-00002")
+        self.db.commit()
+
+        # A tenant with quotations from before the counter continues after its highest number.
+        legacy = self.make_context(["*"])
+        customer = crm_service.find_or_create_customer(self.db, legacy, "Legacy")
+        self.db.add(Quotation(tenant_id=legacy.tenant_id, company_id=legacy.company_id, number=f"QT-{year}-00041",
+                              customer_id=customer.id, subtotal=0, total=0, created_by=legacy.user.id))
+        self.db.commit()
+        self.assertEqual(sales_service.next_quotation_number(self.db, legacy), f"QT-{year}-00042")
+        self.db.commit()
+
+        # The same number is fine in another tenant, refused within one.
+        other_customer = crm_service.find_or_create_customer(self.db, other, "Other")
+        self.db.add(Quotation(tenant_id=other.tenant_id, company_id=other.company_id, number=f"QT-{year}-00041",
+                              customer_id=other_customer.id, subtotal=0, total=0, created_by=other.user.id))
+        self.db.commit()
+        self.db.add(Quotation(tenant_id=legacy.tenant_id, company_id=legacy.company_id, number=f"QT-{year}-00041",
+                              customer_id=customer.id, subtotal=0, total=0, created_by=legacy.user.id))
+        with self.assertRaises(IntegrityError):
+            self.db.commit()
+        self.db.rollback()
 
     # --- Opportunity -> Quotation -------------------------------------------------
 

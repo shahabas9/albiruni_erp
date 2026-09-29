@@ -22,11 +22,9 @@ import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
 import { FollowUpModal } from "../crm/forms";
 import { Timeline } from "../crm/Timeline";
-import { Drawer, DuplicateWarning, FollowUpBadge, Modal, OwnerPicker, Pager, SearchBox } from "../crm/ui";
+import { Drawer, DuplicateWarning, FollowUpBadge, Modal, OwnerPicker, Pager, SearchBox, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
-
-type OwnerFilter = "all" | "mine" | "unassigned";
 
 function statusClass(status: LeadStatus) {
   if (status === "Converted") return "status-confirmed";
@@ -55,7 +53,7 @@ export function Leads() {
   const statusParam = owner === "unassigned" && !status ? "open" : status;
   const list = usePaged(
     (limit, offset) =>
-      fetchLeads({ q: search, status: statusParam, owner: owner === "all" ? "" : owner, limit, offset }),
+      fetchLeads({ q: search, status: statusParam, owner: ownerParam(owner), limit, offset }),
     `${search}|${statusParam}|${owner}`,
     version,
   );

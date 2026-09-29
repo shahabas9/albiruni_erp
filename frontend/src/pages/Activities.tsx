@@ -190,11 +190,8 @@ function useRelatedOptions(kind: RelatedKind, q: string) {
         return page.rows.map((o) => ({ id: o.id, label: `${o.name} — ${o.customer_name}` }));
       }
       if (kind === "customer" && can("sales.customer.read")) {
-        const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-        return (await fetchCustomers())
-          .filter((c) => c.active && words.every((w) => c.name.toLowerCase().includes(w)))
-          .slice(0, PICK_LIMIT)
-          .map((c) => ({ id: c.id, label: c.name }));
+        const page = await fetchCustomers({ q, active: true, limit: PICK_LIMIT });
+        return page.rows.map((c) => ({ id: c.id, label: c.name }));
       }
       return [];
     };

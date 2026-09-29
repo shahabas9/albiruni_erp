@@ -42,7 +42,7 @@ def _to_out(
     )
 
 
-def _many_out(db: Session, context: RequestContext, opps: list[Opportunity]) -> list[OpportunityOut]:
+def opportunity_rows(db: Session, context: RequestContext, opps: list[Opportunity]) -> list[OpportunityOut]:
     ids = [o.id for o in opps]
     stats = crm_service.FollowUpStats(db, context, opportunity_ids=ids)
     owners = crm_service.owner_names(db, {o.owner_user_id for o in opps})
@@ -53,7 +53,7 @@ def _many_out(db: Session, context: RequestContext, opps: list[Opportunity]) -> 
 
 
 def _single_out(db: Session, context: RequestContext, o: Opportunity) -> OpportunityOut:
-    return _many_out(db, context, [o])[0]
+    return opportunity_rows(db, context, [o])[0]
 
 
 @router.get("", response_model=list[OpportunityOut])
@@ -79,7 +79,7 @@ def list_opportunities(
     except ConflictError as exc:
         raise http_error(exc) from exc
     response.headers["X-Total-Count"] = str(total)
-    return _many_out(db, context, opps)
+    return opportunity_rows(db, context, opps)
 
 
 @router.get("/{opportunity_id}", response_model=OpportunityOut)

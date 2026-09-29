@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,11 +36,13 @@ class Item(Base):
 
 class Quotation(Base):
     __tablename__ = "quotations"
+    # Numbers restart per tenant: every business has its own QT-2026-00001.
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_quotations_tenant_number"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    number: Mapped[str] = mapped_column(String(30), unique=True)
+    number: Mapped[str] = mapped_column(String(30))
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"))
     # Set when the quotation was raised from a CRM opportunity; null for walk-in quotes.
     opportunity_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -70,3 +72,16 @@ class QuotationLine(Base):
 
     quotation: Mapped["Quotation"] = relationship(back_populates="lines")
     item: Mapped["Item"] = relationship()
+
+
+class DocumentCounter(Base):
+    """Last number handed out per tenant, document kind and year. Incremented
+    with an upsert that holds the row lock until commit, so two quotations
+    created at the same moment can't get the same number."""
+
+    __tablename__ = "document_counters"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_value: Mapped[int] = mapped_column(Integer)

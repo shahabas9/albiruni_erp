@@ -56,6 +56,10 @@ python3 -m venv .venv
 
 Interactive API docs: http://localhost:8000/docs
 
+Quotation numbers are `QT-<year>-<n>`, counting from 1 per tenant each year
+(`document_counters`, incremented with a row-locking upsert so concurrent
+quotes never share a number) and unique per tenant.
+
 ## Try the full Appendix A flow
 
 ```bash
@@ -156,10 +160,19 @@ appear in name, company, phone or email), `status` (a status or `open`),
 stage, `open` or `closed`), `owner`, `closed_since` (open deals plus those
 closed since a date — the pipeline board) and `stale=true`; activities
 `show` (`open`, `overdue`, `done`, `all`), `owner` and `lead_id` /
-`customer_id` / `opportunity_id`. Without `limit` everything matching comes
-back. `GET /api/crm/summary` gives the dashboard, sidebar and bell their
-numbers (pipeline by stage, stale deals, won/lost, unowned records, overdue
-follow-ups plus the five most overdue) so no screen loads every record.
+`customer_id` / `opportunity_id`. `GET /api/customers` (`q` on name or
+GSTIN, `active`) and `GET /api/contacts` (`q`, `customer_id`) page the same
+way. Without `limit` everything matching comes back. Stale deals are
+filtered in SQL (`crm_service.stale_only`), so `stale=true` pages like any
+other filter.
+
+`GET /api/crm/summary` gives the dashboard, sidebar, bell and pipeline board
+their numbers as aggregate queries — pipeline by stage (count, value,
+weighted), stale deals, won/lost, deals closed in the last `closed_days`
+(default 90) with lost reasons and the six most recent, unowned records,
+overdue follow-ups plus the five most overdue — so no screen loads every
+record. `owner` narrows the deal figures. The pipeline board shows the 30
+newest deals per stage with the stage's totals and a link to the rest.
 
 **Duplicates.** Creating a lead with the phone (last 10 digits) or email of
 an existing lead, or a customer with an existing name or GSTIN, returns 409

@@ -86,6 +86,16 @@ def ensure_dev_schema() -> None:
         if "completed_at" not in before_activity:
             conn.execute(text("UPDATE activities SET completed_at = created_at WHERE done"))
 
+        # Quotation numbers are unique per tenant, not across the database.
+        conn.execute(text("ALTER TABLE quotations DROP CONSTRAINT IF EXISTS quotations_number_key"))
+        has_tenant_unique = conn.execute(text(
+            "SELECT 1 FROM pg_constraint WHERE conname = 'uq_quotations_tenant_number'"
+        )).first()
+        if not has_tenant_unique:
+            conn.execute(text(
+                "ALTER TABLE quotations ADD CONSTRAINT uq_quotations_tenant_number UNIQUE (tenant_id, number)"
+            ))
+
         # Deals that predate stage tracking: the best known stage date is creation.
         conn.execute(text("UPDATE opportunities SET stage_changed_at = created_at WHERE stage_changed_at IS NULL"))
         conn.execute(text("ALTER TABLE opportunities ALTER COLUMN stage_changed_at SET DEFAULT now()"))

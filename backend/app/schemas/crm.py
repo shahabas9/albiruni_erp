@@ -247,6 +247,12 @@ class StageTotal(BaseModel):
     stage: str
     count: int
     value: float
+    weighted: float = 0
+
+
+class LostReasonCount(BaseModel):
+    reason: str
+    count: int
 
 
 class CrmSummary(BaseModel):
@@ -264,6 +270,14 @@ class CrmSummary(BaseModel):
     won_value: float = 0
     lost_deals: int = 0
     won_this_month_value: float = 0
+    # Deals closed in the last `closed_days` days (the pipeline board's window).
+    closed_days: int = 90
+    recent_won: int = 0
+    recent_won_value: float = 0
+    recent_lost: int = 0
+    recent_lost_value: float = 0
+    lost_reasons: list[LostReasonCount] = []
+    recently_closed: list[OpportunityOut] = []
     unassigned: int = 0
     open_followups: int = 0
     overdue_followups: int = 0

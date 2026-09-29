@@ -8,10 +8,10 @@ from the client is never trusted on its own.
 """
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
@@ -230,6 +230,43 @@ def last_touches(db: Session, context: RequestContext, opportunities: list[Oppor
         if at is not None and at > touches[opp_id]:
             touches[opp_id] = at
     return touches
+
+
+def stale_only(stmt: Select, context: RequestContext, limits: dict[str, int], at: datetime | None = None) -> Select:
+    """Narrows a select over Opportunity to deals idle past their stage's
+    limit — the same rule as idle_status, computed in SQL so a list or count
+    of stale deals never loads every open deal."""
+
+    activity = (
+        select(
+            Activity.opportunity_id.label("opp_id"),
+            func.max(func.greatest(Activity.created_at, func.coalesce(Activity.completed_at, Activity.created_at)))
+            .label("at"),
+        )
+        .where(Activity.tenant_id == context.tenant_id, Activity.opportunity_id.is_not(None))
+        .group_by(Activity.opportunity_id)
+        .subquery()
+    )
+    quote = (
+        select(Quotation.opportunity_id.label("opp_id"), func.max(Quotation.created_at).label("at"))
+        .where(Quotation.tenant_id == context.tenant_id, Quotation.opportunity_id.is_not(None))
+        .group_by(Quotation.opportunity_id)
+        .subquery()
+    )
+    # GREATEST skips NULLs in Postgres: a deal with no follow-ups or quotes
+    # is judged on its creation / stage-change date alone.
+    last_touch = func.greatest(Opportunity.created_at, Opportunity.stage_changed_at, activity.c.at, quote.c.at)
+    now = at or now_utc()
+    # idle_days >= limit  <=>  last_touch <= now - limit days
+    conditions = [
+        and_(Opportunity.stage == stage, last_touch <= now - timedelta(days=days))
+        for stage, days in limits.items() if days > 0
+    ]
+    return (
+        stmt.outerjoin(activity, activity.c.opp_id == Opportunity.id)
+        .outerjoin(quote, quote.c.opp_id == Opportunity.id)
+        .where(or_(*conditions) if conditions else false())
+    )
 
 
 def idle_status(opp: Opportunity, last_touch: datetime, limits: dict[str, int], at: datetime | None = None) -> dict:

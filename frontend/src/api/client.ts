@@ -283,8 +283,20 @@ export interface CustomerInput {
   allow_duplicate?: boolean;
 }
 
-export function fetchCustomers(): Promise<Customer[]> {
-  return request<Customer[]>("/api/customers");
+export interface CustomerQuery {
+  /** Every word must appear in the name or GSTIN. */
+  q?: string;
+  active?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchCustomers(params: CustomerQuery = {}): Promise<Page<Customer>> {
+  return requestPage<Customer>("/api/customers", { ...params });
+}
+
+export function fetchCustomer(id: string): Promise<Customer> {
+  return request<Customer>(`/api/customers/${id}`);
 }
 
 export function createCustomer(body: CustomerInput): Promise<Customer> {
@@ -541,8 +553,16 @@ export interface Contact {
   phone: string;
 }
 
-export function fetchContacts(): Promise<Contact[]> {
-  return request<Contact[]>("/api/contacts");
+export interface ContactQuery {
+  /** Every word must appear in the name, customer, phone or email. */
+  q?: string;
+  customer_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchContacts(params: ContactQuery = {}): Promise<Page<Contact>> {
+  return requestPage<Contact>("/api/contacts", { ...params });
 }
 
 export function createContact(body: {
@@ -779,13 +799,21 @@ export interface CrmSummary {
   open_deals: number;
   open_value: number;
   weighted_value: number;
-  by_stage: { stage: OpportunityStage; count: number; value: number }[];
+  by_stage: { stage: OpportunityStage; count: number; value: number; weighted: number }[];
   stale_deals: number;
   stale_value: number;
   won_deals: number;
   won_value: number;
   lost_deals: number;
   won_this_month_value: number;
+  /** Deals closed in the last `closed_days` days. */
+  closed_days: number;
+  recent_won: number;
+  recent_won_value: number;
+  recent_lost: number;
+  recent_lost_value: number;
+  lost_reasons: { reason: string; count: number }[];
+  recently_closed: Opportunity[];
   unassigned: number;
   open_followups: number;
   overdue_followups: number;
@@ -793,6 +821,7 @@ export interface CrmSummary {
   overdue_items: Activity[];
 }
 
-export function fetchCrmSummary(): Promise<CrmSummary> {
-  return request<CrmSummary>("/api/crm/summary");
+/** owner narrows the deal figures ("me", "unassigned" or a user id). */
+export function fetchCrmSummary(params: { owner?: string; closed_days?: number } = {}): Promise<CrmSummary> {
+  return request<CrmSummary>(`/api/crm/summary${query(params)}`);
 }

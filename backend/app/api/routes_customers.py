@@ -1,11 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import customer_service
+from app.domain import crm_service, customer_service
 from app.api.routes_leads import http_error
 from app.domain.duplicates import DuplicateError
 from app.domain.errors import NotFoundError
@@ -20,10 +20,31 @@ def _to_out(c) -> CustomerOut:
 
 @router.get("", response_model=list[CustomerOut])
 def list_customers(
+    response: Response,
+    q: str = "",
+    active: bool | None = None,
+    limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
+    offset: int = Query(0, ge=0),
     context: RequestContext = Depends(require_permission("sales.customer.read")),
     db: Session = Depends(get_db),
 ):
-    return [_to_out(c) for c in customer_service.list_customers(db, context)]
+    """By name. The total matching count is in the X-Total-Count header."""
+
+    customers, total = customer_service.list_customers(db, context, q=q, active=active, limit=limit, offset=offset)
+    response.headers["X-Total-Count"] = str(total)
+    return [_to_out(c) for c in customers]
+
+
+@router.get("/{customer_id}", response_model=CustomerOut)
+def get_customer(
+    customer_id: UUID,
+    context: RequestContext = Depends(require_permission("sales.customer.read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return _to_out(customer_service.get_customer(db, context, customer_id))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("", response_model=CustomerOut)
