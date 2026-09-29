@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ApiError,
   OPPORTUNITY_STAGES,
-  crm,
+  assignOpportunity,
   createOpportunity,
   fetchCustomers,
-  fetchOpportunities,
   updateOpportunity,
   type Customer,
   type Opportunity,
@@ -24,50 +24,36 @@ function formatInr(n: number): string {
 }
 
 export function Opportunities() {
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [customers, setCustomers] = useState<Customer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
+  const [params] = useSearchParams();
+  const [showForm, setShowForm] = useState(params.get("new") === "1");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState<"all" | OpportunityStage>("all");
   const [owner, setOwner] = useState<OwnerFilter>("all");
   const { user } = useAuth();
-  const { opportunities: pipeline, assignees, refresh: refreshShared, can } = useAppData();
+  const { opportunities, loading, error: loadError, assignees, refresh: reload, can } = useAppData();
   const openOpp = useOpenOpportunity();
-  // Same rows as /api/opportunities, plus follow-up counts and linked quotations.
-  const extras = new Map(pipeline.map((o) => [o.id, o]));
-
-  async function reload() {
-    await Promise.all([refresh(), refreshShared()]);
-  }
 
   async function assign(o: Opportunity, ownerId: string | null) {
     try {
-      await crm.assignOpportunity(o.id, ownerId);
+      await assignOpportunity(o.id, ownerId);
       await reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't reassign.");
     }
   }
 
-  async function refresh() {
-    setLoading(true);
-    try {
-      const [o, c] = await Promise.all([fetchOpportunities(), fetchCustomers()]);
-      setOpportunities(o);
-      setCustomers(c);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach the Albiruni API.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  // The customer picker needs the customer list; only the create/edit form uses it.
   useEffect(() => {
-    refresh();
-  }, []);
+    if (!can("sales.customer.read")) {
+      setCustomers([]);
+      return;
+    }
+    fetchCustomers()
+      .then(setCustomers)
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load customers."));
+  }, [can]);
 
   const openStages = OPPORTUNITY_STAGES.filter((s) => s !== "Won" && s !== "Lost");
   const stageTotals = useMemo(() => {
@@ -92,7 +78,7 @@ export function Opportunities() {
         <p className="page-sub">Quantified deals against a customer, moving toward Won or Lost. Open a deal to change its stage, schedule follow-ups or raise a quotation.</p>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {(error ?? loadError) && <div className="error-banner">{error ?? loadError}</div>}
 
       {opportunities.length > 0 && (
         <div className="grid brief" style={{ marginBottom: 18 }}>
@@ -130,15 +116,18 @@ export function Opportunities() {
             </button>
           ))}
         </div>
-        <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
-          {showForm ? "Cancel" : "+ New opportunity"}
-        </button>
+        {can("crm.opportunity.write") && (
+          <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
+            {showForm ? "Cancel" : "+ New opportunity"}
+          </button>
+        )}
       </div>
 
-      {showForm && (
+      {showForm && customers && (
         <OpportunityForm
           customers={customers}
-          onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])}
+          ownerId={user?.id ?? null}
+          onCustomerCreated={(c) => setCustomers((prev) => [...(prev ?? []), c])}
           onDone={() => {
             setShowForm(false);
             reload();
@@ -168,7 +157,7 @@ export function Opportunities() {
             </thead>
             <tbody>
               {visible.map((o) =>
-                editingId === o.id ? (
+                editingId === o.id && customers ? (
                   <tr key={o.id}>
                     <td colSpan={8}>
                       <OpportunityForm
@@ -194,9 +183,7 @@ export function Opportunities() {
                       </button>
                       <span className="sub">
                         {o.customer_name}
-                        {extras.get(o.id)?.quotations.length
-                          ? ` · ${extras.get(o.id)!.quotations.length} quote${extras.get(o.id)!.quotations.length === 1 ? "" : "s"}`
-                          : ""}
+                        {o.quotations.length ? ` · ${o.quotations.length} quote${o.quotations.length === 1 ? "" : "s"}` : ""}
                       </span>
                     </td>
                     <td>
@@ -210,23 +197,17 @@ export function Opportunities() {
                     </td>
                     <td>{o.expected_close_date ?? "—"}</td>
                     <td>
-                      <OwnerPicker value={o.owner_user_id} assignees={assignees} canAssign={can("crm.assign")} onChange={(id) => assign(o, id)} />
+                      <OwnerPicker value={o.owner_user_id} assignees={assignees} canAssign={can("crm.opportunity.assign")} onChange={(id) => assign(o, id)} />
                     </td>
                     <td>
-                      {extras.get(o.id) ? (
-                        <FollowUpBadge
-                          overdue={extras.get(o.id)!.overdue_activities}
-                          open={extras.get(o.id)!.open_activities}
-                          nextDueAt={extras.get(o.id)!.next_due_at}
-                        />
-                      ) : (
-                        "—"
-                      )}
+                      <FollowUpBadge overdue={o.overdue_activities} open={o.open_activities} nextDueAt={o.next_due_at} />
                     </td>
                     <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <button className="ghost-btn sm" onClick={() => setEditingId(o.id)}>
-                        Edit
-                      </button>
+                      {can("crm.opportunity.write") && customers && (
+                        <button className="ghost-btn sm" onClick={() => setEditingId(o.id)}>
+                          Edit
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ),
@@ -239,14 +220,17 @@ export function Opportunities() {
   );
 }
 
+/** New opportunities are owned by whoever creates them; reassign from the Owner column. */
 function OpportunityForm({
   customers,
   opportunity,
+  ownerId,
   onCustomerCreated,
   onDone,
 }: {
   customers: Customer[];
   opportunity?: Opportunity;
+  ownerId?: string | null;
   onCustomerCreated?: (customer: Customer) => void;
   onDone: () => void;
 }) {
@@ -279,6 +263,7 @@ function OpportunityForm({
           value: Number(value),
           probability_pct: Number(probability),
           expected_close_date: closeDate || null,
+          owner_user_id: ownerId ?? null,
         });
       }
       onDone();

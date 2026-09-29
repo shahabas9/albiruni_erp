@@ -23,16 +23,9 @@ import { relativeDue } from "../lib/format";
 type RelatedKind = "lead" | "customer" | "opportunity";
 type Show = "open" | "overdue" | "done" | "all";
 
-/** A dated follow-up is due by the end of that day, local time — "due today" isn't overdue yet. */
-function dueEnd(a: Activity): Date | null {
-  if (!a.due_date) return null;
-  const [y, m, d] = a.due_date.split("-").map(Number);
-  return new Date(y!, m! - 1, d!, 23, 59, 59);
-}
-
-function isOverdue(a: Activity, now: Date): boolean {
-  const end = dueEnd(a);
-  return !a.done && end !== null && end < now;
+function endOfLocalDay(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  return new Date(y!, m! - 1, d!, 23, 59, 59).toISOString();
 }
 
 export function Activities() {
@@ -46,37 +39,38 @@ export function Activities() {
   const [params, setParams] = useSearchParams();
   const show = (params.get("show") as Show) || "open";
   const setShow = (next: Show) => setParams(next === "open" ? {} : { show: next }, { replace: true });
-  const { activities: pipelineActivities, refresh: refreshShared } = useAppData();
-  const owners = new Map(pipelineActivities.map((a) => [a.id, a.owner_name]));
+  // Overdue status comes from the API (is_overdue), so every page agrees on it.
+  const { refresh: refreshShared, can } = useAppData();
   const openOpp = useOpenOpportunity();
-  const [now] = useState(() => new Date());
 
   const counts = {
     open: activities.filter((a) => !a.done).length,
-    overdue: activities.filter((a) => isOverdue(a, now)).length,
+    overdue: activities.filter((a) => a.is_overdue).length,
     done: activities.filter((a) => a.done).length,
     all: activities.length,
   };
   const visible = activities
     .filter((a) =>
-      show === "open" ? !a.done : show === "overdue" ? isOverdue(a, now) : show === "done" ? a.done : true,
+      show === "open" ? !a.done : show === "overdue" ? a.is_overdue : show === "done" ? a.done : true,
     )
     // Overdue first, then soonest due; undated notes last.
     .sort((a, b) => {
-      const oa = isOverdue(a, now) ? 0 : 1;
-      const ob = isOverdue(b, now) ? 0 : 1;
+      const oa = a.is_overdue ? 0 : 1;
+      const ob = b.is_overdue ? 0 : 1;
       if (oa !== ob) return oa - ob;
-      return (dueEnd(a)?.getTime() ?? Infinity) - (dueEnd(b)?.getTime() ?? Infinity);
+      const due = (x: Activity) => (x.due_at ? new Date(x.due_at).getTime() : Infinity);
+      return due(a) - due(b);
     });
 
   async function refresh() {
     setLoading(true);
     try {
+      // Lead/customer/opportunity lists only feed the "Related to" picker; skip any this role can't read.
       const [a, l, c, o] = await Promise.all([
         fetchActivities(),
-        fetchLeads(),
-        fetchCustomers(),
-        fetchOpportunities(),
+        can("crm.lead.read") ? fetchLeads() : Promise.resolve([]),
+        can("sales.customer.read") ? fetchCustomers() : Promise.resolve([]),
+        can("crm.opportunity.read") ? fetchOpportunities() : Promise.resolve([]),
       ]);
       setActivities(a);
       setLeads(l);
@@ -128,9 +122,11 @@ export function Activities() {
             </button>
           ))}
         </div>
-        <button className="primary-btn" disabled={!hasTargets} onClick={() => setShowForm((v) => !v)}>
-          {showForm ? "Cancel" : "+ Log activity"}
-        </button>
+        {can("crm.activity.write") && (
+          <button className="primary-btn" disabled={!hasTargets} onClick={() => setShowForm((v) => !v)}>
+            {showForm ? "Cancel" : "+ Log activity"}
+          </button>
+        )}
       </div>
       {!hasTargets && !loading && (
         <p className="footnote">Add a lead, customer or opportunity first — every activity is logged against one.</p>
@@ -176,9 +172,15 @@ export function Activities() {
             </thead>
             <tbody>
               {visible.map((a) => (
-                <tr key={a.id} className={isOverdue(a, now) ? "activity-row overdue" : undefined} style={a.done ? { opacity: 0.55 } : undefined}>
+                <tr key={a.id} className={a.is_overdue ? "activity-row overdue" : undefined} style={a.done ? { opacity: 0.55 } : undefined}>
                   <td>
-                    <input type="checkbox" checked={a.done} onChange={() => toggleDone(a)} />
+                    <input
+                      type="checkbox"
+                      checked={a.done}
+                      disabled={!can("crm.activity.write")}
+                      aria-label={a.done ? "Mark as not done" : "Mark as done"}
+                      onChange={() => toggleDone(a)}
+                    />
                   </td>
                   <td>
                     <span className="badge l2">{a.type}</span>
@@ -194,11 +196,11 @@ export function Activities() {
                     )}
                   </td>
                   <td>
-                    {a.due_date ? (
+                    {a.due_at ? (
                       <>
-                        {!a.done && dueEnd(a) && (
-                          <span className={`followup${isOverdue(a, now) ? " overdue" : ""}`}>
-                            <Icon name={isOverdue(a, now) ? "alert" : "clock"} size={14} /> {relativeDue(dueEnd(a)!.toISOString(), now)}
+                        {!a.done && (
+                          <span className={`followup${a.is_overdue ? " overdue" : ""}`}>
+                            <Icon name={a.is_overdue ? "alert" : "clock"} size={14} /> {relativeDue(a.due_at)}
                           </span>
                         )}
                         <span className="sub">{a.due_date}</span>
@@ -207,7 +209,7 @@ export function Activities() {
                       "—"
                     )}
                   </td>
-                  <td>{owners.get(a.id) ?? "—"}</td>
+                  <td>{a.owner_name ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -262,6 +264,8 @@ function ActivityForm({
         subject,
         notes,
         due_date: dueDate || null,
+        // Due by the end of that day in *your* timezone (the API's date-only default is end of day UTC).
+        due_at: dueDate ? endOfLocalDay(dueDate) : null,
         lead_id: relatedKind === "lead" ? relatedId : null,
         customer_id: relatedKind === "customer" ? relatedId : null,
         opportunity_id: relatedKind === "opportunity" ? relatedId : null,

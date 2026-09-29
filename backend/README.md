@@ -83,9 +83,9 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
   at startup for dev convenience. Add real migrations before this touches a
   shared environment.
 - **CRM writes aren't audited.** Leads, opportunities, owners and follow-ups
-  are plain permission-checked form routes (`crm.read`, `crm.write`,
-  `crm.assign`). The one CRM action that creates a financial document —
-  `POST /api/crm/opportunities/{id}/quotations` — runs the same audited
+  are plain permission-checked routes (see "CRM API" below). The one CRM
+  action that creates a financial document —
+  `POST /api/opportunities/{id}/quotations` — runs the same audited
   `sales.create_quotation_draft.v1` tool as every other quotation, with
   the opportunity linked via `quotations.opportunity_id`.
 - **More domains.** Only Sales/Quotations and CRM exist. Inventory, Finance etc.
@@ -99,26 +99,39 @@ quotations/audit data, and the Ask ERP panel calling `/api/ask` +
 just get the honest "I can only help with quotations right now" fallback,
 because only that one tool exists so far.
 
-## Combined CRM interfaces
+## CRM API
 
-The sidebar workspace uses `/api/crm/*`; the management pages retain
-`/api/leads`, `/api/contacts`, `/api/opportunities`, `/api/activities`,
-`/api/customers`, `/api/items`, and `/api/admin/*`. Both CRM interfaces share
-records. Lead conversion creates a contact and links its customer and
-opportunity; activity completion is reflected in both interfaces.
+One API, one permission set. Each record type has its own routes and
+`read` / `write` permissions; owners are changed through a separate
+`/owner` route so reassigning can be granted on its own.
 
-Workspace permissions (`crm.read`, `crm.write`, `crm.assign`) and the granular
-management permissions remain separate and can be granted through Users & Roles.
+| Routes | Permissions |
+| --- | --- |
+| `/api/leads`, `PATCH /{id}/owner`, `POST /{id}/convert` | `crm.lead.read`, `crm.lead.write`, `crm.lead.assign`, `crm.lead.convert` |
+| `/api/opportunities`, `PATCH /{id}/owner`, `POST /{id}/quotations` | `crm.opportunity.read`, `crm.opportunity.write`, `crm.opportunity.assign` (+ `sales.quotation.create` to quote) |
+| `/api/activities` (`?open_only=true`) | `crm.activity.read`, `crm.activity.write` |
+| `/api/contacts` | `crm.contact.read`, `crm.contact.write` |
+| `/api/assignees` | any of `crm.lead.read`, `crm.opportunity.read`, `crm.activity.read` |
+
+Leads and opportunities come back with their owner's name and open/overdue
+follow-up counts; opportunities also carry their linked quotations. An
+activity is overdue once `due_at` passes while it's not done; a date-only
+activity is due by the end of that day (UTC — the web app sends the end of
+the user's local day instead).
+
+The old workspace permissions `crm.read`, `crm.write` and `crm.assign` are
+retired: dev startup expands them on existing roles into the per-record
+permissions above and removes them.
 
 Startup upgrades a development database from either CRM prototype, preserving
 existing records and normalizing pipeline stages to New / Qualified / Proposal /
 Negotiation / Won / Lost. Production deployments should use reviewed Alembic
 migrations instead of this development bootstrap.
 
-To run the merge integration checks, supply an empty disposable PostgreSQL
+To run the CRM integration tests, supply an empty disposable PostgreSQL
 **test database**, never your normal development database:
 
 ```bash
-CRM_MERGE_TEST_DB=1 DATABASE_URL=postgresql+psycopg://USER:PASS@localhost/TEST_DB \
+CRM_TEST_DB=1 DATABASE_URL=postgresql+psycopg://USER:PASS@localhost/TEST_DB \
   .venv/bin/python -m unittest discover -s tests -v
 ```

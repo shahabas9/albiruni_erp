@@ -1,16 +1,19 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import {
   ApiError,
-  crm,
+  fetchActivities,
+  fetchAssignees,
   fetchAuditEvents,
+  fetchLeads,
+  fetchOpportunities,
   fetchSalesItems,
   fetchQuotations,
-  type CrmActivity as Activity,
+  type Activity,
   type Assignee,
   type AuditEvent,
   type Item,
-  type CrmLead as Lead,
-  type CrmOpportunity as Opportunity,
+  type Lead,
+  type Opportunity,
   type Quotation,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
@@ -63,10 +66,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     const [q, a, l, o, act, asg, it] = await Promise.allSettled([
       can("sales.quotation.read") ? fetchQuotations() : skip<Quotation>(),
       can("audit.read") ? fetchAuditEvents() : skip<AuditEvent>(),
-      can("crm.read") ? crm.leads() : skip<Lead>(),
-      can("crm.read") ? crm.opportunities() : skip<Opportunity>(),
-      can("crm.read") ? crm.activities() : skip<Activity>(),
-      can("crm.read") ? crm.assignees() : skip<Assignee>(),
+      can("crm.lead.read") ? fetchLeads() : skip<Lead>(),
+      can("crm.opportunity.read") ? fetchOpportunities() : skip<Opportunity>(),
+      // Open follow-ups only: what the overdue badges, bell and drawer need.
+      can("crm.activity.read") ? fetchActivities(true) : skip<Activity>(),
+      can("crm.lead.read") || can("crm.opportunity.read") || can("crm.activity.read")
+        ? fetchAssignees()
+        : skip<Assignee>(),
       can("sales.quotation.read") ? fetchSalesItems() : skip<Item>(),
     ]);
     const message = (reason: unknown) => reason instanceof ApiError ? reason.message : "Couldn't reach the Albiruni API.";

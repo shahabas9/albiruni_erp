@@ -1,20 +1,17 @@
 import { useState, type FormEvent } from "react";
 import {
-  ACTIVITY_KINDS,
+  ACTIVITY_TYPES,
   ApiError,
-  crm,
-  type ActivityKind,
-  type Assignee,
+  createActivity,
+  quoteOpportunity,
+  type ActivityType,
   type CreateQuotationResult,
   type Item,
-  type CrmLead as Lead,
-  type CrmOpportunity as Opportunity,
+  type Opportunity,
 } from "../api/client";
 import { Icon } from "../components/Icon";
 import { inr, toLocalInput } from "../lib/format";
 import { ErrorNote, Modal } from "./ui";
-
-const LEAD_SOURCES = ["Walk-in", "Referral", "Phone", "Website", "Existing customer", "Other"];
 
 function errorText(err: unknown): string {
   return err instanceof ApiError ? err.message : "Could not reach the Albiruni API.";
@@ -52,193 +49,6 @@ function Footer({ onClose, busy, label, formId }: { onClose: () => void; busy: b
   );
 }
 
-export function NewLeadModal({
-  assignees,
-  canAssign,
-  currentUserId,
-  onClose,
-  onSaved,
-}: {
-  assignees: Assignee[];
-  canAssign: boolean;
-  currentUserId: string | undefined;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [f, setF] = useState({ name: "", organization: "", phone: "", email: "", source: "Walk-in" });
-  const [ownerId, setOwnerId] = useState<string | null>(currentUserId ?? null);
-  const { busy, error, submit } = useSubmit(() => crm.createLead({ ...f, owner_id: ownerId }), onSaved);
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-
-  return (
-    <Modal title="New lead" onClose={onClose} footer={<Footer onClose={onClose} busy={busy} label="Create lead" formId="lead-form" />}>
-      <ErrorNote message={error} />
-      <form id="lead-form" className="fields" onSubmit={submit}>
-        <label className="field">
-          Contact name
-          <input required autoFocus value={f.name} onChange={set("name")} />
-        </label>
-        <label className="field">
-          Business
-          <input value={f.organization} onChange={set("organization")} placeholder="Becomes the customer on convert" />
-        </label>
-        <label className="field">
-          Phone
-          <input value={f.phone} onChange={set("phone")} inputMode="tel" />
-        </label>
-        <label className="field">
-          Email
-          <input type="email" value={f.email} onChange={set("email")} />
-        </label>
-        <label className="field">
-          Source
-          <select value={f.source} onChange={set("source")}>
-            {LEAD_SOURCES.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          Owner
-          <select value={ownerId ?? ""} onChange={(e) => setOwnerId(e.target.value || null)}>
-            <option value="">Unassigned</option>
-            {assignees
-              .filter((a) => canAssign || a.id === currentUserId)
-              .map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.display_name}
-                  {a.id === currentUserId ? " (me)" : ""}
-                </option>
-              ))}
-          </select>
-        </label>
-      </form>
-    </Modal>
-  );
-}
-
-export function NewOpportunityModal({
-  assignees,
-  canAssign,
-  currentUserId,
-  onClose,
-  onSaved,
-}: {
-  assignees: Assignee[];
-  canAssign: boolean;
-  currentUserId: string | undefined;
-  onClose: () => void;
-  onSaved: (opp: Opportunity) => void;
-}) {
-  const [f, setF] = useState({ title: "", customer_name: "", expected_value: "", expected_close: "" });
-  const [ownerId, setOwnerId] = useState<string | null>(currentUserId ?? null);
-  const { busy, error, submit } = useSubmit(
-    () =>
-      crm.createOpportunity({
-        title: f.title,
-        customer_name: f.customer_name,
-        expected_value: Number(f.expected_value) || 0,
-        expected_close: f.expected_close || null,
-        owner_id: ownerId,
-      }),
-    onSaved,
-  );
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-
-  return (
-    <Modal
-      title="New opportunity"
-      onClose={onClose}
-      footer={<Footer onClose={onClose} busy={busy} label="Create opportunity" formId="opp-form" />}
-    >
-      <ErrorNote message={error} />
-      <form id="opp-form" className="fields" onSubmit={submit}>
-        <label className="field full">
-          Title
-          <input required autoFocus value={f.title} onChange={set("title")} placeholder="e.g. Coastal Traders — monsoon stock" />
-        </label>
-        <label className="field full">
-          Customer
-          <input required value={f.customer_name} onChange={set("customer_name")} placeholder="Existing or new customer name" />
-        </label>
-        <label className="field">
-          Expected value (₹)
-          <input type="number" min={0} step="1" value={f.expected_value} onChange={set("expected_value")} />
-        </label>
-        <label className="field">
-          Expected close
-          <input type="date" value={f.expected_close} onChange={set("expected_close")} />
-        </label>
-        <label className="field full">
-          Owner
-          <select value={ownerId ?? ""} onChange={(e) => setOwnerId(e.target.value || null)}>
-            <option value="">Unassigned</option>
-            {assignees
-              .filter((a) => canAssign || a.id === currentUserId)
-              .map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.display_name}
-                  {a.id === currentUserId ? " (me)" : ""}
-                </option>
-              ))}
-          </select>
-        </label>
-      </form>
-    </Modal>
-  );
-}
-
-export function ConvertLeadModal({
-  lead,
-  onClose,
-  onSaved,
-}: {
-  lead: Lead;
-  onClose: () => void;
-  onSaved: (opp: Opportunity) => void;
-}) {
-  const business = lead.organization || lead.name;
-  const [f, setF] = useState({ title: `${business} — new deal`, expected_value: "", expected_close: "" });
-  const { busy, error, submit } = useSubmit(
-    () =>
-      crm.convertLead(lead.id, {
-        title: f.title,
-        expected_value: Number(f.expected_value) || 0,
-        expected_close: f.expected_close || null,
-      }),
-    onSaved,
-  );
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-
-  return (
-    <Modal
-      title={`Convert ${lead.name}`}
-      onClose={onClose}
-      footer={<Footer onClose={onClose} busy={busy} label="Convert to opportunity" formId="convert-form" />}
-    >
-      <p className="card-note" style={{ marginTop: 0 }}>
-        Creates (or reuses) the customer <b>{business}</b> and opens an opportunity owned by{" "}
-        <b>{lead.owner_name ?? "nobody yet"}</b>. Open follow-ups move with it.
-      </p>
-      <ErrorNote message={error} />
-      <form id="convert-form" className="fields" onSubmit={submit}>
-        <label className="field full">
-          Opportunity title
-          <input required value={f.title} onChange={set("title")} />
-        </label>
-        <label className="field">
-          Expected value (₹)
-          <input type="number" min={0} value={f.expected_value} onChange={set("expected_value")} />
-        </label>
-        <label className="field">
-          Expected close
-          <input type="date" value={f.expected_close} onChange={set("expected_close")} />
-        </label>
-      </form>
-    </Modal>
-  );
-}
-
 export function FollowUpModal({
   target,
   onClose,
@@ -248,7 +58,7 @@ export function FollowUpModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [kind, setKind] = useState<ActivityKind>("Call");
+  const [kind, setKind] = useState<ActivityType>("Call");
   const [subject, setSubject] = useState("");
   const [due, setDue] = useState(() => {
     const tomorrow = new Date();
@@ -258,8 +68,8 @@ export function FollowUpModal({
   });
   const { busy, error, submit } = useSubmit(
     () =>
-      crm.createActivity({
-        kind,
+      createActivity({
+        type: kind,
         subject,
         due_at: new Date(due).toISOString(),
         lead_id: target.lead_id,
@@ -278,8 +88,8 @@ export function FollowUpModal({
       <form id="fu-form" className="fields" onSubmit={submit}>
         <label className="field">
           Type
-          <select value={kind} onChange={(e) => setKind(e.target.value as ActivityKind)}>
-            {ACTIVITY_KINDS.map((k) => (
+          <select value={kind} onChange={(e) => setKind(e.target.value as ActivityType)}>
+            {ACTIVITY_TYPES.map((k) => (
               <option key={k}>{k}</option>
             ))}
           </select>
@@ -320,7 +130,7 @@ export function QuoteForm({
 
   const { busy, error, submit } = useSubmit(
     () =>
-      crm.quoteOpportunity(opportunity.id, {
+      quoteOpportunity(opportunity.id, {
         lines: lines.filter((l) => l.item_name && Number(l.qty) > 0).map((l) => ({ item_name: l.item_name, qty: Number(l.qty) })),
         discount_pct: Number(discount) || 0,
       }),

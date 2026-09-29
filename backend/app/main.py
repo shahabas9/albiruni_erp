@@ -14,7 +14,6 @@ from app.api import (
     routes_audit,
     routes_auth,
     routes_contacts,
-    routes_crm,
     routes_customers,
     routes_items,
     routes_leads,
@@ -50,7 +49,6 @@ app.add_middleware(
 app.include_router(routes_setup.router)
 app.include_router(routes_auth.router)
 app.include_router(routes_sales.router)
-app.include_router(routes_crm.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)
 app.include_router(routes_customers.router)
@@ -60,6 +58,7 @@ app.include_router(routes_leads.router)
 app.include_router(routes_contacts.router)
 app.include_router(routes_opportunities.router)
 app.include_router(routes_activities.router)
+app.include_router(routes_activities.assignees_router)
 
 
 @app.get("/api/health")

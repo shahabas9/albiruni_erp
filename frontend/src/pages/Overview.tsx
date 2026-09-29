@@ -1,12 +1,11 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAskErp } from "../askerp/AskErpContext";
 import { useAuth } from "../auth/AuthProvider";
 import { Icon, type IconName } from "../components/Icon";
-import { NewLeadModal, NewOpportunityModal } from "../crm/forms";
 import { useAppData } from "../data/AppDataProvider";
 import { inrShort } from "../lib/format";
-import type { CrmOpportunityStage as OpportunityStage, Quotation } from "../api/client";
+import type { OpportunityStage, Quotation } from "../api/client";
 
 const OPEN_STAGES: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
 
@@ -36,8 +35,7 @@ export function Overview() {
   const { user } = useAuth();
   const { ask } = useAskErp();
   const navigate = useNavigate();
-  const { quotes, opportunities, leads, activities, assignees, loading, refresh, can } = useAppData();
-  const [modal, setModal] = useState<"lead" | "opp" | null>(null);
+  const { quotes, opportunities, leads, activities, loading, can } = useAppData();
 
   const series = monthlyQuoted(quotes, 6);
   const thisMonth = series[series.length - 1]!.value;
@@ -45,15 +43,15 @@ export function Overview() {
   const quotedDelta = pctChange(thisMonth, lastMonth);
 
   const openOpps = opportunities.filter((o) => OPEN_STAGES.includes(o.stage));
-  const pipelineValue = openOpps.reduce((s, o) => s + o.expected_value, 0);
+  const pipelineValue = openOpps.reduce((s, o) => s + o.value, 0);
   const won = opportunities.filter((o) => o.stage === "Won");
   const lost = opportunities.filter((o) => o.stage === "Lost");
   const winRate = won.length + lost.length > 0 ? Math.round((won.length / (won.length + lost.length)) * 100) : null;
   const pending = quotes.filter((q) => q.status === "Pending approval");
   const overdue = activities.filter((a) => a.is_overdue);
   const unassigned =
-    leads.filter((l) => !l.owner_id && l.status !== "Converted" && l.status !== "Lost").length +
-    openOpps.filter((o) => !o.owner_id).length;
+    leads.filter((l) => !l.owner_user_id && l.status !== "Converted" && l.status !== "Lost").length +
+    openOpps.filter((o) => !o.owner_user_id).length;
 
   const dash = loading && quotes.length === 0 ? "…" : null;
 
@@ -90,7 +88,7 @@ export function Overview() {
             {openOpps.length} open deal{openOpps.length === 1 ? "" : "s"}
           </span>
         </Kpi>
-        <Kpi icon="wallet" label="Won deals" value={dash ?? inrShort(won.reduce((s, o) => s + o.expected_value, 0))}>
+        <Kpi icon="wallet" label="Won deals" value={dash ?? inrShort(won.reduce((s, o) => s + o.value, 0))}>
           <Icon name="clock" size={15} />
           <span>{winRate === null ? "No closed deals yet" : `${winRate}% win rate on closed deals`}</span>
         </Kpi>
@@ -115,7 +113,7 @@ export function Overview() {
           <StageBars
             rows={OPEN_STAGES.map((s) => ({
               label: s,
-              value: openOpps.filter((o) => o.stage === s).reduce((sum, o) => sum + o.expected_value, 0),
+              value: openOpps.filter((o) => o.stage === s).reduce((sum, o) => sum + o.value, 0),
             }))}
           />
         </div>
@@ -137,7 +135,7 @@ export function Overview() {
                 title={`${overdue.length} follow-up${overdue.length === 1 ? "" : "s"} overdue`}
                 sub={overdue
                   .slice(0, 2)
-                  .map((a) => a.related_name)
+                  .map((a) => a.related_label)
                   .join(", ")}
                 onView={() => navigate("/activities?show=overdue")}
               />
@@ -178,43 +176,23 @@ export function Overview() {
               sub="Say or type it to Ask ERP"
               onClick={() => ask("Create a quotation for Rahman Traders: 50 boxes Product A and 20 boxes Product B. Give 3% discount.")}
             />
-            {can("crm.write") && (
-              <QuickAction tone="qa-blue" icon="user" title="New lead" sub="Capture a prospect" onClick={() => setModal("lead")} />
+            {can("crm.lead.write") && (
+              <QuickAction tone="qa-blue" icon="user" title="New lead" sub="Capture a prospect" onClick={() => navigate("/leads?new=1")} />
             )}
-            {can("crm.write") && (
-              <QuickAction tone="qa-violet" icon="target" title="New opportunity" sub="Open a deal for a customer" onClick={() => setModal("opp")} />
+            {can("crm.opportunity.write") && (
+              <QuickAction
+                tone="qa-violet"
+                icon="target"
+                title="New opportunity"
+                sub="Open a deal for a customer"
+                onClick={() => navigate("/opportunities?new=1")}
+              />
             )}
             <QuickAction tone="qa-green" icon="chart" title="View pipeline" sub="Deals by stage and owner" onClick={() => navigate("/crm")} />
           </div>
         </div>
       </div>
 
-      {modal === "lead" && (
-        <NewLeadModal
-          assignees={assignees}
-          canAssign={can("crm.assign")}
-          currentUserId={user?.id}
-          onClose={() => setModal(null)}
-          onSaved={async () => {
-            setModal(null);
-            await refresh();
-            navigate("/leads");
-          }}
-        />
-      )}
-      {modal === "opp" && (
-        <NewOpportunityModal
-          assignees={assignees}
-          canAssign={can("crm.assign")}
-          currentUserId={user?.id}
-          onClose={() => setModal(null)}
-          onSaved={async (opp) => {
-            setModal(null);
-            await refresh();
-            navigate(`/crm?opp=${opp.id}`);
-          }}
-        />
-      )}
     </section>
   );
 }

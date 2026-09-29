@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ApiError, crm, type CrmOpportunityStage as OpportunityStage } from "../api/client";
+import { ApiError, assignOpportunity, updateActivity, updateOpportunity, type OpportunityStage } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { Icon } from "../components/Icon";
 import { useAppData } from "../data/AppDataProvider";
@@ -20,7 +20,8 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
   const opp = opportunities.find((o) => o.id === opportunityId);
   if (!opp) return null;
 
-  const canWrite = can("crm.write");
+  const canWrite = can("crm.opportunity.write");
+  const canLog = can("crm.activity.write");
   const canQuote = can("sales.quotation.create");
   const isOpen = OPEN_FLOW.includes(opp.stage);
   const followUps = activities.filter((a) => a.opportunity_id === opp.id);
@@ -40,11 +41,11 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
 
   return (
     <Drawer
-      title={opp.title}
+      title={opp.name}
       subtitle={
         <>
-          {opp.customer_name} · {inr(opp.expected_value)}
-          {opp.expected_close ? ` · closes ${new Date(opp.expected_close).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}
+          {opp.customer_name} · {inr(opp.value)} · {opp.probability_pct}% likely
+          {opp.expected_close_date ? ` · closes ${new Date(opp.expected_close_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}
         </>
       }
       onClose={onClose}
@@ -63,7 +64,7 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
               key={s}
               disabled={!canWrite}
               className={opp.stage === s ? "on" : isOpen && i < currentIdx ? "done" : ""}
-              onClick={() => run(() => crm.setStage(opp.id, s))}
+              onClick={() => run(() => updateOpportunity(opp.id, { stage: s }))}
             >
               {s}
             </button>
@@ -75,7 +76,7 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
               key={s}
               disabled={!canWrite}
               className={`${s === "Lost" ? "lost " : ""}${opp.stage === s ? "on" : ""}`}
-              onClick={() => run(() => crm.setStage(opp.id, s))}
+              onClick={() => run(() => updateOpportunity(opp.id, { stage: s }))}
             >
               {s === "Won" ? "✓ Won" : "✕ Lost"}
             </button>
@@ -85,10 +86,10 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
           <div className="field">
             Owner
             <OwnerPicker
-              value={opp.owner_id}
+              value={opp.owner_user_id}
               assignees={assignees}
-              canAssign={can("crm.assign")}
-              onChange={(id) => run(() => crm.assignOpportunity(opp.id, id), id ? "Owner updated." : "Unassigned.")}
+              canAssign={can("crm.opportunity.assign")}
+              onChange={(id) => run(() => assignOpportunity(opp.id, id), id ? "Owner updated." : "Unassigned.")}
             />
           </div>
           <div className="field">
@@ -152,7 +153,7 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
       <div className="card">
         <div className="card-head">
           <span className="card-title">Follow-ups</span>
-          {canWrite && (
+          {canLog && (
             <button className="ghost-btn sm" onClick={() => setFollowUpOpen(true)}>
               <Icon name="plus" size={14} /> Schedule
             </button>
@@ -166,16 +167,17 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
           <div className="mini-list">
             {followUps.map((a) => (
               <div className={`row${a.is_overdue ? " overdue" : ""}`} key={a.id}>
-                <Icon name={a.kind === "Call" ? "phone" : a.kind === "Meeting" ? "users" : a.kind === "Email" ? "send" : "check"} size={18} />
+                <Icon name={a.type === "Call" ? "phone" : a.type === "Meeting" ? "users" : a.type === "Email" ? "send" : "check"} size={18} />
                 <div className="grow">
                   {a.subject}
                   <small>
-                    {a.kind} · {dateTime(a.due_at)} · {relativeDue(a.due_at)}
+                    {a.type}
+                    {a.due_at ? ` · ${dateTime(a.due_at)} · ${relativeDue(a.due_at)}` : " · no due date"}
                     {a.owner_name && a.owner_id !== user?.id ? ` · ${a.owner_name}` : ""}
                   </small>
                 </div>
-                {canWrite && (
-                  <button className="ghost-btn sm" onClick={() => run(() => crm.completeActivity(a.id), "Follow-up marked done.")}>
+                {canLog && (
+                  <button className="ghost-btn sm" onClick={() => run(() => updateActivity(a.id, { done: true }), "Follow-up marked done.")}>
                     Done
                   </button>
                 )}
@@ -187,7 +189,7 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
 
       {followUpOpen && (
         <FollowUpModal
-          target={{ opportunity_id: opp.id, name: opp.title }}
+          target={{ opportunity_id: opp.id, name: opp.name }}
           onClose={() => setFollowUpOpen(false)}
           onSaved={async () => {
             setFollowUpOpen(false);

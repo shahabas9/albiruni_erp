@@ -145,97 +145,6 @@ export interface CreateQuotationResult {
   requires_approval: boolean;
 }
 
-// --- CRM ----------------------------------------------------------------------
-
-export const CRM_LEAD_STATUSES = ["New", "Contacted", "Qualified", "Lost", "Converted"] as const;
-export const CRM_OPPORTUNITY_STAGES = ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"] as const;
-export const ACTIVITY_KINDS = ["Call", "Meeting", "Email", "Task", "Note"] as const;
-
-export type CrmLeadStatus = (typeof CRM_LEAD_STATUSES)[number];
-export type CrmOpportunityStage = (typeof CRM_OPPORTUNITY_STAGES)[number];
-export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
-
-export interface Assignee {
-  id: string;
-  display_name: string;
-}
-
-interface FollowUpSummary {
-  owner_id: string | null;
-  owner_name: string | null;
-  open_activities: number;
-  overdue_activities: number;
-  next_due_at: string | null;
-  created_at: string;
-}
-
-export interface CrmLead extends FollowUpSummary {
-  id: string;
-  name: string;
-  organization: string;
-  phone: string;
-  email: string;
-  source: string;
-  status: CrmLeadStatus;
-  converted_opportunity_id: string | null;
-}
-
-export interface CrmOpportunity extends FollowUpSummary {
-  id: string;
-  title: string;
-  customer_name: string;
-  lead_id: string | null;
-  stage: CrmOpportunityStage;
-  expected_value: number;
-  expected_close: string | null;
-  quotations: Quotation[];
-}
-
-export interface CrmActivity {
-  id: string;
-  kind: ActivityKind;
-  subject: string;
-  due_at: string | null;
-  completed_at: string | null;
-  is_overdue: boolean;
-  lead_id: string | null;
-  opportunity_id: string | null;
-  related_name: string;
-  owner_id: string | null;
-  owner_name: string | null;
-}
-
-const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
-
-export const crm = {
-  assignees: () => request<Assignee[]>("/api/crm/assignees"),
-  leads: () => request<CrmLead[]>("/api/crm/leads"),
-  opportunities: () => request<CrmOpportunity[]>("/api/crm/opportunities"),
-  activities: () => request<CrmActivity[]>("/api/crm/activities"),
-
-  createLead: (body: { name: string; organization: string; phone: string; email: string; source: string; owner_id: string | null }) =>
-    request<CrmLead>("/api/crm/leads", { method: "POST", ...json(body) }),
-  assignLead: (id: string, owner_id: string | null) =>
-    request<CrmLead>(`/api/crm/leads/${id}/owner`, { method: "PATCH", ...json({ owner_id }) }),
-  setLeadStatus: (id: string, status: CrmLeadStatus) =>
-    request<CrmLead>(`/api/crm/leads/${id}/status`, { method: "PATCH", ...json({ status }) }),
-  convertLead: (id: string, body: { title: string; expected_value: number; expected_close: string | null }) =>
-    request<CrmOpportunity>(`/api/crm/leads/${id}/convert`, { method: "POST", ...json(body) }),
-
-  createOpportunity: (body: { title: string; customer_name: string; expected_value: number; expected_close: string | null; owner_id: string | null }) =>
-    request<CrmOpportunity>("/api/crm/opportunities", { method: "POST", ...json(body) }),
-  assignOpportunity: (id: string, owner_id: string | null) =>
-    request<CrmOpportunity>(`/api/crm/opportunities/${id}/owner`, { method: "PATCH", ...json({ owner_id }) }),
-  setStage: (id: string, stage: CrmOpportunityStage) =>
-    request<CrmOpportunity>(`/api/crm/opportunities/${id}/stage`, { method: "PATCH", ...json({ stage }) }),
-  quoteOpportunity: (id: string, body: { lines: QuotationLineInput[]; discount_pct: number }) =>
-    request<CreateQuotationResult>(`/api/crm/opportunities/${id}/quotations`, { method: "POST", ...json(body) }),
-
-  createActivity: (body: { kind: ActivityKind; subject: string; due_at: string; lead_id?: string; opportunity_id?: string }) =>
-    request<CrmActivity>("/api/crm/activities", { method: "POST", ...json(body) }),
-  completeActivity: (id: string) => request<CrmActivity>(`/api/crm/activities/${id}/complete`, { method: "POST" }),
-};
-
 // --- Ask ERP ----------------------------------------------------------------
 
 export type AskResponse =
@@ -390,9 +299,6 @@ export function updateAdminUser(
 // permission string actually checked somewhere in the API today, kept next
 // to the role-creation UI so it can't silently drift out of sync.
 export const KNOWN_PERMISSIONS = [
-  "crm.read",
-  "crm.write",
-  "crm.assign",
   "sales.quotation.read",
   "sales.quotation.create",
   "sales.quotation.approve",
@@ -403,10 +309,12 @@ export const KNOWN_PERMISSIONS = [
   "crm.lead.read",
   "crm.lead.write",
   "crm.lead.convert",
+  "crm.lead.assign",
   "crm.contact.read",
   "crm.contact.write",
   "crm.opportunity.read",
   "crm.opportunity.write",
+  "crm.opportunity.assign",
   "crm.activity.read",
   "crm.activity.write",
   "admin.users.read",
@@ -419,7 +327,23 @@ export const KNOWN_PERMISSIONS = [
 export type LeadStatus = "New" | "Contacted" | "Qualified" | "Converted" | "Lost";
 export const LEAD_STATUSES: LeadStatus[] = ["New", "Contacted", "Qualified", "Converted", "Lost"];
 
-export interface Lead {
+/** Open/overdue follow-up counts the API attaches to leads and opportunities. */
+export interface FollowUpSummary {
+  open_activities: number;
+  overdue_activities: number;
+  next_due_at: string | null;
+}
+
+export interface Assignee {
+  id: string;
+  display_name: string;
+}
+
+export function fetchAssignees(): Promise<Assignee[]> {
+  return request<Assignee[]>("/api/assignees");
+}
+
+export interface Lead extends FollowUpSummary {
   id: string;
   name: string;
   company_name: string;
@@ -429,7 +353,9 @@ export interface Lead {
   status: LeadStatus;
   notes: string;
   owner_user_id: string | null;
+  owner_name: string | null;
   converted_customer_id: string | null;
+  converted_opportunity_id: string | null;
   created_at: string;
 }
 
@@ -440,6 +366,8 @@ export interface LeadInput {
   phone?: string;
   source?: string;
   notes?: string;
+  /** Anyone but yourself needs crm.lead.assign. */
+  owner_user_id?: string | null;
 }
 
 export function fetchLeads(): Promise<Lead[]> {
@@ -452,9 +380,13 @@ export function createLead(body: LeadInput): Promise<Lead> {
 
 export function updateLead(
   id: string,
-  body: Partial<LeadInput & { status: LeadStatus }>,
+  body: Partial<Omit<LeadInput, "owner_user_id"> & { status: LeadStatus }>,
 ): Promise<Lead> {
   return request<Lead>(`/api/leads/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function assignLead(id: string, owner_user_id: string | null): Promise<Lead> {
+  return request<Lead>(`/api/leads/${id}/owner`, { method: "PATCH", body: JSON.stringify({ owner_user_id }) });
 }
 
 export interface ConvertLeadResult {
@@ -466,7 +398,12 @@ export interface ConvertLeadResult {
 
 export function convertLead(
   id: string,
-  body: { create_opportunity: boolean; opportunity_value: number },
+  body: {
+    create_opportunity: boolean;
+    opportunity_name?: string;
+    opportunity_value: number;
+    expected_close_date?: string | null;
+  },
 ): Promise<ConvertLeadResult> {
   return request<ConvertLeadResult>(`/api/leads/${id}/convert`, { method: "POST", body: JSON.stringify(body) });
 }
@@ -509,10 +446,11 @@ export function updateContact(
 export type OpportunityStage = "New" | "Qualified" | "Proposal" | "Negotiation" | "Won" | "Lost";
 export const OPPORTUNITY_STAGES: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"];
 
-export interface Opportunity {
+export interface Opportunity extends FollowUpSummary {
   id: string;
   customer_id: string;
   customer_name: string;
+  lead_id: string | null;
   name: string;
   stage: OpportunityStage;
   value: number;
@@ -520,6 +458,8 @@ export interface Opportunity {
   expected_close_date: string | null;
   notes: string;
   owner_user_id: string | null;
+  owner_name: string | null;
+  quotations: Quotation[];
   created_at: string;
 }
 
@@ -530,6 +470,8 @@ export interface OpportunityInput {
   probability_pct?: number;
   expected_close_date?: string | null;
   notes?: string;
+  /** Anyone but yourself needs crm.opportunity.assign. */
+  owner_user_id?: string | null;
 }
 
 export function fetchOpportunities(): Promise<Opportunity[]> {
@@ -542,9 +484,27 @@ export function createOpportunity(body: OpportunityInput): Promise<Opportunity> 
 
 export function updateOpportunity(
   id: string,
-  body: Partial<OpportunityInput & { stage: OpportunityStage }>,
+  body: Partial<Omit<OpportunityInput, "customer_id" | "owner_user_id"> & { stage: OpportunityStage }>,
 ): Promise<Opportunity> {
   return request<Opportunity>(`/api/opportunities/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function assignOpportunity(id: string, owner_user_id: string | null): Promise<Opportunity> {
+  return request<Opportunity>(`/api/opportunities/${id}/owner`, {
+    method: "PATCH",
+    body: JSON.stringify({ owner_user_id }),
+  });
+}
+
+/** Raises a quotation for the opportunity's customer; moves New/Qualified deals to Proposal. */
+export function quoteOpportunity(
+  id: string,
+  body: { lines: QuotationLineInput[]; discount_pct: number },
+): Promise<CreateQuotationResult> {
+  return request<CreateQuotationResult>(`/api/opportunities/${id}/quotations`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 // --- CRM: Activities ----------------------------------------------------------
@@ -558,11 +518,16 @@ export interface Activity {
   subject: string;
   notes: string;
   due_date: string | null;
+  due_at: string | null;
   done: boolean;
+  completed_at: string | null;
+  is_overdue: boolean;
   lead_id: string | null;
   customer_id: string | null;
   opportunity_id: string | null;
   related_label: string;
+  owner_id: string | null;
+  owner_name: string | null;
   created_at: string;
 }
 
@@ -570,14 +535,17 @@ export interface ActivityInput {
   type: ActivityType;
   subject: string;
   notes?: string;
+  /** Due by the end of this day… */
   due_date?: string | null;
+  /** …or at this exact time (ISO); wins over due_date. */
+  due_at?: string | null;
   lead_id?: string | null;
   customer_id?: string | null;
   opportunity_id?: string | null;
 }
 
-export function fetchActivities(): Promise<Activity[]> {
-  return request<Activity[]>("/api/activities");
+export function fetchActivities(openOnly = false): Promise<Activity[]> {
+  return request<Activity[]>(`/api/activities${openOnly ? "?open_only=true" : ""}`);
 }
 
 export function createActivity(body: ActivityInput): Promise<Activity> {
