@@ -1,77 +1,169 @@
-import { NavLink } from "react-router-dom";
-import { ThemeToggle } from "../components/ThemeToggle";
-import { NavDropdown } from "./NavDropdown";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Icon } from "../components/Icon";
 import { useLanguage } from "../i18n/LanguageProvider";
 import { useAskErp } from "../askerp/AskErpContext";
 import { useAuth } from "../auth/AuthProvider";
-import { hasPermission } from "../auth/permissions";
-import type { Lang } from "../i18n/strings";
+import { useAppData } from "../data/AppDataProvider";
+import { useTheme } from "../theme/ThemeProvider";
+import { useSpeech } from "../lib/useSpeech";
+import { initials, relativeDue } from "../lib/format";
 
-export function TopBar() {
-  const { t, lang, setLang } = useLanguage();
-  const { open } = useAskErp();
-  const { user, logout } = useAuth();
+function useOutsideClose(onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [onClose]);
+  return ref;
+}
 
-  const salesItems = [
-    { to: "/sales", label: t("nav.sales") },
-    ...(hasPermission(user, "sales.customer.read") ? [{ to: "/customers", label: "Customers" }] : []),
-    ...(hasPermission(user, "inventory.item.read") ? [{ to: "/items", label: "Items" }] : []),
-  ];
+export function TopBar({ onMenu }: { onMenu: () => void }) {
+  const { lang } = useLanguage();
+  const { ask } = useAskErp();
+  const [query, setQuery] = useState("");
+  const speech = useSpeech(lang === "ml" ? "ml-IN" : "en-IN", (text) => ask(text));
 
-  const crmItems = [
-    ...(hasPermission(user, "crm.lead.read") ? [{ to: "/leads", label: "Leads" }] : []),
-    // Customer is shared master data, not Sales- or CRM-owned (matches the
-    // blueprint grouping Lead/Contact/Customer/Opportunity as one
-    // "Commercial" domain) — listed here too so CRM work never requires a
-    // detour into the Sales menu.
-    ...(hasPermission(user, "sales.customer.read") ? [{ to: "/customers", label: "Customers" }] : []),
-    ...(hasPermission(user, "crm.contact.read") ? [{ to: "/contacts", label: "Contacts" }] : []),
-    ...(hasPermission(user, "crm.opportunity.read") ? [{ to: "/opportunities", label: "Opportunities" }] : []),
-    ...(hasPermission(user, "crm.activity.read") ? [{ to: "/activities", label: "Activities" }] : []),
-  ];
+  const submit = () => {
+    const text = query.trim();
+    if (!text) return;
+    setQuery("");
+    ask(text);
+  };
 
   return (
     <header className="topbar">
-      <div className="topbar-left">
-        <span className="brand">
-          <span className="mark">A</span> Albiruni <span style={{ opacity: 0.55, fontWeight: 400 }}>ERP</span>
-        </span>
-        <nav className="tabs">
-          <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>
-            {t("nav.dashboard")}
-          </NavLink>
-          <NavDropdown label="Sales" items={salesItems} />
-          {crmItems.length > 0 && <NavDropdown label="CRM" items={crmItems} />}
-          <NavLink to="/audit" className={({ isActive }) => (isActive ? "active" : "")}>
-            {t("nav.audit")}
-          </NavLink>
-          {hasPermission(user, "admin.users.read") && (
-            <NavLink to="/admin" className={({ isActive }) => (isActive ? "active" : "")}>
-              Admin
-            </NavLink>
-          )}
-        </nav>
-      </div>
+      <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Open navigation">
+        <Icon name="menu" />
+      </button>
+      <form
+        className="omnibox"
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <Icon name="search" />
+        <input
+          value={speech.listening ? speech.interim || "Listening…" : query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search or ask anything…"
+          aria-label="Search or ask Ask ERP"
+          readOnly={speech.listening}
+        />
+        <button
+          type="button"
+          className={`icon-btn${speech.listening ? " listening" : ""}`}
+          onClick={speech.toggle}
+          disabled={!speech.supported}
+          title={speech.supported ? "Ask by voice" : "Voice input isn't supported in this browser"}
+          aria-label="Ask by voice"
+        >
+          <Icon name="mic" />
+        </button>
+      </form>
       <div className="topbar-right">
-        <div className="scope-chip">
-          <b>{user?.company ?? "—"}</b>
-          <span className="dot" />
-          <span>{user?.display_name}</span>
-          <span className="dot" />
-          <span>₹ INR</span>
-        </div>
-        <select className="lang" value={lang} onChange={(e) => setLang(e.target.value as Lang)} aria-label="Language">
-          <option value="en">EN — English</option>
-          <option value="ml">ML — മലയാളം</option>
-        </select>
-        <ThemeToggle />
-        <button className="ask-btn" onClick={open}>
-          <span className="spark">✦</span> <span>{t("nav.ask")}</span>
-        </button>
-        <button className="icon-btn" style={{ color: "rgba(255,255,255,.65)" }} onClick={logout} title="Sign out" aria-label="Sign out">
-          ⏻
-        </button>
+        <CompanyChip />
+        <Notifications />
+        <UserMenu />
       </div>
     </header>
+  );
+}
+
+function CompanyChip() {
+  const { user } = useAuth();
+  // One company per login today; this becomes a branch switcher once the
+  // backend scopes a user to several companies.
+  return (
+    <span className="chip-btn" style={{ cursor: "default" }} title="Your company">
+      <Icon name="building" size={18} />
+      <span className="chip-label">{user?.company ?? "—"}</span>
+    </span>
+  );
+}
+
+function Notifications() {
+  const [open, setOpen] = useState(false);
+  const ref = useOutsideClose(() => setOpen(false));
+  const { activities, quotes } = useAppData();
+  const navigate = useNavigate();
+  const overdue = activities.filter((a) => a.is_overdue);
+  const pending = quotes.filter((q) => q.status === "Pending approval");
+  const hasAny = overdue.length + pending.length > 0;
+
+  const go = (to: string) => {
+    setOpen(false);
+    navigate(to);
+  };
+
+  return (
+    <div className="user-menu" ref={ref}>
+      <button className="icon-btn" onClick={() => setOpen((v) => !v)} aria-label="Notifications" aria-expanded={open}>
+        <Icon name="bell" size={22} />
+        {hasAny && <span className="ping" />}
+      </button>
+      {open && (
+        <div className="menu-pop notif-list">
+          {!hasAny && <div className="empty">Nothing needs you right now.</div>}
+          {overdue.slice(0, 5).map((a) => (
+            <button key={a.id} onClick={() => go(a.opportunity_id ? `/crm?opp=${a.opportunity_id}` : "/crm?tab=followups")}>
+              <Icon name="alert" size={16} />
+              <span>
+                <b>{a.subject}</b>
+                <br />
+                <small style={{ color: "var(--bad)" }}>
+                  {a.related_name} · {relativeDue(a.due_at)}
+                </small>
+              </span>
+            </button>
+          ))}
+          {pending.length > 0 && (
+            <button onClick={() => go("/crm?tab=quotations&status=pending")}>
+              <Icon name="file" size={16} />
+              {pending.length} quotation{pending.length === 1 ? "" : "s"} awaiting approval
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UserMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useOutsideClose(() => setOpen(false));
+  const { user, logout } = useAuth();
+  const { resolved, toggle } = useTheme();
+
+  return (
+    <div className="user-menu" ref={ref}>
+      <button className="user-btn" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label="Account menu">
+        <span className="avatar">{initials(user?.display_name)}</span>
+        <span className="user-name">{user?.display_name}</span>
+        <Icon name="down" size={16} />
+      </button>
+      {open && (
+        <div className="menu-pop">
+          <div className="who">
+            <b>{user?.display_name}</b>
+            <small>
+              {user?.role ?? "No role"} · {user?.company}
+            </small>
+          </div>
+          <button onClick={toggle}>
+            <Icon name={resolved === "dark" ? "sun" : "moon"} size={16} />
+            {resolved === "dark" ? "Day mode" : "Night mode"}
+          </button>
+          <button onClick={logout}>
+            <Icon name="logout" size={16} /> Sign out
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

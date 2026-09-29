@@ -8,64 +8,88 @@
 :root {
   color-scheme: light;
 
-  --bg: #f5f6f8;
+  --bg: #f3f6f7;
   --surface: #ffffff;
-  --surface-2: #fafbfc;
-  --ink: #10151f;
-  --ink-dim: #5b6472;
-  --ink-faint: #8891a0;
-  --line: #e3e6ec;
-  --line-strong: #cbd1db;
+  --surface-2: #f6f9fa;
+  --ink: #0f1b2a;
+  --ink-dim: #5b6878;
+  --ink-faint: #8a95a3;
+  --line: #e4e9ed;
+  --line-strong: #cdd6dd;
 
-  --brand: #123457;
+  --brand: #0f2033;
   --brand-ink: #ffffff;
-  --brand-soft: #e7edf3;
+  --brand-soft: #e8eef4;
 
-  --accent: #1e8c86;
+  --accent: #10997f;
   --accent-ink: #ffffff;
-  --accent-soft: #e3f3f1;
+  --accent-soft: #e1f4ef;
 
-  --good: #1e8e5a;
-  --good-soft: #e6f6ee;
-  --warn: #b8790c;
-  --warn-soft: #fbf0dc;
-  --bad: #c0392b;
-  --bad-soft: #fbeae7;
+  --link: #2563c9;
 
-  --shadow: 0 1px 2px rgba(16, 21, 31, 0.04), 0 8px 24px -12px rgba(16, 21, 31, 0.18);
-  --shadow-lg: 0 24px 60px -20px rgba(16, 21, 31, 0.35);
-  --radius: 12px;
+  --good: #15935a;
+  --good-soft: #e3f5ec;
+  --warn: #c56a0c;
+  --warn-soft: #fdf0e1;
+  --bad: #d23b2f;
+  --bad-soft: #fdeceb;
+  --violet-soft: #efebfb;
+  --violet: #6d4fd0;
+
+  --shadow: 0 1px 2px rgba(15, 27, 42, 0.04), 0 6px 20px -14px rgba(15, 27, 42, 0.2);
+  --shadow-lg: 0 24px 60px -20px rgba(15, 27, 42, 0.35);
+
+  /* The sidebar and the Ask ERP copilot stay dark in both themes, as in the design. */
+  --nav-bg: #0f2033;
+  --nav-ink: #c3cfdb;
+  --nav-hover: rgba(255, 255, 255, 0.06);
+  --lime: #d7f25e;
+  --lime-ink: #0f2033;
+  --copilot-bg: #0b1a2a;
+  --copilot-surface: #172a3e;
+  --copilot-line: rgba(255, 255, 255, 0.1);
+  --copilot-ink: #e9f0f6;
+  --copilot-dim: #9fb1c3;
+  --glow: #2fe0b8;
+
+  --radius: 14px;
+  --sidebar-w: 240px;
+  --copilot-w: 420px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
 
-    --bg: #0b0f17;
-    --surface: #121826;
-    --surface-2: #161d2c;
-    --ink: #e8ecf3;
-    --ink-dim: #9aa5b8;
-    --ink-faint: #6b7488;
-    --line: #232b3d;
-    --line-strong: #324058;
+    --bg: #0a1119;
+    --surface: #111b27;
+    --surface-2: #152131;
+    --ink: #e8eef4;
+    --ink-dim: #9eabbb;
+    --ink-faint: #6c7a8c;
+    --line: #1f2d3e;
+    --line-strong: #2d3f54;
 
-    --brand: #16314f;
-    --brand-ink: #f3f6fa;
-    --brand-soft: #1b3350;
+    --brand: #d7f25e;
+    --brand-ink: #0f2033;
+    --brand-soft: #1a2a3b;
 
-    --accent: #3fbdb5;
-    --accent-ink: #06211f;
-    --accent-soft: #123430;
+    --accent: #2fc9a6;
+    --accent-ink: #062019;
+    --accent-soft: #0f2e29;
+
+    --link: #7fb0ff;
 
     --good: #3cc47f;
     --good-soft: #0f2a1e;
-    --warn: #e3a83b;
-    --warn-soft: #2e2410;
-    --bad: #e06455;
-    --bad-soft: #301715;
+    --warn: #e7a23f;
+    --warn-soft: #2e2211;
+    --bad: #ef6a5c;
+    --bad-soft: #321816;
+    --violet-soft: #221c3d;
+    --violet: #a996ff;
 
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -14px rgba(0, 0, 0, 0.6);
     --shadow-lg: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
   }
 }
@@ -73,30 +97,34 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0b0f17;
-  --surface: #121826;
-  --surface-2: #161d2c;
-  --ink: #e8ecf3;
-  --ink-dim: #9aa5b8;
-  --ink-faint: #6b7488;
-  --line: #232b3d;
-  --line-strong: #324058;
+  --bg: #0a1119;
+  --surface: #111b27;
+  --surface-2: #152131;
+  --ink: #e8eef4;
+  --ink-dim: #9eabbb;
+  --ink-faint: #6c7a8c;
+  --line: #1f2d3e;
+  --line-strong: #2d3f54;
 
-  --brand: #16314f;
-  --brand-ink: #f3f6fa;
-  --brand-soft: #1b3350;
+  --brand: #d7f25e;
+  --brand-ink: #0f2033;
+  --brand-soft: #1a2a3b;
 
-  --accent: #3fbdb5;
-  --accent-ink: #06211f;
-  --accent-soft: #123430;
+  --accent: #2fc9a6;
+  --accent-ink: #062019;
+  --accent-soft: #0f2e29;
+
+  --link: #7fb0ff;
 
   --good: #3cc47f;
   --good-soft: #0f2a1e;
-  --warn: #e3a83b;
-  --warn-soft: #2e2410;
-  --bad: #e06455;
-  --bad-soft: #301715;
+  --warn: #e7a23f;
+  --warn-soft: #2e2211;
+  --bad: #ef6a5c;
+  --bad-soft: #321816;
+  --violet-soft: #221c3d;
+  --violet: #a996ff;
 
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -14px rgba(0, 0, 0, 0.6);
   --shadow-lg: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
 }

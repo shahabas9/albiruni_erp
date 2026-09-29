@@ -9,25 +9,85 @@ already exists.
     backend/.venv/bin/python -m app.seed
 """
 
+from datetime import date, timedelta
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
 from app.core.deps import RequestContext
+from app.core.dev_schema import ensure_dev_schema
 from app.core.security import hash_password
+from app.domain import crm_service
 from app.domain.sales_service import persist_quotation, price_quotation
+from app.models.crm import Lead
 from app.models.identity import Role, User
 from app.models.sales import Customer, Item
 from app.models.tenant import Company, Tenant
 
 
+CRM_PERMISSIONS = ["crm.read", "crm.write", "crm.assign"]
+
+
+def seed_crm(db: Session, tenant: Tenant) -> None:
+    """Idempotent: grants CRM permissions to the seeded Sales Manager and adds
+    demo leads/opportunities/activities once. Safe on a DB seeded before CRM existed."""
+
+    role = db.execute(select(Role).where(Role.tenant_id == tenant.id, Role.name == "Sales Manager")).scalar_one()
+    missing = [p for p in CRM_PERMISSIONS if p not in role.permissions]
+    if missing:
+        role.permissions = [*role.permissions, *missing]
+
+    if db.execute(select(Lead).where(Lead.tenant_id == tenant.id)).first() is not None:
+        return
+
+    ahmed = db.execute(select(User).where(User.username == "ahmed")).scalar_one()
+    context = RequestContext(
+        user=ahmed, tenant_id=tenant.id, company_id=ahmed.company_id, permissions=role.permissions, locale="en-IN"
+    )
+    now = crm_service.now_utc()
+
+    fresh = crm_service.create_lead(
+        db, context, name="Shafeeq K", organization="Calicut Build Mart", phone="+91 98470 11223",
+        email="", source="Walk-in", owner_id=None,
+    )
+    crm_service.create_activity(
+        db, context, kind="Call", subject="Intro call — pricing for Product A", due_at=now - timedelta(days=2),
+        lead_id=fresh.id, opportunity_id=None, owner_id=None,
+    )
+    crm_service.create_lead(
+        db, context, name="Nisha R", organization="Kannur Tiles & Co", phone="+91 94460 44556",
+        email="nisha@kannurtiles.example", source="Referral", owner_id=ahmed.id,
+    )
+
+    qualified = crm_service.create_lead(
+        db, context, name="Faisal", organization="Al Faisal Trading", phone="", email="",
+        source="Existing customer", owner_id=ahmed.id,
+    )
+    opp = crm_service.convert_lead(
+        db, context, qualified, title="Al Faisal — Q4 restock", expected_value=180_000,
+        expected_close=date.today() + timedelta(days=21),
+    )
+    crm_service.create_activity(
+        db, context, kind="Meeting", subject="Walk through Q4 volumes", due_at=now + timedelta(days=1),
+        lead_id=None, opportunity_id=opp.id, owner_id=None,
+    )
+
+    crm_service.create_opportunity(
+        db, context, title="Malabar Hardware — branch expansion", customer_name="Malabar Hardware",
+        expected_value=450_000, expected_close=date.today() + timedelta(days=45), owner_id=None,
+    )
+
+
 def run() -> None:
-    Base.metadata.create_all(bind=engine)
+    ensure_dev_schema()
     db: Session = SessionLocal()
     try:
         existing = db.execute(select(Tenant).where(Tenant.code == "tenant_018")).scalar_one_or_none()
         if existing is not None:
-            print("Seed data already present (tenant_018) — skipping.")
+            print("Seed data already present (tenant_018) — topping up CRM only.")
+            seed_crm(db, existing)
+            db.commit()
             return
 
         tenant = Tenant(name="Albiruni Trading Group", code="tenant_018")
@@ -46,6 +106,7 @@ def run() -> None:
                 "sales.quotation.read",
                 "sales.quotation.approve",
                 "audit.read",
+                *CRM_PERMISSIONS,
             ],
         )
         db.add(sales_manager_role)
@@ -106,6 +167,8 @@ def run() -> None:
             price_quotation(db, context, "Malabar Hardware", [{"item_name": "Product A", "qty": 200}], 3),
             created_by=ahmed.id,
         )
+
+        seed_crm(db, tenant)
 
         db.commit()
         print("Seeded tenant_018 / company_kozhikode with user 'ahmed' (password: ahmed123).")

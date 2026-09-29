@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
 from app.domain.errors import ConflictError, NotFoundError
-from app.models.crm import LEAD_STATUSES, Lead
+from app.models.crm import LEAD_STATUSES, Activity, Lead
 from app.models.sales import Customer
 from app.schemas.crm import ConvertLeadIn, LeadIn, LeadUpdate
 
@@ -94,10 +94,19 @@ def convert_lead(
             company_id=context.company_id,
             customer_id=customer.id,
             name=f"{customer.name} — new opportunity",
+            lead_id=lead.id,
+            owner_user_id=lead.owner_user_id,
             stage="New",
             value=body.opportunity_value,
         )
         db.add(opportunity)
+        db.flush()
+        lead.converted_opportunity_id = opportunity.id
+        for activity in db.execute(select(Activity).where(
+            Activity.lead_id == lead.id, Activity.done.is_(False)
+        )).scalars():
+            activity.opportunity_id = opportunity.id
+            activity.lead_id = None
 
     lead.status = "Converted"
     lead.converted_customer_id = customer.id

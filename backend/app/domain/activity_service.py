@@ -1,3 +1,4 @@
+from datetime import datetime, time, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -65,6 +66,8 @@ def create_activity(db: Session, context: RequestContext, body: ActivityIn) -> A
         subject=body.subject,
         notes=body.notes,
         due_date=body.due_date,
+        due_at=datetime.combine(body.due_date, time.min, timezone.utc) if body.due_date else None,
+        owner_id=context.user.id,
         lead_id=body.lead_id,
         customer_id=body.customer_id,
         opportunity_id=body.opportunity_id,
@@ -78,7 +81,13 @@ def create_activity(db: Session, context: RequestContext, body: ActivityIn) -> A
 
 def update_activity(db: Session, context: RequestContext, activity_id: UUID, body: ActivityUpdate) -> Activity:
     activity = get_activity(db, context, activity_id)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    if "due_date" in changes:
+        due = changes["due_date"]
+        activity.due_at = datetime.combine(due, time.min, timezone.utc) if due else None
+    if "done" in changes:
+        activity.completed_at = (activity.completed_at or datetime.now(timezone.utc)) if changes["done"] else None
+    for field, value in changes.items():
         setattr(activity, field, value)
     db.commit()
     db.refresh(activity)

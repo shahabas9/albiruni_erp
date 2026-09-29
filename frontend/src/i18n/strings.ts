@@ -66,7 +66,7 @@ export const STRINGS: Record<Lang, Record<string, string>> = {
     "panel.chip.learn": "Teach me a task",
     "panel.placeholder": "Ask, in any configured language…",
     "panel.intro":
-      "I'm Ask ERP. I can navigate, explain, analyze, draft or act — try one of the prompts above, or type your own in Malayalam, Hindi or English.",
+      "I'm Ask ERP. I can navigate, explain, analyze, draft or act — tap the mic, pick a prompt below, or type in Malayalam, Hindi or English.",
   },
   ml: {
     "nav.dashboard": "ഡാഷ്ബോർഡ്",

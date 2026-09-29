@@ -5,18 +5,20 @@ from sqlalchemy.orm import Session
 from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.models.sales import Quotation
-from app.schemas.sales import CreateQuotationIn, QuotationLineOut, QuotationOut
+from app.models.sales import Item, Quotation
+from app.schemas.sales import CreateQuotationIn, ItemOut, QuotationLineOut, QuotationOut
 from app.toolgateway.executor import execute_tool
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 
 
-def _to_out(q: Quotation) -> QuotationOut:
+def to_quotation_out(q: Quotation) -> QuotationOut:
     return QuotationOut(
         id=q.id,
         number=q.number,
         customer_name=q.customer.name,
+        opportunity_id=q.opportunity_id,
+        opportunity_title=q.opportunity.title if q.opportunity else None,
         subtotal=float(q.subtotal),
         discount_pct=float(q.discount_pct),
         total=float(q.total),
@@ -45,7 +47,27 @@ def list_quotations(
         .order_by(Quotation.created_at.desc())
     )
     quotations = db.execute(stmt).scalars().all()
-    return [_to_out(q) for q in quotations]
+    return [to_quotation_out(q) for q in quotations]
+
+
+@router.get("/items", response_model=list[ItemOut])
+def list_items(
+    context: RequestContext = Depends(require_permission("sales.quotation.read")),
+    db: Session = Depends(get_db),
+):
+    """The price list a quotation form picks lines from."""
+
+    stmt = (
+        select(Item)
+        .where(Item.tenant_id == context.tenant_id, Item.company_id == context.company_id)
+        .order_by(Item.name)
+    )
+    return [
+        ItemOut(
+            id=i.id, sku=i.sku, name=i.name, uom=i.uom, unit_price=float(i.unit_price), stock_qty=float(i.stock_qty)
+        )
+        for i in db.execute(stmt).scalars()
+    ]
 
 
 @router.post("/quotations")

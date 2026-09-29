@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useAskErp } from "./AskErpContext";
 import { useAppData } from "../data/AppDataProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { useLanguage } from "../i18n/LanguageProvider";
 import { ApiError, askErp, confirmAsk, type AskResponse } from "../api/client";
+import { BrandMark, Icon, type IconName } from "../components/Icon";
+import { useSpeech } from "../lib/useSpeech";
+import type { Lang } from "../i18n/strings";
 
 type StepState = "" | "active" | "done";
 interface StepItem {
@@ -31,15 +34,30 @@ const FLOW_LABELS = [
   "Preview — build confirmable draft",
 ];
 
+const SUGGESTIONS: { key: string; icon: IconName; prompt: string }[] = [
+  {
+    key: "panel.chip.create",
+    icon: "file",
+    prompt: "Create a quotation for Rahman Traders: 50 boxes Product A and 20 boxes Product B. Give 3% discount.",
+  },
+  { key: "panel.chip.report", icon: "chart", prompt: "This month's sales by branch" },
+  { key: "panel.chip.learn", icon: "chat", prompt: "How do I make a stock transfer?" },
+];
+
 export function AskErpPanel() {
-  const { isOpen, close, registerRunner } = useAskErp();
+  const { isOpen, open, close, registerRunner } = useAskErp();
   const { refresh } = useAppData();
   const { logout } = useAuth();
-  const { t } = useLanguage();
+  const { t, lang, setLang } = useLanguage();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
+  const speech = useSpeech(lang === "ml" ? "ml-IN" : "en-IN", (text) => {
+    if (!busyRef.current) runQuery(text);
+  });
 
   useEffect(() => {
     if (isOpen && messages.length === 0) {
@@ -150,43 +168,108 @@ export function AskErpPanel() {
     runQuery(v);
   }
 
+  if (!isOpen) {
+    return (
+      <button className="copilot-fab" onClick={open} aria-label="Open Ask ERP">
+        <span className="dot-mic">
+          <Icon name="mic" size={18} />
+        </span>
+        {t("panel.title")}
+      </button>
+    );
+  }
+
+  const live = speech.listening;
+  const compact = messages.length > 1;
+
   return (
     <>
-      <div className={`scrim${isOpen ? " open" : ""}`} onClick={close} />
-      <aside className={`panel${isOpen ? " open" : ""}`}>
-        <div className="panel-head">
-          <div className="ph-title">
-            <span className="mark">✦</span> <span>{t("panel.title")}</span>
+      <div className="copilot-scrim" onClick={close} />
+      <aside className="copilot" aria-label="Ask ERP copilot">
+        <div className="copilot-head">
+          <div>
+            <div className="copilot-title">
+              <Icon name="chat" size={24} /> {t("panel.title")} <span className="live" aria-label="online" />
+            </div>
+            <p className="copilot-sub">Your business copilot</p>
           </div>
-          <button className="icon-btn" onClick={close} aria-label="Close">
-            ✕
-          </button>
+          <div className="copilot-head-actions">
+            <select
+              className="lang"
+              value={lang}
+              onChange={(e) => setLang(e.target.value as Lang)}
+              aria-label="Conversation language"
+            >
+              <option value="en">English</option>
+              <option value="ml">Malayalam + English</option>
+            </select>
+            <button className="icon-btn" onClick={close} aria-label="Close Ask ERP">
+              <Icon name="x" />
+            </button>
+          </div>
         </div>
-        <div className="mode-chips">
-          <button
-            disabled={busy}
-            onClick={() =>
-              runQuery("Create a quotation for Rahman Traders: 50 boxes Product A and 20 boxes Product B. Give 3% discount.")
-            }
-          >
-            {t("panel.chip.create")}
-          </button>
-          <button disabled={busy} onClick={() => runQuery("This month's sales by branch")}>
-            {t("panel.chip.report")}
-          </button>
-          <button disabled={busy} onClick={() => runQuery("Why can't I submit this PO?")}>
-            {t("panel.chip.diagnose")}
-          </button>
-          <button disabled={busy} onClick={() => runQuery("How do I make a stock transfer?")}>
-            {t("panel.chip.learn")}
-          </button>
+
+        <div className={`voice-hero${compact ? " compact" : ""}`}>
+          <div className="orb-wrap">
+            <Wave live={live} />
+            <button
+              className={`orb${live ? " live" : ""}`}
+              onClick={speech.toggle}
+              disabled={!speech.supported || busy}
+              aria-label={live ? "Stop listening" : "Start voice conversation"}
+            >
+              <Icon name="mic" size={compact ? 26 : 52} />
+            </button>
+            <Wave live={live} />
+          </div>
+          <div className="voice-label">{live ? speech.interim || "Listening…" : "Voice conversation"}</div>
         </div>
+
         <div className="thread" ref={threadRef}>
-          {messages.map((m) => (
-            <MessageView key={m.id} message={m} onConfirm={confirmQuote} onCancel={cancelPreview} />
+          {messages.map((m, idx) => (
+            <MessageView
+              key={m.id}
+              message={m}
+              onConfirm={confirmQuote}
+              onCancel={cancelPreview}
+              suggestions={
+                idx === 0 ? (
+                  <div className="suggestions">
+                    {SUGGESTIONS.map((sug) => (
+                      <button key={sug.key} disabled={busy} onClick={() => runQuery(sug.prompt)}>
+                        <Icon name={sug.icon} size={16} /> {t(sug.key)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null
+              }
+            />
           ))}
+          {live && speech.interim && <div className="msg user">{speech.interim}…</div>}
         </div>
-        <div className="panel-input">
+
+        <div className="speak">
+          <button
+            className={`speak-btn${live ? " live" : ""}`}
+            onClick={speech.toggle}
+            disabled={!speech.supported || busy}
+            aria-label={live ? "Stop listening" : "Tap to speak"}
+          >
+            <Icon name="mic" size={30} />
+          </button>
+          <small>{live ? "Listening — tap to stop" : "Tap to speak"}</small>
+          {!speech.supported && <span className="hint">Voice needs Chrome, Edge or Safari — typing works everywhere.</span>}
+          {speech.error && <span className="hint">{speech.error}</span>}
+        </div>
+
+        <form
+          className="composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSend();
+          }}
+        >
+          <Icon name="keyboard" />
           <textarea
             rows={1}
             placeholder={t("panel.placeholder")}
@@ -198,13 +281,26 @@ export function AskErpPanel() {
                 handleSend();
               }
             }}
+            aria-label="Type your question"
           />
-          <button className="send-btn" onClick={handleSend} disabled={busy} aria-label="Send">
-            ➤
+          <button type="submit" className="icon-btn send" disabled={busy || !input.trim()} aria-label="Send">
+            <Icon name="send" />
           </button>
-        </div>
+        </form>
       </aside>
     </>
+  );
+}
+
+const WAVE = [10, 22, 14, 34, 18, 44, 26, 52, 30, 40, 20, 46, 24, 36, 16, 28, 12];
+
+function Wave({ live }: { live: boolean }) {
+  return (
+    <div className={`wave${live ? " live" : ""}`} aria-hidden="true">
+      {WAVE.map((h, i) => (
+        <i key={i} style={{ "--h": `${h}px`, "--d": `${(i % 6) * 0.12}s` } as CSSProperties} />
+      ))}
+    </div>
   );
 }
 
@@ -212,24 +308,27 @@ function MessageView({
   message,
   onConfirm,
   onCancel,
+  suggestions,
 }: {
   message: Message;
   onConfirm: (messageId: string, previewToken: string) => void;
   onCancel: (messageId: string) => void;
+  suggestions: ReactNode;
 }) {
   if (message.role === "user") {
-    return <div className="msg user">{message.text}</div>;
-  }
-  if (message.role === "ai-text") {
     return (
-      <div className="msg ai">
-        <div className="bubble">{message.text}</div>
+      <div className="msg user">
+        <span>{message.text}</span>
+        <Icon name="user" size={18} className="who" />
       </div>
     );
   }
-  if (message.role === "ai-steps") {
-    return (
-      <div className="msg ai">
+  const body = (() => {
+    if (message.role === "ai-text") {
+      return <div className="bubble">{message.text}</div>;
+    }
+    if (message.role === "ai-steps") {
+      return (
         <div className="bubble">
           <div className="step-tracker">
             {message.steps.map((s, idx) => (
@@ -240,15 +339,12 @@ function MessageView({
             ))}
           </div>
         </div>
-      </div>
-    );
-  }
-
-  const { preview, settled, confirming, confirmedNumber } = message;
-  return (
-    <div className="msg ai">
+      );
+    }
+    const { preview, settled, confirming, confirmedNumber } = message;
+    return (
       <div className={`preview-card${settled ? " settled" : ""}`}>
-        <div className="pc-title">{settled ? "✓ Draft submitted" : "⚠ Confirm quotation draft"}</div>
+        <div className="pc-title">{settled ? "✓ Draft submitted" : "Confirm quotation draft"}</div>
         {!settled && (
           <>
             <PreviewLine k="Customer" v={preview.customer} />
@@ -268,7 +364,7 @@ function MessageView({
         {settled ? (
           <div className="audit-chip">✓ Recorded to AI audit trail · {confirmedNumber}</div>
         ) : confirming ? (
-          <span style={{ fontSize: 12, color: "var(--ink-dim)" }}>Submitting…</span>
+          <span style={{ fontSize: 12.5, color: "var(--copilot-dim)" }}>Submitting…</span>
         ) : (
           <div className="pc-actions">
             <button className="confirm" onClick={() => onConfirm(message.id, preview.preview_token)}>
@@ -279,6 +375,18 @@ function MessageView({
             </button>
           </div>
         )}
+      </div>
+    );
+  })();
+
+  return (
+    <div className="msg ai">
+      <span className="bot">
+        <BrandMark size={20} />
+      </span>
+      <div className="body">
+        {body}
+        {suggestions}
       </div>
     </div>
   );

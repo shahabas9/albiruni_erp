@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.core.database import Base
 
@@ -12,7 +12,9 @@ from app.core.database import Base
 # of truth for which values are valid (see schemas/crm.py).
 LEAD_STATUSES = ["New", "Contacted", "Qualified", "Converted", "Lost"]
 OPPORTUNITY_STAGES = ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"]
-ACTIVITY_TYPES = ["Call", "Meeting", "Task", "Note"]
+ACTIVITY_TYPES = ["Call", "Meeting", "Email", "Task", "Note"]
+ACTIVITY_KINDS = ACTIVITY_TYPES
+OPEN_STAGES = ("New", "Qualified", "Proposal", "Negotiation")
 
 
 class Lead(Base):
@@ -38,6 +40,13 @@ class Lead(Base):
     converted_customer_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id"), nullable=True
     )
+
+    organization = synonym("company_name")
+    owner_id = synonym("owner_user_id")
+    converted_opportunity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("opportunities.id", use_alter=True), nullable=True
+    )
+    owner: Mapped["User | None"] = relationship(foreign_keys=[owner_user_id])  # noqa: F821
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -73,7 +82,7 @@ class Opportunity(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"))
 
-    name: Mapped[str] = mapped_column(String(160))
+    name: Mapped[str] = mapped_column(String(200))
     stage: Mapped[str] = mapped_column(String(20), default="New")
     value: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     probability_pct: Mapped[int] = mapped_column(default=50)
@@ -81,6 +90,13 @@ class Opportunity(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
 
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    title = synonym("name")
+    expected_value = synonym("value")
+    expected_close = synonym("expected_close_date")
+    owner_id = synonym("owner_user_id")
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=True)
+    owner: Mapped["User | None"] = relationship(foreign_keys=[owner_user_id])  # noqa: F821
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     customer: Mapped["Customer"] = relationship()  # noqa: F821
@@ -108,5 +124,11 @@ class Activity(Base):
         UUID(as_uuid=True), ForeignKey("opportunities.id"), nullable=True
     )
 
-    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    kind = synonym("type")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    owner: Mapped["User | None"] = relationship(foreign_keys=[owner_id])  # noqa: F821
+
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,3 +1,4 @@
+import { BrandMark } from "../components/Icon";
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthProvider";
 
@@ -23,7 +24,7 @@ export function Login() {
     <div className="login-shell">
       <form className="login-card" onSubmit={handleSubmit}>
         <span className="brand" style={{ color: "var(--ink)", marginBottom: 4 }}>
-          <span className="mark">A</span> Albiruni <span style={{ opacity: 0.55, fontWeight: 400 }}>ERP</span>
+          <BrandMark /> Albiruni <span style={{ opacity: 0.55, fontWeight: 600 }}>ERP</span>
         </span>
         <p className="login-sub">Sign in to run the business by asking.</p>
 
