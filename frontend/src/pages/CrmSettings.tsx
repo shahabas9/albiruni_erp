@@ -4,12 +4,17 @@ import {
   createCustomField,
   fetchCustomFields,
   fetchRotation,
+  fetchWebForm,
+  newWebFormKey,
   saveRotation,
+  saveWebForm,
+  webFormUrl,
   updateCustomField,
   type CustomField,
   type CustomFieldType,
   type RecordType,
   type Rotation,
+  type WebForm,
 } from "../api/client";
 import { StaleLimitsEditor } from "../crm/StaleLimitsEditor";
 import { ErrorNote } from "../crm/ui";
@@ -33,6 +38,13 @@ export function CrmSettings() {
           <span className="card-title">Lead rotation</span>
         </div>
         <RotationEditor canEdit={canEdit} />
+      </div>
+
+      <div className="card settings-card">
+        <div className="card-head">
+          <span className="card-title">Web enquiry form</span>
+        </div>
+        {canEdit ? <WebFormEditor /> : <p className="card-note">Setting up the web form needs the crm.settings.write permission.</p>}
       </div>
 
       <div className="card settings-card">
@@ -403,6 +415,141 @@ function CustomFieldsEditor({ canEdit }: { canEdit: boolean }) {
       )}
       <ErrorNote message={error} />
       {!canEdit && <p className="card-note">Changing fields needs the crm.settings.write permission.</p>}
+    </div>
+  );
+}
+
+function CopyField({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <div className="field full">
+      <span>{label}</span>
+      <div className="copy-field">
+        {multiline ? <textarea readOnly rows={3} value={value} /> : <input readOnly value={value} />}
+        <button type="button" className="ghost-btn sm" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Public form on the company's website; each enquiry becomes a lead (or a note on an existing one). */
+function WebFormEditor() {
+  const [form, setForm] = useState<WebForm | null>(null);
+  const [source, setSource] = useState("");
+  const [thankYou, setThankYou] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  function load(f: WebForm) {
+    setForm(f);
+    setSource(f.source);
+    setThankYou(f.thank_you);
+  }
+
+  useEffect(() => {
+    fetchWebForm()
+      .then(load)
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load the web form."));
+  }, []);
+
+  async function act(action: () => Promise<WebForm>, ok: string) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      load(await action());
+      setNotice(ok);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!form) return <ErrorNote message={error} />;
+  const url = form.key ? webFormUrl(form.key) : "";
+  const embed = `<iframe src="${url}" title="Enquiry form" style="width:100%;max-width:560px;height:680px;border:0"></iframe>`;
+  const changed = source !== form.source || thankYou !== form.thank_you;
+
+  return (
+    <div className="settings-block">
+      <p className="card-note" style={{ marginTop: 0 }}>
+        A contact form for your website. Each enquiry becomes a new lead (given out by the lead rotation when it's on), or a
+        note on the lead if the phone or email is already known. Bots are filtered with a hidden field and a rate limit.
+      </p>
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={form.enabled}
+          disabled={busy}
+          onChange={(e) =>
+            act(() => saveWebForm({ enabled: e.target.checked }), e.target.checked ? "The form is live." : "The form is off.")
+          }
+        />
+        <span>Accept enquiries from the web form</span>
+      </label>
+
+      {form.enabled && form.key && (
+        <div className="field-grid" style={{ marginTop: 12 }}>
+          <CopyField label="Link to share" value={url} />
+          <CopyField label="Embed on your website" value={embed} multiline />
+          <p className="card-note field full" style={{ margin: 0 }}>
+            <a href={url} target="_blank" rel="noreferrer">
+              Open the form
+            </a>{" "}
+            · Developers can also <code>POST</code> JSON (<code>name</code>, <code>company</code>, <code>phone</code>,{" "}
+            <code>email</code>, <code>message</code>) to the same link.
+          </p>
+        </div>
+      )}
+
+      <div className="field-grid" style={{ marginTop: 12 }}>
+        <label className="field">
+          <span>Lead source</span>
+          <input value={source} maxLength={60} onChange={(e) => setSource(e.target.value)} />
+        </label>
+        <label className="field full">
+          <span>Thank-you message</span>
+          <textarea rows={2} maxLength={300} value={thankYou} onChange={(e) => setThankYou(e.target.value)} />
+        </label>
+      </div>
+
+      <ErrorNote message={error} />
+      {notice && <div className="notice good">{notice}</div>}
+      <div className="form-actions">
+        <button
+          className="primary-btn"
+          disabled={busy || !changed || !source.trim() || !thankYou.trim()}
+          onClick={() => act(() => saveWebForm({ source: source.trim(), thank_you: thankYou.trim() }), "Saved.")}
+        >
+          Save
+        </button>
+        {form.key && (
+          <button
+            className="ghost-btn"
+            disabled={busy}
+            onClick={() => {
+              if (window.confirm("Make a new link? The current link and embed stop working immediately.")) {
+                void act(newWebFormKey, "New link created — update it on your website.");
+              }
+            }}
+          >
+            New link
+          </button>
+        )}
+      </div>
     </div>
   );
 }

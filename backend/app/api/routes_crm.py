@@ -10,10 +10,10 @@ from app.api.routes_leads import http_error
 from app.api.routes_opportunities import opportunity_rows
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_any_permission, require_permission
-from app.domain import activity_service, crm_service, fields, target_service
+from app.domain import activity_service, crm_service, fields, target_service, web_form
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, Activity, Lead, Opportunity
-from app.schemas.crm import CrmSummary, CustomFieldIn, CustomFieldOut, CustomFieldUpdate, TagCount, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetReport, TargetsIn
+from app.schemas.crm import CrmSummary, CustomFieldIn, CustomFieldOut, CustomFieldUpdate, TagCount, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetReport, TargetsIn, WebFormIn, WebFormOut
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -155,6 +155,40 @@ def list_tags(
         return fields.tag_counts(db, context, record_type)
     except ConflictError as exc:
         raise http_error(exc) from exc
+
+
+@router.get("/web-form", response_model=WebFormOut)
+def get_web_form(
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """The public enquiry form's settings, including its secret key."""
+
+    return web_form.settings_for(db, context)
+
+
+@router.put("/web-form", response_model=WebFormOut)
+def put_web_form(
+    body: WebFormIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Turning it on for the first time creates the secret key."""
+
+    try:
+        return web_form.update_settings(db, context, **body.model_dump(exclude_unset=True))
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/web-form/new-key", response_model=WebFormOut)
+def new_web_form_key(
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Replaces the secret link; the old one stops working at once."""
+
+    return web_form.regenerate_key(db, context)
 
 
 @router.get("/summary", response_model=CrmSummary)

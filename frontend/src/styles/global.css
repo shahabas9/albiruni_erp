@@ -3222,3 +3222,17 @@ button.tag-chip:hover {
 .drawer-section + .attachments {
   margin-bottom: 22px;
 }
+
+.copy-field {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.field .copy-field input,
+.field .copy-field textarea {
+  flex: 1;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}

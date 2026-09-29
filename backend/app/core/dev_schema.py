@@ -64,7 +64,10 @@ def ensure_dev_schema() -> None:
                 "owner_id": "UUID REFERENCES users(id)",
             },
             "quotations": {"opportunity_id": "UUID REFERENCES opportunities(id)"},
-            "crm_settings": {"lead_rotation": "JSONB NOT NULL DEFAULT '{}'::jsonb"},
+            "crm_settings": {
+                "lead_rotation": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+                "web_form": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+            },
         }
         for table in ("leads", "opportunities", "customers"):
             additions.setdefault(table, {}).update(

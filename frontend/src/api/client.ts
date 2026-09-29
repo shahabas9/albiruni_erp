@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const TOKEN_KEY = "albiruni-token";
 
 /** A record a create would duplicate (409 from the lead/customer forms). */
@@ -516,7 +516,7 @@ export interface TimelineEntry {
   summary: string;
   changes: Record<string, [unknown, unknown]>;
   /** Where the change was made. */
-  source: "app" | "ask_erp" | "import";
+  source: "app" | "ask_erp" | "import" | "web_form";
   actor_name: string | null;
 }
 
@@ -993,4 +993,31 @@ export async function downloadAttachment(attachment: Attachment): Promise<void> 
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// --- CRM: web enquiry form ------------------------------------------------------
+
+export interface WebForm {
+  enabled: boolean;
+  /** Secret part of the public link; null until first turned on. */
+  key: string | null;
+  /** Lead source recorded on enquiries. */
+  source: string;
+  thank_you: string;
+}
+
+export function webFormUrl(key: string): string {
+  return `${API_BASE}/api/public/enquiry/${key}`;
+}
+
+export function fetchWebForm(): Promise<WebForm> {
+  return request<WebForm>("/api/crm/web-form");
+}
+
+export function saveWebForm(body: Partial<{ enabled: boolean; source: string; thank_you: string }>): Promise<WebForm> {
+  return request<WebForm>("/api/crm/web-form", { method: "PUT", body: JSON.stringify(body) });
+}
+
+export function newWebFormKey(): Promise<WebForm> {
+  return request<WebForm>("/api/crm/web-form/new-key", { method: "POST" });
 }

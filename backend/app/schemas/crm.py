@@ -386,3 +386,16 @@ class AttachmentOut(BaseModel):
     size_bytes: int
     uploaded_by_name: str | None
     created_at: datetime
+
+
+class WebFormIn(BaseModel):
+    enabled: bool | None = None
+    source: str | None = Field(default=None, max_length=60)
+    thank_you: str | None = Field(default=None, max_length=300)
+
+
+class WebFormOut(BaseModel):
+    enabled: bool
+    key: str | None
+    source: str
+    thank_you: str

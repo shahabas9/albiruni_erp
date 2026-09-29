@@ -106,7 +106,7 @@ def record(
         company_id=context.company_id,
         record_type=record_type,
         record_id=record_id,
-        actor_user_id=context.user.id,
+        actor_user_id=context.user.id if context.user else None,  # None: the public web form
         source=context.channel,
         action=action,
         summary=summary[:400],

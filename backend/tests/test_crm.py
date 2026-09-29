@@ -579,6 +579,69 @@ class CrmTests(unittest.TestCase):
         attachment_service.save(self.db, self.context, "customer", customer.id, "gst.png", "image/png", io.BytesIO(b"png"))
         self.assertEqual(len(routes_attachments.list_attachments("customer", customer.id, self.context, self.db)), 1)
 
+    # --- Web enquiry form ----------------------------------------------------------
+
+    def test_web_form_creates_leads_safely(self):
+        from app.domain import web_form
+        from app.domain.errors import NotFoundError
+
+        web_form.reset_rate_limits()
+        self.addCleanup(web_form.reset_rate_limits)
+        off = routes_crm.get_web_form(self.context, self.db)
+        self.assertEqual((off["enabled"], off["key"]), (False, None))
+        on = routes_crm.put_web_form(crm.WebFormIn(enabled=True, source="Website form"), self.context, self.db)
+        key = on["key"]
+        self.assertTrue(on["enabled"] and len(key) >= 30)
+
+        result = web_form.submit(self.db, key, {"name": "Visitor", "phone": "+91 90000 12345",
+                                                "message": "Need 200 boxes"}, "10.0.0.1")
+        self.assertTrue(result["created"])
+        lead = lead_service.get_lead(self.db, self.context, result["lead_id"])
+        self.assertEqual((lead.source, lead.notes, lead.owner_user_id), ("Website form", "Need 200 boxes", None))
+        entry = routes_leads.lead_timeline(lead.id, self.context, self.db)[0]
+        self.assertEqual((entry["source"], entry["actor_name"]), ("web_form", None))
+
+        # The same person again: a note on their lead, not a second lead.
+        again = web_form.submit(self.db, key, {"name": "Visitor", "phone": "9000012345", "message": "Any update?"},
+                                "10.0.0.2")
+        self.assertEqual((again["created"], again["lead_id"]), (False, lead.id))
+        notes = self.activities_out(lead_id=lead.id)
+        self.assertEqual([a.subject for a in notes], ["Web enquiry: Any update?"])
+
+        # New leads follow the rotation when it's on.
+        asha = self.colleague("Asha")
+        routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[asha.id]), self.context, self.db)
+        rotated = web_form.submit(self.db, key, {"name": "Rotated", "email": "r@example.test"}, "10.0.0.3")
+        self.assertEqual(lead_service.get_lead(self.db, self.context, rotated["lead_id"]).owner_user_id, asha.id)
+
+        # Bad input, bots, floods, wrong or disabled keys.
+        for bad in ({"name": "No contact"}, {"phone": "9000099999"}, {"name": "X", "email": "nope"},
+                    {"name": "X", "phone": "123"}, {"name": "X" * 161, "phone": "9000099999"}):
+            with self.assertRaises(ConflictError, msg=bad):
+                web_form.submit(self.db, key, bad, "10.0.0.4")
+        bot = web_form.submit(self.db, key, {"name": "Bot", "phone": "9000077777", "website": "http://spam"}, "10.0.0.5")
+        self.assertEqual((bot["created"], bot["lead_id"]), (False, None))
+        self.assertEqual(self.leads_out(q="Bot"), [])
+        for i in range(web_form.PER_IP_LIMIT[0]):
+            try:
+                web_form.submit(self.db, key, {"name": f"Flood {i}", "phone": f"91000{i:05d}"}, "10.0.0.6")
+            except ConflictError:
+                pass
+        with self.assertRaises(web_form.RateLimited):
+            web_form.submit(self.db, key, {"name": "One more", "phone": "9100099999"}, "10.0.0.6")
+        with self.assertRaises(NotFoundError):
+            web_form.submit(self.db, "not-the-key", {"name": "X", "phone": "9000099999"}, "10.0.0.7")
+        old_key = key
+        key = routes_crm.new_web_form_key(self.context, self.db)["key"]
+        self.assertNotEqual(key, old_key)
+        with self.assertRaises(NotFoundError):
+            web_form.form_for_key(self.db, old_key)
+        routes_crm.put_web_form(crm.WebFormIn(enabled=False), self.context, self.db)
+        with self.assertRaises(NotFoundError):
+            web_form.form_for_key(self.db, key)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

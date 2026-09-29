@@ -223,6 +223,20 @@ are refused. Downloads are always served as attachments with `nosniff` and a
 sandbox CSP, never rendered inline. Adding or removing a file on a lead or
 deal shows in its history.
 
+**Web enquiry form.** `GET/PUT /api/crm/web-form` and
+`POST /api/crm/web-form/new-key` (`crm.settings.write`) switch on a public
+form at `/api/public/enquiry/<secret key>`: a hosted page to link to or
+embed in an iframe, and the same URL takes a JSON `POST` (`name`, `company`,
+`phone`, `email`, `message`) from a site's own form. It needs no login and
+only `/api/public/*` is open to any origin (`core/public_cors.py`); the rest
+of the API keeps its CORS allow-list. Guards: the key must match an enabled
+form (a new key kills the old link), a hidden honeypot field silently drops
+bots, submissions are rate-limited per IP and per form (in-process), and
+bodies are capped at 20 KB. An enquiry from a known phone or email is added
+to that lead as a note (reopening it if Lost) instead of creating a
+duplicate; new leads get the configured source and go to the lead rotation
+when it's on. History shows these as "Web form".
+
 **Record history.** Creating, editing, re-staging, reassigning or
 converting a lead or deal, logging or completing a follow-up, and raising a
 quotation each write a `crm_events` row in the same transaction: who, when,

@@ -183,6 +183,8 @@ class CrmSettings(Base):
     stale_after_days: Mapped[dict] = mapped_column(JSONB, default=dict)
     # {"enabled": bool, "user_ids": [ordered ids], "last_user_id": id | None}
     lead_rotation: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # {"enabled": bool, "key": secret for the public URL, "source": str, "thank_you": str}
+    web_form: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
 class SalesTarget(Base):
