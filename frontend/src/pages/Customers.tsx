@@ -2,7 +2,8 @@ import { useCallback, useState } from "react";
 import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
-import { DuplicateWarning, Pager, SearchBox } from "../crm/ui";
+import { Attachments } from "../crm/Attachments";
+import { Drawer, DuplicateWarning, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
@@ -18,6 +19,7 @@ export function Customers() {
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const [active, setActive] = useState<ActiveFilter>("all");
   const [tag, setTag] = useState("");
+  const [filesFor, setFilesFor] = useState<Customer | null>(null);
   const list = usePaged(
     (limit, offset) =>
       fetchCustomers({ q: search, active: active === "all" ? undefined : active === "active", tag, limit, offset }),
@@ -116,6 +118,9 @@ export function Customers() {
                       <button className="secondary-btn" onClick={() => setEditingId(c.id)}>
                         Edit
                       </button>
+                      <button className="secondary-btn" onClick={() => setFilesFor(c)}>
+                        Files
+                      </button>
                       <button
                         className="secondary-btn"
                         onClick={async () => {
@@ -138,6 +143,12 @@ export function Customers() {
         </div>
       )}
       <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
+
+      {filesFor && (
+        <Drawer title={filesFor.name} subtitle="Files" onClose={() => setFilesFor(null)}>
+          <Attachments recordType="customer" recordId={filesFor.id} canWrite={can("sales.customer.write")} />
+        </Drawer>
+      )}
     </section>
   );
 }

@@ -520,6 +520,65 @@ class CrmTests(unittest.TestCase):
         self.import_csv("leads", "name,phone,tags\nCsv Tag,9011122233,VIP; Kerala | hot\n", commit=True)
         self.assertEqual(self.leads_out(q="Csv Tag")[0].tags, ["vip", "kerala", "hot"])
 
+    # --- Attachments -------------------------------------------------------------
+
+    def test_attachments_store_download_and_respect_permissions(self):
+        import io
+        import tempfile
+        from app.api import routes_attachments
+        from app.core.config import settings
+        from app.domain import attachment_service
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        old_dir, old_mb = settings.attachments_dir, settings.attachment_max_mb
+        settings.attachments_dir, settings.attachment_max_mb = folder.name, 1
+        self.addCleanup(setattr, settings, "attachments_dir", old_dir)
+        self.addCleanup(setattr, settings, "attachment_max_mb", old_mb)
+
+        lead = self.lead(name="With files")
+        saved = attachment_service.save(self.db, self.context, "lead", lead.id, "../../etc/quote <v2>.pdf",
+                                        "application/pdf", io.BytesIO(b"%PDF-1.4 hello"))
+        self.assertEqual((saved["filename"], saved["size_bytes"], saved["uploaded_by_name"]),
+                         ("quote v2.pdf", 14, "Test user"))
+        listed = routes_attachments.list_attachments("lead", lead.id, self.context, self.db)
+        self.assertEqual([a["id"] for a in listed], [saved["id"]])
+        self.assertEqual(routes_leads.lead_timeline(lead.id, self.context, self.db)[0]["summary"], "Attached quote v2.pdf")
+
+        response = routes_attachments.download_attachment(saved["id"], self.context, self.db)
+        self.assertEqual(open(response.path, "rb").read(), b"%PDF-1.4 hello")
+        self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertEqual(response.media_type, "application/octet-stream")
+
+        for name, data in (("run.exe", b"MZ"), ("empty.txt", b""), ("big.bin", b"x" * (1024 * 1024 + 1))):
+            with self.assertRaises(ConflictError, msg=name):
+                attachment_service.save(self.db, self.context, "lead", lead.id, name, None, io.BytesIO(data))
+        # Refused uploads leave nothing behind.
+        leftovers = [p for p in __import__("pathlib").Path(folder.name).rglob("*") if p.is_file()]
+        self.assertEqual(len(leftovers), 1)
+
+        # Read needs the record's read permission; upload/delete need write; other companies see nothing.
+        reader = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        self.assertEqual(len(routes_attachments.list_attachments("lead", lead.id, reader, self.db)), 1)
+        with self.assertRaises(HTTPException) as denied:
+            routes_attachments.delete_attachment(saved["id"], reader, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
+        with self.assertRaises(HTTPException) as other:
+            routes_attachments.list_attachments("lead", lead.id, self.make_context(["*"]), self.db)
+        self.assertEqual(other.exception.status_code, 404)
+        with self.assertRaises(HTTPException):
+            routes_attachments.list_attachments("lead", lead.id, self.make_context(["crm.opportunity.read"],
+                                                *self._tenant_and_company()), self.db)
+
+        routes_attachments.delete_attachment(saved["id"], self.context, self.db)
+        self.assertEqual(routes_attachments.list_attachments("lead", lead.id, self.context, self.db), [])
+        self.assertFalse(any(p.is_file() for p in __import__("pathlib").Path(folder.name).rglob("*")))
+
+        customer = crm_service.find_or_create_customer(self.db, self.context, "Files Co")
+        self.db.commit()
+        attachment_service.save(self.db, self.context, "customer", customer.id, "gst.png", "image/png", io.BytesIO(b"png"))
+        self.assertEqual(len(routes_attachments.list_attachments("customer", customer.id, self.context, self.db)), 1)
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

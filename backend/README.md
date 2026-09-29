@@ -212,6 +212,17 @@ sent. A field's key and type never change; archiving hides it from forms but
 keeps saved values. Changes show in record history under the field's name.
 CSV import reads a Tags column (separated by `,`, `;` or `|`).
 
+**Attachments.** `GET /api/attachments?record_type=&record_id=`,
+`POST /api/attachments` (multipart: `record_type`, `record_id`, `file`),
+`GET /api/attachments/{id}/download` and `DELETE /api/attachments/{id}` put
+files on leads, opportunities and customers. Reading needs the record's read
+permission, adding or removing its write permission. Files are stored under
+`ATTACHMENTS_DIR` (default `var/attachments`, one folder per tenant), at most
+`ATTACHMENT_MAX_MB` (default 10) each and 50 per record; programs and scripts
+are refused. Downloads are always served as attachments with `nosniff` and a
+sandbox CSP, never rendered inline. Adding or removing a file on a lead or
+deal shows in its history.
+
 **Record history.** Creating, editing, re-staging, reassigning or
 converting a lead or deal, logging or completing a follow-up, and raising a
 quotation each write a `crm_events` row in the same transaction: who, when,

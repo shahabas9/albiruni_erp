@@ -375,3 +375,14 @@ class CustomFieldOut(BaseModel):
 class TagCount(BaseModel):
     tag: str
     count: int
+
+
+class AttachmentOut(BaseModel):
+    id: UUID
+    record_type: str
+    record_id: UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    uploaded_by_name: str | None
+    created_at: datetime

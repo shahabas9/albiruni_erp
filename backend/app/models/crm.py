@@ -217,3 +217,22 @@ class CustomField(Base):
     position: Mapped[int] = mapped_column(default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Attachment(Base):
+    """A file on a lead, deal or customer. The bytes live on disk under
+    settings.attachments_dir/<tenant>/<id>; this row is the index."""
+
+    __tablename__ = "attachments"
+    __table_args__ = (Index("ix_attachments_record", "record_type", "record_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    record_type: Mapped[str] = mapped_column(String(20))  # lead | opportunity | customer
+    record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    filename: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column()
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

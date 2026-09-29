@@ -67,7 +67,8 @@ async function send(path: string, options: RequestInit = {}): Promise<Response> 
   const token = getToken();
   const headers = new Headers(options.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (options.body && !(options.body instanceof URLSearchParams)) {
+  // FormData sets its own multipart boundary; everything else we send is JSON.
+  if (options.body && !(options.body instanceof URLSearchParams) && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -950,4 +951,46 @@ export function updateCustomField(
 
 export function fetchTags(recordType: RecordType): Promise<{ tag: string; count: number }[]> {
   return request<{ tag: string; count: number }[]>(`/api/crm/tags${query({ record_type: recordType })}`);
+}
+
+// --- CRM: attachments ----------------------------------------------------------
+
+export interface Attachment {
+  id: string;
+  record_type: RecordType;
+  record_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  uploaded_by_name: string | null;
+  created_at: string;
+}
+
+export const ATTACHMENT_MAX_MB = 10;
+
+export function fetchAttachments(recordType: RecordType, recordId: string): Promise<Attachment[]> {
+  return request<Attachment[]>(`/api/attachments${query({ record_type: recordType, record_id: recordId })}`);
+}
+
+export function uploadAttachment(recordType: RecordType, recordId: string, file: File): Promise<Attachment> {
+  const body = new FormData();
+  body.set("record_type", recordType);
+  body.set("record_id", recordId);
+  body.set("file", file);
+  return request<Attachment>("/api/attachments", { method: "POST", body });
+}
+
+export function deleteAttachment(id: string): Promise<void> {
+  return request<void>(`/api/attachments/${id}`, { method: "DELETE" });
+}
+
+/** Downloads with the session token (a plain link can't send it) and saves under the original name. */
+export async function downloadAttachment(attachment: Attachment): Promise<void> {
+  const res = await send(`/api/attachments/${attachment.id}/download`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: attachment.filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -19,6 +19,7 @@ import { Icon } from "../components/Icon";
 import { useAppData } from "../data/AppDataProvider";
 import { dateTime, inr, quoteStatusClass, relativeDue, shortDate } from "../lib/format";
 import { ContactActions } from "./ContactActions";
+import { Attachments } from "./Attachments";
 import { CustomFieldInputs, CustomFieldValues, TagChips, TagInput, changedCustom, useCustomFields } from "./fields";
 import { FollowUpModal, LostReasonModal, QuoteForm } from "./forms";
 import { Timeline } from "./Timeline";
@@ -292,6 +293,13 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
             ))}
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <span className="card-title">Files</span>
+        </div>
+        <Attachments recordType="opportunity" recordId={opp.id} canWrite={canWrite} onChange={() => void refresh()} />
       </div>
 
       <div className="card">

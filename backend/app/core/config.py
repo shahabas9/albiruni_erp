@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480
     cors_origins: str = "http://localhost:5173"
+    # Where uploaded files are kept (one folder per tenant). Relative paths
+    # are relative to the directory the API is started from.
+    attachments_dir: str = "var/attachments"
+    attachment_max_mb: int = 10
 
     @property
     def cors_origin_list(self) -> list[str]:

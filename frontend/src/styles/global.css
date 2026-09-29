@@ -3192,3 +3192,33 @@ button.tag-chip:hover {
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
+
+/* ================= Attachments ================= */
+
+.attachments .file-name {
+  padding: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.attach-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.attach-actions .card-note {
+  margin: 0;
+}
+
+.drawer-section {
+  font-size: 14.5px;
+  margin: 4px 0 10px;
+  color: var(--ink);
+}
+
+.drawer-section + .attachments {
+  margin-bottom: 22px;
+}

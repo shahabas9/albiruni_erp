@@ -9,6 +9,7 @@ from app.core.dev_schema import ensure_dev_schema
 # Import routers
 from app.api import (
     routes_activities,
+    routes_attachments,
     routes_crm,
     routes_admin,
     routes_ask,
@@ -64,6 +65,7 @@ app.include_router(routes_opportunities.router)
 app.include_router(routes_activities.router)
 app.include_router(routes_activities.assignees_router)
 app.include_router(routes_crm.router)
+app.include_router(routes_attachments.router)
 
 
 @app.get("/api/health")

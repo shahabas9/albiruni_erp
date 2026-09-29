@@ -20,6 +20,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
+import { Attachments } from "../crm/Attachments";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
@@ -46,6 +47,7 @@ export function Leads() {
   const [followUpFor, setFollowUpFor] = useState<Lead | null>(null);
   const [importing, setImporting] = useState(false);
   const [historyFor, setHistoryFor] = useState<Lead | null>(null);
+  const [fileChanges, setFileChanges] = useState(0);
   const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
   const [status, setStatus] = useState(params.get("status") ?? "");
   const [tag, setTag] = useState(params.get("tag") ?? "");
@@ -180,7 +182,7 @@ export function Leads() {
                       )}
                     </td>
                     <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <button className="ghost-btn sm" onClick={() => setHistoryFor(l)} title="History" aria-label="History">
+                      <button className="ghost-btn sm" onClick={() => setHistoryFor(l)} title="Files and history" aria-label="History">
                         <Icon name="clock" size={14} />
                       </button>
                       {l.status === "Converted" && l.converted_opportunity_id && (
@@ -239,10 +241,18 @@ export function Leads() {
       {historyFor && (
         <Drawer
           title={historyFor.company_name || historyFor.name}
-          subtitle={`History · ${historyFor.status}`}
+          subtitle={`${historyFor.company_name ? historyFor.name + " · " : ""}${historyFor.status}`}
           onClose={() => setHistoryFor(null)}
         >
-          <Timeline load={() => fetchLeadTimeline(historyFor.id)} version={version} />
+          <h3 className="drawer-section">Files</h3>
+          <Attachments
+            recordType="lead"
+            recordId={historyFor.id}
+            canWrite={can("crm.lead.write") && historyFor.status !== "Converted"}
+            onChange={() => setFileChanges((n) => n + 1)}
+          />
+          <h3 className="drawer-section">History</h3>
+          <Timeline load={() => fetchLeadTimeline(historyFor.id)} version={version + fileChanges} />
         </Drawer>
       )}
 
