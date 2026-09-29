@@ -6,13 +6,14 @@ Run against an empty disposable database only:
 import os
 import unittest
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.api import routes_activities, routes_leads, routes_opportunities
+from app.api import routes_activities, routes_ask, routes_imports, routes_leads, routes_opportunities
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext, require_any_permission, require_permission
 from app.core.dev_schema import ensure_dev_schema
@@ -20,11 +21,13 @@ from app.domain import activity_service, crm_service, lead_service, opportunity_
 from app.domain.errors import ConflictError
 from app.models.crm import Activity, Lead, Opportunity
 from app.models.identity import Role, User
-from app.models.sales import Item
+from app.models.sales import Customer, Item
 from app.models.tenant import Company, Tenant
 from app.schemas import crm
+from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.customers import CustomerIn, CustomerUpdate
-from app.toolgateway import tools_sales  # noqa: F401 — registers the quotation tool
+from app.models.audit import AuditEvent
+from app.toolgateway import tools_crm, tools_sales  # noqa: F401 — registers the tools
 
 
 @unittest.skipUnless(os.environ.get("CRM_TEST_DB") == "1", "requires a disposable PostgreSQL database")
@@ -247,6 +250,150 @@ class CrmTests(unittest.TestCase):
         self.assertIsNotNone(call.completed_at)
         self.assertFalse(crm_service.is_overdue(call))
         self.assertEqual(routes_leads.list_leads(self.context, self.db)[0].open_activities, 0)
+
+    # --- Ask ERP: CRM commands ------------------------------------------------------
+
+    def ask(self, text, context=None):
+        return routes_ask.ask(AskRequest(text=text, timezone="Asia/Kolkata"), context or self.context, self.db)
+
+    def confirm(self, preview, context=None):
+        return routes_ask.confirm(ConfirmRequest(preview_token=preview["preview_token"]), context or self.context, self.db)
+
+    def test_ask_logs_a_call_after_confirmation_only(self):
+        lead = self.lead(name="Nisha R", company_name="Kannur Tiles & Co")
+        preview = self.ask("called nisha, she wants 200 boxes")
+        self.assertEqual(preview["type"], "action_preview")
+        self.assertIn({"label": "On", "value": "Lead: Kannur Tiles & Co (Nisha R)"}, preview["lines"])
+        self.assertEqual(self.db.execute(select(Activity).where(Activity.lead_id == lead.id)).first(), None)
+
+        result = self.confirm(preview)
+        call = self.db.execute(select(Activity).where(Activity.lead_id == lead.id)).scalar_one()
+        self.assertEqual((call.type, call.done, call.notes), ("Call", True, "she wants 200 boxes"))
+        self.assertIn("Logged", result["result_summary"])
+        audit = self.db.execute(select(AuditEvent).where(AuditEvent.tool_name == "crm.log_activity.v1",
+                                                         AuditEvent.tenant_id == self.context.tenant_id)).scalar_one()
+        self.assertTrue(audit.confirmed)
+        with self.assertRaises(HTTPException):  # single use
+            self.confirm(preview)
+
+    def test_ask_schedules_in_the_users_timezone_on_the_only_open_deal(self):
+        opp = self.deal(customer="Malabar Hardware", name="Branch expansion", owner_user_id=self.context.user.id)
+        preview = self.ask("remind me to call Malabar tomorrow at 3pm")
+        self.assertIn({"label": "On", "value": "Deal: Branch expansion"}, preview["lines"])
+        self.confirm(preview)
+        task = self.db.execute(select(Activity).where(Activity.opportunity_id == opp.id)).scalar_one()
+        local = task.due_at.astimezone(ZoneInfo("Asia/Kolkata"))
+        self.assertEqual((local.hour, local.minute), (15, 0))
+        self.assertEqual(local.date(), (datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=1)).date())
+        self.assertFalse(task.done)
+
+    def test_ask_asks_which_one_when_a_name_is_ambiguous(self):
+        crm_service.find_or_create_customer(self.db, self.context, "Rahman Traders")
+        self.lead(name="Rahman K", company_name="Rahman Steels")
+        self.db.commit()
+        reply = self.ask("log a call with rahman")
+        self.assertEqual(reply["type"], "clarify")
+        self.assertEqual(len(reply["options"]), 2)
+        picked = self.ask(reply["options"][0])
+        self.assertEqual(picked["type"], "action_preview")
+        unknown = self.ask("log a call with Zebra Foods")
+        self.assertEqual(unknown["type"], "clarify")
+
+    def test_ask_closing_a_deal_as_lost_needs_a_reason(self):
+        opp = self.deal(customer="Feroke Tiles", name="Monsoon stock")
+        reply = self.ask("mark Feroke lost")
+        self.assertEqual(reply["type"], "clarify")
+        preview = self.ask(reply["options"][0])
+        self.assertEqual(preview["type"], "action_preview")
+        self.confirm(preview)
+        self.db.refresh(opp)
+        self.assertEqual((opp.stage, opp.lost_reason), ("Lost", "Price too high"))
+
+    def test_ask_answers_reads_and_respects_permissions(self):
+        lead = self.lead()
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Chase payment", lead_id=lead.id,
+            due_at=datetime.now(timezone.utc) - timedelta(days=2)))
+        answer = self.ask("what's overdue today")
+        self.assertEqual(answer["type"], "answer")
+        self.assertEqual(answer["items"][0]["title"], "Chase payment")
+        self.assertEqual(answer["items"][0]["tone"], "bad")
+
+        viewer = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        self.assertEqual(self.ask("what's overdue today", viewer)["type"], "denied")
+        self.assertEqual(self.ask("log a call with Customer Co", viewer)["type"], "denied")
+        other = self.make_context(["*"], *self._tenant_and_company())
+        preview = self.ask("log a call with Customer Co")
+        with self.assertRaises(HTTPException) as stolen:
+            self.confirm(preview, other)
+        self.assertEqual(stolen.exception.status_code, 403)
+
+    # --- CSV import -----------------------------------------------------------------
+
+    def import_csv(self, kind, text, commit=False, context=None):
+        return routes_imports.import_csv(kind, routes_imports.ImportIn(csv=text), commit, context or self.context, self.db)
+
+    def test_lead_import_matches_loose_headers_and_skips_duplicates(self):
+        self.lead(name="Existing", phone="+91 94460 44556")
+        colleague = self.make_context([], *self._tenant_and_company())
+        csv_text = (
+            "\ufeffContact Person;Business;Mobile No;E-mail;Remarks;Assigned To\n"
+            "Nisha R;Kannur Tiles;09446044556;;dup of existing;\n"          # same number, other format
+            "Shafeeq;Calicut Build Mart;98470 11223;shafeeq@example.test;;\n"
+            ";Beypore Traders;98470 99999;;company only;Test user\n"
+            "Anil;;98470 11223;;same as row 3;\n"                             # duplicate inside the file
+            "Bad Email;X;;not-an-email;;\n"
+            "Ghost;Y;;;;Nobody\n"
+            ";;;;;\n"                                                             # blank line, ignored
+        )
+        preview = self.import_csv("leads", csv_text)
+        by_line = {r["line"]: r for r in preview["rows"]}
+        self.assertEqual(preview["columns"]["phone"], "Mobile No")
+        self.assertEqual((preview["total"], preview["ok"], preview["duplicates"], preview["errors"]), (6, 2, 2, 2))
+        self.assertEqual(by_line[2]["status"], "duplicate")
+        self.assertEqual(by_line[4]["values"]["name"], "Beypore Traders")  # company used as the name
+        self.assertEqual(by_line[5]["status"], "duplicate")
+        self.assertIn("valid email", by_line[6]["messages"][0])
+        self.assertIn("Nobody", by_line[7]["messages"][0])
+        self.assertEqual(len(lead_service.list_leads(self.db, self.context)), 1)  # dry run wrote nothing
+
+        done = self.import_csv("leads", csv_text, commit=True)
+        self.assertEqual(done["created"], 2)
+        leads = {l.name: l for l in lead_service.list_leads(self.db, self.context)}
+        self.assertEqual(leads["Shafeeq"].source, "Import")
+        self.assertEqual(leads["Shafeeq"].owner_user_id, self.context.user.id)  # importer owns by default
+        self.assertEqual(self.import_csv("leads", csv_text)["ok"], 0)  # re-import finds them all
+
+        writer = self.make_context(["crm.lead.write"], *self._tenant_and_company())
+        other_owner = self.import_csv("leads", f"name,phone,owner\nZed,9000000001,{colleague.user.username}\n", context=writer)
+        self.assertEqual(other_owner["errors"], 1)
+
+    def test_customer_import_validates_gstin_and_amounts(self):
+        crm_service.find_or_create_customer(self.db, self.context, "Rahman Traders")
+        self.db.commit()
+        result = self.import_csv("customers", (
+            "Party Name,GSTIN/UIN,Credit Limit\n"
+            "Coastal Traders,27aapfu0939f1zv,\"₹1,50,000\"\n"
+            "rahman traders,,\n"
+            "Typo Co,27AAPFU0939F1ZX,0\n"
+            "Minus,,-5\n"
+        ), commit=True)
+        by_line = {r["line"]: r for r in result["rows"]}
+        self.assertEqual((result["created"], result["duplicates"], result["errors"]), (1, 1, 2))
+        coastal = self.db.execute(select(Customer).where(Customer.name == "Coastal Traders",
+                                                         Customer.tenant_id == self.context.tenant_id)).scalar_one()
+        self.assertEqual((coastal.gstin, float(coastal.credit_limit)), ("27AAPFU0939F1ZV", 150000.0))
+        self.assertIn("check character", by_line[4]["messages"][0])
+
+    def test_import_rejects_unusable_files_and_missing_permission(self):
+        for bad in ("", "phone,email\n123,a@b.c\n", "name\n"):
+            with self.assertRaises(HTTPException) as refused:
+                self.import_csv("leads", bad)
+            self.assertEqual(refused.exception.status_code, 422)
+        reader = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        with self.assertRaises(HTTPException) as denied:
+            self.import_csv("leads", "name\nA\n", context=reader)
+        self.assertEqual(denied.exception.status_code, 403)
 
     # --- GSTIN -------------------------------------------------------------------
 

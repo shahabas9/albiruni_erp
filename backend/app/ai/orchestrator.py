@@ -1,7 +1,8 @@
 """A minimal stand-in for the "AI Orchestrator + Model Gateway" layer.
 
 This is intentionally NOT a real LLM integration — it is a small
-regex-based intent classifier and entity extractor, just enough to drive
+regex-based entity extractor for quotations (intent classification for
+every request, CRM included, lives in crm_parser.py), just enough to drive
 the same Understand -> Resolve -> Validate -> Preview -> Confirm -> Execute
 pipeline from Appendix A end-to-end without an external API key. Swapping
 this module for a real LLM call (with the tool registry exposed as
@@ -17,8 +18,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-QUOTATION_KEYWORDS = ("quotation", "quote")
-
 _QTY_LINE_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s+(?:boxes?|units?|pcs?|pieces?)\s+((?:[A-Z][\w]*\s*)+)",
 )
@@ -31,13 +30,6 @@ class ParsedQuotationRequest:
     customer_name: str | None
     lines: list[dict[str, Any]]
     discount_pct: float
-
-
-def classify_intent(text: str) -> str:
-    lowered = text.lower()
-    if any(kw in lowered for kw in QUOTATION_KEYWORDS):
-        return "sales.create_quotation"
-    return "unknown"
 
 
 def parse_quotation_request(text: str) -> ParsedQuotationRequest:

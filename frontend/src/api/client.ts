@@ -152,13 +152,40 @@ export interface CreateQuotationResult {
 
 export type AskResponse =
   | { type: "preview"; preview_token: string; correlation_id: string; tool_name: string; risk_level: string; customer: string; lines: QuotationLine[]; subtotal: number; discount_pct: number; discount_amount: number; total: number; requires_approval: boolean; warnings: string[] }
-  | { type: "message" | "clarify" | "denied" | "error"; message: string };
+  | ActionPreview
+  | AskAnswer
+  | { type: "message" | "clarify" | "denied" | "error"; message: string; options?: string[] };
+
+/** A CRM write Ask ERP will perform only after you confirm it. */
+export interface ActionPreview {
+  type: "action_preview";
+  preview_token: string;
+  correlation_id: string;
+  tool_name: string;
+  risk_level: string;
+  title: string;
+  lines: { label: string; value: string }[];
+  warnings: string[];
+}
+
+/** A read Ask ERP answered straight away (overdue follow-ups, stale deals, pipeline). */
+export interface AskAnswer {
+  type: "answer";
+  message: string;
+  items: { title: string; subtitle: string; tone: "bad" | "warn" | null; link: string | null }[];
+  link: { label: string; to: string } | null;
+}
 
 export function askErp(text: string): Promise<AskResponse> {
-  return request<AskResponse>("/api/ask", { method: "POST", body: JSON.stringify({ text }) });
+  // The browser's timezone, so "tomorrow at 3pm" means the user's 3pm.
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata";
+  return request<AskResponse>("/api/ask", { method: "POST", body: JSON.stringify({ text, timezone }) });
 }
 
 export interface ConfirmResponse {
+  /** CRM tools: what was done, and where to see it. */
+  result_summary?: string;
+  link?: { label: string; to: string };
   quotation_id: string;
   number: string;
   status: string;
@@ -584,4 +611,29 @@ export function updateActivity(
   body: Partial<{ subject: string; notes: string; due_date: string | null; done: boolean }>,
 ): Promise<Activity> {
   return request<Activity>(`/api/activities/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+// --- CSV import -----------------------------------------------------------------
+
+export type ImportKind = "leads" | "customers";
+
+export interface ImportResult {
+  kind: ImportKind;
+  /** canonical column -> the header it was read from */
+  columns: Record<string, string>;
+  total: number;
+  ok: number;
+  duplicates: number;
+  errors: number;
+  created: number;
+  committed: boolean;
+  rows: { line: number; status: "ok" | "duplicate" | "error"; messages: string[]; values: Record<string, string> }[];
+}
+
+/** Dry run by default; commit=true creates the valid rows. */
+export function importCsv(kind: ImportKind, csv: string, commit = false): Promise<ImportResult> {
+  return request<ImportResult>(`/api/imports/${kind}${commit ? "?commit=true" : ""}`, {
+    method: "POST",
+    body: JSON.stringify({ csv }),
+  });
 }

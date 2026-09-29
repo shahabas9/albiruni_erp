@@ -11,6 +11,7 @@ import {
   type LeadStatus,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
+import { CsvImport } from "../components/CsvImport";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
 import { FollowUpModal } from "../crm/forms";
@@ -33,6 +34,7 @@ export function Leads() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [followUpFor, setFollowUpFor] = useState<Lead | null>(null);
+  const [importing, setImporting] = useState(false);
   const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
   const { user } = useAuth();
   const { leads, loading, error: loadError, assignees, refresh: reload, can } = useAppData();
@@ -74,10 +76,16 @@ export function Leads() {
           ))}
         </div>
         {can("crm.lead.write") && (
-          <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
-            {showForm ? "Cancel" : "+ New lead"}
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="ghost-btn" onClick={() => setImporting(true)}>
+              Import CSV
+            </button>
+            <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
+              {showForm ? "Cancel" : "+ New lead"}
+            </button>
+          </div>
         )}
+        {importing && <CsvImport kind="leads" onClose={() => setImporting(false)} onImported={reload} />}
       </div>
 
       {showForm && <LeadForm ownerId={user?.id ?? null} onDone={() => { setShowForm(false); reload(); }} />}

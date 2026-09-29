@@ -15,6 +15,7 @@ from app.api import (
     routes_auth,
     routes_contacts,
     routes_customers,
+    routes_imports,
     routes_items,
     routes_leads,
     routes_opportunities,
@@ -25,7 +26,7 @@ from app.api import (
 # Import tool modules for their registration side effect (each module calls
 # register_tool() at import time). This is the whole tool catalog today;
 # new domains add a module here and nowhere else needs to change.
-from app.toolgateway import tools_sales  # noqa: F401
+from app.toolgateway import tools_crm, tools_sales  # noqa: F401
 
 
 @asynccontextmanager
@@ -52,6 +53,7 @@ app.include_router(routes_sales.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)
 app.include_router(routes_customers.router)
+app.include_router(routes_imports.router)
 app.include_router(routes_items.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_leads.router)

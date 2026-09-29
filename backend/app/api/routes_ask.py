@@ -1,9 +1,13 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.ai import crm_commands
+from app.ai.crm_parser import classify_intent
 from app.ai.orchestrator import (
     PendingPreview,
-    classify_intent,
     new_correlation_id,
     parse_quotation_request,
     pop_preview,
@@ -36,10 +40,15 @@ def ask(
     confirmable preview — POST /api/ask/confirm is the only path that acts.
     """
 
-    intent = classify_intent(body.text)  # Understand
+    try:
+        timezone = str(ZoneInfo(body.timezone))
+    except (ZoneInfoNotFoundError, ValueError):
+        timezone = "Asia/Kolkata"
+    now_local = datetime.now(ZoneInfo(timezone)).replace(tzinfo=None)
+    intent = classify_intent(body.text, now_local)  # Understand
 
     if intent != "sales.create_quotation":
-        return {"type": "message", "message": f"I can help create a quotation right now. {CLARIFY_HINT}"}
+        return _crm(body.text, intent, timezone, context, db)
 
     tool = get_tool("sales.create_quotation_draft.v1")
     assert tool is not None
@@ -101,6 +110,48 @@ def ask(
         "total": pricing.total,
         "requires_approval": pricing.requires_approval,
         "warnings": pricing.warnings,
+    }
+
+
+def _crm(text: str, intent: str, timezone: str, context: RequestContext, db: Session) -> dict:
+    """CRM requests: reads answer now; writes return a preview to confirm."""
+
+    plan = crm_commands.plan(db, context, text, intent, timezone)
+    if isinstance(plan, crm_commands.Reply):
+        return {"type": plan.type, "message": plan.message, "options": plan.options}
+
+    denied = crm_commands.tool_permission_reply(context, plan.tool_name)  # Authorize
+    if denied:
+        return {"type": denied.type, "message": denied.message, "options": []}
+
+    tool = get_tool(plan.tool_name)
+    correlation_id = new_correlation_id()
+
+    if isinstance(plan, crm_commands.ReadPlan):  # L1: nothing to confirm — answer, audited
+        result = execute_tool(
+            db, context, plan.tool_name, plan.args,
+            request_text=text, intent=intent, correlation_id=correlation_id, confirmed=False,
+        )
+        return {"type": "answer", "message": result["message"], "items": result["items"], "link": result.get("link")}
+
+    token = store_preview(PendingPreview(  # L2: preview only; /confirm runs it
+        user_id=context.user.id,
+        tenant_id=context.tenant_id,
+        tool_name=plan.tool_name,
+        intent=intent,
+        request_text=text,
+        correlation_id=correlation_id,
+        args=plan.args,
+    ))
+    return {
+        "type": "action_preview",
+        "preview_token": token,
+        "correlation_id": correlation_id,
+        "tool_name": plan.tool_name,
+        "risk_level": tool.risk_level,
+        "title": plan.title,
+        "lines": plan.lines,
+        "warnings": plan.warnings,
     }
 
 
