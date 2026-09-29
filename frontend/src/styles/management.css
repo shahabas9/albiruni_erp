@@ -9,7 +9,7 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-text);
   margin-bottom: 4px;
 }
 
@@ -115,7 +115,7 @@
   width: 100%;
   background: var(--surface-2);
   border: 1px dashed var(--line-strong);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 12px;
   font-weight: 600;
   padding: 7px 10px;
@@ -130,7 +130,7 @@
 .explain-link:hover {
   background: var(--accent-soft);
   border-style: solid;
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .headline-card {
@@ -314,7 +314,7 @@ tr.new-row {
 
 .badge.l1 {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .badge.l2 {
@@ -506,8 +506,8 @@ tr.new-row {
 
 .perm-chip.on {
   background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-text);
+  color: var(--accent-text);
 }
 
 .login-hint code {

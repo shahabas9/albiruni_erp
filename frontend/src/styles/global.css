@@ -332,7 +332,7 @@ img {
 }
 
 .omnibox:focus-within {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
@@ -518,7 +518,7 @@ img {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-text);
   margin-bottom: 4px;
 }
 
@@ -671,7 +671,7 @@ img {
   height: 48px;
   border-radius: 12px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -916,7 +916,7 @@ img {
 }
 
 .qa-green .qa-icon {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .qa-blue {
@@ -969,7 +969,7 @@ img {
 
 .tabs button.on {
   color: var(--ink);
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--accent-text);
 }
 
 .tabs .pill {
@@ -1118,7 +1118,7 @@ td .sub {
 
 .badge.accent {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .select-sm {
@@ -1195,7 +1195,7 @@ td .sub {
 }
 
 .deal-card:hover {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .deal-card.overdue {
@@ -1506,12 +1506,12 @@ td .sub {
 .stage-steps button.done {
   background: var(--accent-soft);
   border-color: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .stage-steps button.on {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   color: var(--accent-ink);
 }
 
@@ -1660,9 +1660,9 @@ td .sub {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(circle at 50% 40%, #2ad6b0 0%, #0f7f86 45%, #0b3550 75%);
-  box-shadow: 0 0 0 10px rgba(47, 224, 184, 0.08), 0 0 0 2px rgba(215, 242, 94, 0.55) inset,
-    0 0 60px 8px rgba(47, 224, 184, 0.35);
+  background: radial-gradient(circle at 50% 40%, #36d6cc 0%, #1a8f93 45%, #0b3550 75%);
+  box-shadow: 0 0 0 10px rgba(54, 214, 204, 0.08), 0 0 0 2px rgba(214, 244, 111, 0.55) inset,
+    0 0 60px 8px rgba(54, 214, 204, 0.35);
   transition: transform 0.2s, width 0.2s, height 0.2s;
 }
 
@@ -1676,8 +1676,8 @@ td .sub {
 
 @keyframes pulse {
   50% {
-    box-shadow: 0 0 0 18px rgba(47, 224, 184, 0.12), 0 0 0 2px rgba(215, 242, 94, 0.8) inset,
-      0 0 80px 16px rgba(47, 224, 184, 0.5);
+    box-shadow: 0 0 0 18px rgba(54, 214, 204, 0.12), 0 0 0 2px rgba(214, 244, 111, 0.8) inset,
+      0 0 80px 16px rgba(54, 214, 204, 0.5);
   }
 }
 
@@ -1777,7 +1777,7 @@ td .sub {
   align-items: center;
   gap: 8px;
   background: transparent;
-  border: 1px solid rgba(47, 224, 184, 0.45);
+  border: 1px solid rgba(54, 214, 204, 0.45);
   color: var(--copilot-ink);
   padding: 9px 14px;
   border-radius: 12px;
@@ -1787,7 +1787,7 @@ td .sub {
 }
 
 .suggestions button:hover:not(:disabled) {
-  background: rgba(47, 224, 184, 0.1);
+  background: rgba(54, 214, 204, 0.1);
 }
 
 .suggestions button:disabled {
@@ -1852,8 +1852,8 @@ td .sub {
 }
 
 .preview-card.settled {
-  border-color: rgba(47, 224, 184, 0.6);
-  background: rgba(47, 224, 184, 0.08);
+  border-color: rgba(54, 214, 204, 0.6);
+  background: rgba(54, 214, 204, 0.08);
 }
 
 .preview-card .pc-title {
@@ -1939,7 +1939,7 @@ td .sub {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 10px 30px -8px rgba(215, 242, 94, 0.55);
+  box-shadow: 0 10px 30px -8px rgba(214, 244, 111, 0.55);
   transition: transform 0.15s;
 }
 
@@ -1987,7 +1987,7 @@ td .sub {
 }
 
 .composer:focus-within {
-  border-color: rgba(47, 224, 184, 0.6);
+  border-color: rgba(54, 214, 204, 0.6);
 }
 
 .composer > svg {
