@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   OPPORTUNITY_STAGES,
+  crm,
   createOpportunity,
   fetchCustomers,
   fetchOpportunities,
@@ -11,6 +12,12 @@ import {
   type OpportunityStage,
 } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { useAuth } from "../auth/AuthProvider";
+import { useOpenOpportunity } from "../crm/drawerHost";
+import { FollowUpBadge, OwnerPicker } from "../crm/ui";
+import { useAppData } from "../data/AppDataProvider";
+
+type OwnerFilter = "all" | "mine" | "unassigned";
 
 function formatInr(n: number): string {
   return `₹${n.toLocaleString("en-IN")}`;
@@ -24,6 +31,25 @@ export function Opportunities() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState<"all" | OpportunityStage>("all");
+  const [owner, setOwner] = useState<OwnerFilter>("all");
+  const { user } = useAuth();
+  const { opportunities: pipeline, assignees, refresh: refreshShared, can } = useAppData();
+  const openOpp = useOpenOpportunity();
+  // Same rows as /api/opportunities, plus follow-up counts and linked quotations.
+  const extras = new Map(pipeline.map((o) => [o.id, o]));
+
+  async function reload() {
+    await Promise.all([refresh(), refreshShared()]);
+  }
+
+  async function assign(o: Opportunity, ownerId: string | null) {
+    try {
+      await crm.assignOpportunity(o.id, ownerId);
+      await reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't reassign.");
+    }
+  }
 
   async function refresh() {
     setLoading(true);
@@ -50,14 +76,20 @@ export function Opportunities() {
     return totals;
   }, [opportunities]);
 
-  const visible = stageFilter === "all" ? opportunities : opportunities.filter((o) => o.stage === stageFilter);
+  const byStage = stageFilter === "all" ? opportunities : opportunities.filter((o) => o.stage === stageFilter);
+  const visible =
+    owner === "mine"
+      ? byStage.filter((o) => o.owner_user_id === user?.id)
+      : owner === "unassigned"
+        ? byStage.filter((o) => !o.owner_user_id)
+        : byStage;
 
   return (
     <section>
       <div className="page-head">
         <div className="eyebrow">CRM</div>
         <h1 className="page-title">Opportunities</h1>
-        <p className="page-sub">The pipeline — quantified deals in progress against a customer, moving through stages toward Won or Lost.</p>
+        <p className="page-sub">Quantified deals against a customer, moving toward Won or Lost. Open a deal to change its stage, schedule follow-ups or raise a quotation.</p>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
@@ -91,6 +123,13 @@ export function Opportunities() {
             </button>
           ))}
         </div>
+        <div className="filters" aria-label="Owner filter">
+          {(["all", "mine", "unassigned"] as const).map((f) => (
+            <button key={f} className={owner === f ? "on" : ""} onClick={() => setOwner(f)}>
+              {f === "all" ? "Everyone" : f === "mine" ? "Mine" : "Unassigned"}
+            </button>
+          ))}
+        </div>
         <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "Cancel" : "+ New opportunity"}
         </button>
@@ -102,7 +141,7 @@ export function Opportunities() {
           onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])}
           onDone={() => {
             setShowForm(false);
-            refresh();
+            reload();
           }}
         />
       )}
@@ -118,12 +157,12 @@ export function Opportunities() {
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Customer</th>
+                <th>Deal</th>
                 <th>Stage</th>
                 <th>Value</th>
-                <th>Probability</th>
-                <th>Expected close</th>
+                <th>Close</th>
+                <th>Owner</th>
+                <th>Next follow-up</th>
                 <th></th>
               </tr>
             </thead>
@@ -131,31 +170,61 @@ export function Opportunities() {
               {visible.map((o) =>
                 editingId === o.id ? (
                   <tr key={o.id}>
-                    <td colSpan={7}>
+                    <td colSpan={8}>
                       <OpportunityForm
                         customers={customers}
                         opportunity={o}
                         onDone={() => {
                           setEditingId(null);
-                          refresh();
+                          reload();
                         }}
                       />
                     </td>
                   </tr>
                 ) : (
                   <tr key={o.id}>
-                    <td>{o.name}</td>
-                    <td>{o.customer_name}</td>
+                    <td style={{ whiteSpace: "normal", minWidth: 180 }}>
+                      <button
+                        className="link-btn"
+                        style={{ padding: 0, textAlign: "left" }}
+                        onClick={() => openOpp(o.id)}
+                        title="Open deal — stage, follow-ups and quotations"
+                      >
+                        {o.name}
+                      </button>
+                      <span className="sub">
+                        {o.customer_name}
+                        {extras.get(o.id)?.quotations.length
+                          ? ` · ${extras.get(o.id)!.quotations.length} quote${extras.get(o.id)!.quotations.length === 1 ? "" : "s"}`
+                          : ""}
+                      </span>
+                    </td>
                     <td>
                       <span className={`badge ${o.stage === "Won" ? "status-confirmed" : o.stage === "Lost" ? "status-draft" : "status-pending"}`}>
                         {o.stage}
                       </span>
                     </td>
-                    <td className="mono">{formatInr(o.value)}</td>
-                    <td className="mono">{o.probability_pct}%</td>
+                    <td>
+                      <span className="num">{formatInr(o.value)}</span>
+                      <span className="sub">{o.probability_pct}% likely</span>
+                    </td>
                     <td>{o.expected_close_date ?? "—"}</td>
                     <td>
-                      <button className="secondary-btn" onClick={() => setEditingId(o.id)}>
+                      <OwnerPicker value={o.owner_user_id} assignees={assignees} canAssign={can("crm.assign")} onChange={(id) => assign(o, id)} />
+                    </td>
+                    <td>
+                      {extras.get(o.id) ? (
+                        <FollowUpBadge
+                          overdue={extras.get(o.id)!.overdue_activities}
+                          open={extras.get(o.id)!.open_activities}
+                          nextDueAt={extras.get(o.id)!.next_due_at}
+                        />
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button className="ghost-btn sm" onClick={() => setEditingId(o.id)}>
                         Edit
                       </button>
                     </td>

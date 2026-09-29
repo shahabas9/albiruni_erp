@@ -125,7 +125,7 @@ export function Overview() {
         <div className="card">
           <div className="card-head">
             <span className="card-title">Needs your attention</span>
-            <button className="link-btn" onClick={() => navigate("/crm?tab=followups")}>
+            <button className="link-btn" onClick={() => navigate("/activities?show=overdue")}>
               View all
             </button>
           </div>
@@ -139,7 +139,7 @@ export function Overview() {
                   .slice(0, 2)
                   .map((a) => a.related_name)
                   .join(", ")}
-                onView={() => navigate("/crm?tab=followups")}
+                onView={() => navigate("/activities?show=overdue")}
               />
             )}
             {pending.length > 0 && (
@@ -157,7 +157,7 @@ export function Overview() {
                 icon="user"
                 title={`${unassigned} lead${unassigned === 1 ? "" : "s"} / deal${unassigned === 1 ? "" : "s"} without an owner`}
                 sub="Nobody is accountable for these yet"
-                onView={() => navigate("/crm?tab=leads&owner=unassigned")}
+                onView={() => navigate("/leads?owner=unassigned")}
               />
             )}
             {overdue.length === 0 && pending.length === 0 && unassigned === 0 && (
@@ -198,7 +198,7 @@ export function Overview() {
           onSaved={async () => {
             setModal(null);
             await refresh();
-            navigate("/crm?tab=leads");
+            navigate("/leads");
           }}
         />
       )}

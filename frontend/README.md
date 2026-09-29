@@ -13,7 +13,8 @@ src/
   i18n/                EN/ML string tables + LanguageProvider
   data/AppDataProvider.tsx   fetches quotations, CRM records and audit events (per permission)
   askerp/              AskErpContext (open/close/ask-from-anywhere) + the docked copilot panel
-  crm/                 owner picker, overdue badge, modals, opportunity drawer (quote from a deal)
+  crm/                 owner picker, overdue badge, modals, and the opportunity drawer
+                       (drawerHost.tsx mounts it app-wide: any page opens a deal with ?opp=<id>)
   layout/              Sidebar + TopBar (search/ask box, notifications, user menu)
   lib/                 INR/date formatting, useSpeech (browser speech-to-text)
   pages/                Login, Setup, Overview, Crm, Sales, AuditTrail,

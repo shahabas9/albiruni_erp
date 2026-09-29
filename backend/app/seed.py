@@ -26,7 +26,16 @@ from app.models.sales import Customer, Item
 from app.models.tenant import Company, Tenant
 
 
-CRM_PERMISSIONS = ["crm.read", "crm.write", "crm.assign"]
+# Coarse permissions for the pipeline API plus the per-page ones the Leads,
+# Contacts, Opportunities, Activities and Customers pages check.
+CRM_PERMISSIONS = [
+    "crm.read", "crm.write", "crm.assign",
+    "crm.lead.read", "crm.lead.write", "crm.lead.convert",
+    "crm.contact.read", "crm.contact.write",
+    "crm.opportunity.read", "crm.opportunity.write",
+    "crm.activity.read", "crm.activity.write",
+    "sales.customer.read", "sales.customer.write",
+]
 
 
 def seed_crm(db: Session, tenant: Tenant) -> None:

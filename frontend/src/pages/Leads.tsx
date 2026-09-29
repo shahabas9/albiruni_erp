@@ -1,14 +1,23 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ApiError,
   LEAD_STATUSES,
   convertLead,
+  crm,
   createLead,
   fetchLeads,
   updateLead,
   type Lead,
   type LeadStatus,
 } from "../api/client";
+import { useAuth } from "../auth/AuthProvider";
+import { useOpenOpportunity } from "../crm/drawerHost";
+import { FollowUpModal } from "../crm/forms";
+import { FollowUpBadge, OwnerPicker } from "../crm/ui";
+import { useAppData } from "../data/AppDataProvider";
+
+type OwnerFilter = "all" | "mine" | "unassigned";
 
 function statusClass(status: LeadStatus) {
   if (status === "Converted") return "status-confirmed";
@@ -24,6 +33,34 @@ export function Leads() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [followUpFor, setFollowUpFor] = useState<Lead | null>(null);
+  const [params] = useSearchParams();
+  const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
+  const { user } = useAuth();
+  const { leads: pipelineLeads, assignees, refresh: refreshShared, can } = useAppData();
+  const openOpp = useOpenOpportunity();
+  // Same rows as /api/leads, plus owner name and follow-up counts from the pipeline API.
+  const followUps = new Map(pipelineLeads.map((l) => [l.id, l]));
+
+  async function reload() {
+    await Promise.all([refresh(), refreshShared()]);
+  }
+
+  async function assign(lead: Lead, ownerId: string | null) {
+    try {
+      await crm.assignLead(lead.id, ownerId);
+      await reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't reassign.");
+    }
+  }
+
+  const visible =
+    owner === "mine"
+      ? leads.filter((l) => l.owner_user_id === user?.id)
+      : owner === "unassigned"
+        ? leads.filter((l) => !l.owner_user_id && l.status !== "Converted" && l.status !== "Lost")
+        : leads;
 
   async function refresh() {
     setLoading(true);
@@ -46,19 +83,25 @@ export function Leads() {
       <div className="page-head">
         <div className="eyebrow">CRM</div>
         <h1 className="page-title">Leads</h1>
-        <p className="page-sub">Raw, unqualified interest. Convert a qualified lead into a real Customer, Contact and Opportunity in one step.</p>
+        <p className="page-sub">Raw, unqualified interest. Give every lead an owner and a next step; convert a qualified one into a Customer, Contact and Opportunity in one step.</p>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
       <div className="toolbar">
-        <div />
+        <div className="filters" aria-label="Owner filter">
+          {(["all", "mine", "unassigned"] as const).map((f) => (
+            <button key={f} className={owner === f ? "on" : ""} onClick={() => setOwner(f)}>
+              {f === "all" ? "Everyone" : f === "mine" ? "Mine" : "Unassigned"}
+            </button>
+          ))}
+        </div>
         <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "Cancel" : "+ New lead"}
         </button>
       </div>
 
-      {showForm && <LeadForm onDone={() => { setShowForm(false); refresh(); }} />}
+      {showForm && <LeadForm onDone={() => { setShowForm(false); reload(); }} />}
 
       {!loading && leads.length === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
@@ -66,24 +109,30 @@ export function Leads() {
         </div>
       )}
 
-      {leads.length > 0 && (
+      {leads.length > 0 && visible.length === 0 && (
+        <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
+          No leads match this filter.
+        </div>
+      )}
+
+      {visible.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Company</th>
-                <th>Source</th>
+                <th>Lead</th>
                 <th>Status</th>
+                <th>Owner</th>
+                <th>Next follow-up</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {leads.map((l) =>
+              {visible.map((l) =>
                 editingId === l.id ? (
                   <tr key={l.id}>
                     <td colSpan={5}>
-                      <LeadForm lead={l} onDone={() => { setEditingId(null); refresh(); }} />
+                      <LeadForm lead={l} onDone={() => { setEditingId(null); reload(); }} />
                     </td>
                   </tr>
                 ) : convertingId === l.id ? (
@@ -91,9 +140,10 @@ export function Leads() {
                     <td colSpan={5}>
                       <ConvertForm
                         lead={l}
-                        onDone={() => {
+                        onDone={async (opportunityId) => {
                           setConvertingId(null);
-                          refresh();
+                          await reload();
+                          if (opportunityId) openOpp(opportunityId);
                         }}
                         onCancel={() => setConvertingId(null)}
                       />
@@ -101,19 +151,51 @@ export function Leads() {
                   </tr>
                 ) : (
                   <tr key={l.id}>
-                    <td>{l.name}</td>
-                    <td>{l.company_name || "—"}</td>
-                    <td>{l.source || "—"}</td>
+                    <td>
+                      <b>{l.company_name || l.name}</b>
+                      <span className="sub">
+                        {[l.company_name ? l.name : "", l.source].filter(Boolean).join(" · ") || "—"}
+                      </span>
+                    </td>
                     <td>
                       <span className={`badge ${statusClass(l.status)}`}>{l.status}</span>
                     </td>
-                    <td style={{ display: "flex", gap: 8 }}>
+                    <td>
+                      <OwnerPicker
+                        value={l.owner_user_id}
+                        assignees={assignees}
+                        canAssign={can("crm.assign") && l.status !== "Converted"}
+                        onChange={(id) => assign(l, id)}
+                      />
+                    </td>
+                    <td>
+                      {followUps.get(l.id) ? (
+                        <FollowUpBadge
+                          overdue={followUps.get(l.id)!.overdue_activities}
+                          open={followUps.get(l.id)!.open_activities}
+                          nextDueAt={followUps.get(l.id)!.next_due_at}
+                        />
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      {l.status === "Converted" && followUps.get(l.id)?.converted_opportunity_id && (
+                        <button className="ghost-btn sm" onClick={() => openOpp(followUps.get(l.id)!.converted_opportunity_id!)}>
+                          Open deal
+                        </button>
+                      )}
                       {l.status !== "Converted" && (
                         <>
-                          <button className="secondary-btn" onClick={() => setEditingId(l.id)}>
+                          <button className="ghost-btn sm" onClick={() => setEditingId(l.id)}>
                             Edit
                           </button>
-                          <button className="primary-btn" onClick={() => setConvertingId(l.id)}>
+                          {can("crm.write") && (
+                            <button className="ghost-btn sm" onClick={() => setFollowUpFor(l)}>
+                              Follow-up
+                            </button>
+                          )}
+                          <button className="primary-btn sm" onClick={() => setConvertingId(l.id)}>
                             Convert
                           </button>
                         </>
@@ -125,6 +207,17 @@ export function Leads() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {followUpFor && (
+        <FollowUpModal
+          target={{ lead_id: followUpFor.id, name: followUpFor.company_name || followUpFor.name }}
+          onClose={() => setFollowUpFor(null)}
+          onSaved={async () => {
+            setFollowUpFor(null);
+            await reload();
+          }}
+        />
       )}
     </section>
   );
@@ -206,7 +299,15 @@ function LeadForm({ lead, onDone }: { lead?: Lead; onDone: () => void }) {
   );
 }
 
-function ConvertForm({ lead, onDone, onCancel }: { lead: Lead; onDone: () => void; onCancel: () => void }) {
+function ConvertForm({
+  lead,
+  onDone,
+  onCancel,
+}: {
+  lead: Lead;
+  onDone: (opportunityId: string | null) => void;
+  onCancel: () => void;
+}) {
   const [createOpportunity, setCreateOpportunity] = useState(true);
   const [value, setValue] = useState("0");
   const [error, setError] = useState<string | null>(null);
@@ -216,8 +317,8 @@ function ConvertForm({ lead, onDone, onCancel }: { lead: Lead; onDone: () => voi
     setSaving(true);
     setError(null);
     try {
-      await convertLead(lead.id, { create_opportunity: createOpportunity, opportunity_value: Number(value) });
-      onDone();
+      const result = await convertLead(lead.id, { create_opportunity: createOpportunity, opportunity_value: Number(value) });
+      onDone(result.opportunity_id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't convert.");
     } finally {
