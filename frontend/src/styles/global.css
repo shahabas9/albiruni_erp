@@ -172,6 +172,63 @@ img {
   font-weight: 700;
 }
 
+/* Collapsible module groups (CRM, Sales, ...) */
+.side-group-btn {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  border-radius: 12px;
+  background: none;
+  color: var(--nav-ink);
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.side-group-btn:hover {
+  background: var(--nav-hover);
+  color: #fff;
+}
+
+.side-group-btn.has-active {
+  color: #fff;
+  font-weight: 700;
+}
+
+.side-group-btn .chev {
+  margin-left: auto;
+  opacity: 0.6;
+  transition: transform 0.18s;
+}
+
+.side-group-btn .count + .chev {
+  margin-left: 8px;
+}
+
+.side-group-btn .chev.open {
+  transform: rotate(180deg);
+}
+
+.side-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 25px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.side-nav .side-sub a {
+  padding: 9px 12px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
 .side-nav .soon {
   cursor: default;
   opacity: 0.55;

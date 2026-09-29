@@ -111,7 +111,7 @@ function Notifications() {
         <div className="menu-pop notif-list">
           {!hasAny && <div className="empty">Nothing needs you right now.</div>}
           {overdue.slice(0, 5).map((a) => (
-            <button key={a.id} onClick={() => go(a.opportunity_id ? `/crm?opp=${a.opportunity_id}` : "/crm?tab=followups")}>
+            <button key={a.id} onClick={() => go(a.opportunity_id ? `/crm?opp=${a.opportunity_id}` : "/activities?show=overdue")}>
               <Icon name="alert" size={16} />
               <span>
                 <b>{a.subject}</b>
@@ -123,7 +123,7 @@ function Notifications() {
             </button>
           ))}
           {pending.length > 0 && (
-            <button onClick={() => go("/crm?tab=quotations&status=pending")}>
+            <button onClick={() => go("/sales?status=pending")}>
               <Icon name="file" size={16} />
               {pending.length} quotation{pending.length === 1 ? "" : "s"} awaiting approval
             </button>

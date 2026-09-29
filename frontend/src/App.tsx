@@ -16,6 +16,7 @@ import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
 import { AskErpPanel } from "./askerp/AskErpPanel";
+import { OpportunityDrawerHost } from "./crm/drawerHost";
 import { useAskErp } from "./askerp/AskErpContext";
 import { useAppData } from "./data/AppDataProvider";
 import { useAuth } from "./auth/AuthProvider";
@@ -76,6 +77,7 @@ export default function App() {
           <span>ALBIRUNI ERP | Smarter business. Higher possibilities.</span>
         </footer>
       </div>
+      <OpportunityDrawerHost />
       <AskErpPanel />
     </div>
   );

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useLanguage } from "../i18n/LanguageProvider";
 import { useAskErp } from "../askerp/AskErpContext";
 import { useAppData } from "../data/AppDataProvider";
@@ -41,7 +42,15 @@ export function Sales() {
   const { t } = useLanguage();
   const { open } = useAskErp();
   const { quotes, loading, quotesError: error } = useAppData();
-  const [filter, setFilter] = useState<"all" | QuoteStatus>("all");
+  const [params, setParams] = useSearchParams();
+  const fromUrl: "all" | QuoteStatus = params.get("status") === "pending" ? "Pending approval" : "all";
+  const [filter, setFilterState] = useState<"all" | QuoteStatus>(fromUrl);
+  // The sidebar's Approvals entry is /sales?status=pending — keep the filter and URL in step.
+  useEffect(() => setFilterState(fromUrl), [fromUrl]);
+  const setFilter = (next: "all" | QuoteStatus) => {
+    setFilterState(next);
+    setParams(next === "Pending approval" ? { status: "pending" } : {}, { replace: true });
+  };
 
   const visible = filter === "all" ? quotes : quotes.filter((q) => q.status === filter);
 

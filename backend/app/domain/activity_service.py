@@ -1,4 +1,4 @@
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -44,6 +44,12 @@ def related_label(db: Session, context: RequestContext, activity: Activity) -> s
     return "—"
 
 
+def _due_at(due: date | None) -> datetime | None:
+    """A date-only follow-up is due by the end of that day, so "due today"
+    isn't reported overdue from midnight onward."""
+    return datetime.combine(due, time(23, 59, 59), timezone.utc) if due else None
+
+
 def create_activity(db: Session, context: RequestContext, body: ActivityIn) -> Activity:
     if body.type not in ACTIVITY_TYPES:
         raise ConflictError(f"'{body.type}' is not a valid activity type. Use one of: {', '.join(ACTIVITY_TYPES)}.")
@@ -66,7 +72,7 @@ def create_activity(db: Session, context: RequestContext, body: ActivityIn) -> A
         subject=body.subject,
         notes=body.notes,
         due_date=body.due_date,
-        due_at=datetime.combine(body.due_date, time.min, timezone.utc) if body.due_date else None,
+        due_at=_due_at(body.due_date),
         owner_id=context.user.id,
         lead_id=body.lead_id,
         customer_id=body.customer_id,
@@ -84,7 +90,7 @@ def update_activity(db: Session, context: RequestContext, activity_id: UUID, bod
     changes = body.model_dump(exclude_unset=True)
     if "due_date" in changes:
         due = changes["due_date"]
-        activity.due_at = datetime.combine(due, time.min, timezone.utc) if due else None
+        activity.due_at = _due_at(due)
     if "done" in changes:
         activity.completed_at = (activity.completed_at or datetime.now(timezone.utc)) if changes["done"] else None
     for field, value in changes.items():

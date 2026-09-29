@@ -117,6 +117,16 @@ class CrmMergeTests(unittest.TestCase):
         routes_crm.complete_activity(result.id, self.context, self.db)
         self.assertTrue(routes_activities.list_activities(self.context, self.db)[0].done)
 
+    def test_dated_follow_up_is_overdue_only_after_its_day_ends(self):
+        lead = self.local_lead()
+        today = datetime.now(timezone.utc).date()
+        due_today = activity_service.create_activity(self.db, self.context,
+            local.ActivityIn(type="Call", subject="Today", due_date=today, lead_id=lead.id))
+        due_yesterday = activity_service.create_activity(self.db, self.context,
+            local.ActivityIn(type="Call", subject="Yesterday", due_date=today - timedelta(days=1), lead_id=lead.id))
+        self.assertFalse(crm_service.is_overdue(due_today))
+        self.assertTrue(crm_service.is_overdue(due_yesterday))
+
     def test_existing_prototype_records_survive_upgrade(self):
         lead = self.db.execute(select(Lead).where(Lead.name == "Legacy contact")).scalar_one_or_none()
         if lead is None:
