@@ -1,3 +1,4 @@
+import { BrandMark } from "../components/Icon";
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthProvider";
 
@@ -45,7 +46,7 @@ export function Setup() {
     <div className="login-shell">
       <form className="login-card" style={{ maxWidth: 420 }} onSubmit={handleSubmit}>
         <span className="brand" style={{ color: "var(--ink)", marginBottom: 4 }}>
-          <span className="mark">A</span> Albiruni <span style={{ opacity: 0.55, fontWeight: 400 }}>ERP</span>
+          <BrandMark /> Albiruni <span style={{ opacity: 0.55, fontWeight: 600 }}>ERP</span>
         </span>
         <p className="login-sub">
           No organization set up yet. Create your organization and the first Super Admin account to get started.

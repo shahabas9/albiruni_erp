@@ -30,9 +30,20 @@ class QuotationOut(BaseModel):
     id: UUID
     number: str
     customer_name: str
+    opportunity_id: UUID | None = None
+    opportunity_title: str | None = None
     subtotal: float
     discount_pct: float
     total: float
     status: str
     created_at: datetime
     lines: list[QuotationLineOut]
+
+
+class ItemOut(BaseModel):
+    id: UUID
+    sku: str
+    name: str
+    uom: str
+    unit_price: float
+    stock_qty: float

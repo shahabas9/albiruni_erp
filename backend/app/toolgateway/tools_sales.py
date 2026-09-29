@@ -7,13 +7,20 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from uuid import UUID
+
 from app.core.deps import RequestContext
+from app.domain import crm_service
 from app.domain.sales_service import DomainValidationError, persist_quotation, price_quotation
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
 
 def create_quotation_draft(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    opportunity = None
     try:
+        if args.get("opportunity_id"):
+            opportunity = crm_service.get_opportunity(db, context, UUID(str(args["opportunity_id"])))
+            crm_service.assert_quotable(opportunity)
         pricing = price_quotation(
             db,
             context,
@@ -30,7 +37,15 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
             "Figures changed since this was previewed (price or stock moved) — please ask again for a fresh preview."
         )
 
+    if opportunity is not None and pricing.customer.id != opportunity.customer_id:
+        raise ToolValidationError(
+            f"This opportunity is for {opportunity.customer.name}, not {pricing.customer.name}."
+        )
+
     quotation = persist_quotation(db, context, pricing, created_by=context.user.id)
+    if opportunity is not None:
+        quotation.opportunity_id = opportunity.id
+        crm_service.advance_on_quotation(opportunity)
 
     return {
         "quotation_id": str(quotation.id),
@@ -42,6 +57,9 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
         "total": pricing.total,
         "warnings": pricing.warnings,
         "requires_approval": pricing.requires_approval,
+        "opportunity_id": str(opportunity.id) if opportunity is not None else None,
+        "result_summary": f"Created {quotation.number} for {pricing.customer.name}"
+        + (f" (opportunity: {opportunity.title})" if opportunity is not None else ""),
     }
 
 

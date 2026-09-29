@@ -40,6 +40,10 @@ class Quotation(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     number: Mapped[str] = mapped_column(String(30), unique=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"))
+    # Set when the quotation was raised from a CRM opportunity; null for walk-in quotes.
+    opportunity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("opportunities.id"), nullable=True
+    )
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2))
     discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     total: Mapped[float] = mapped_column(Numeric(14, 2))
@@ -49,6 +53,7 @@ class Quotation(Base):
 
     lines: Mapped[list["QuotationLine"]] = relationship(back_populates="quotation", cascade="all, delete-orphan")
     customer: Mapped["Customer"] = relationship()
+    opportunity: Mapped["Opportunity | None"] = relationship()  # noqa: F821 — app.models.crm
 
 
 class QuotationLine(Base):

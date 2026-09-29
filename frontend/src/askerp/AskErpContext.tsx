@@ -13,7 +13,8 @@ interface AskErpContextValue {
 const AskErpContext = createContext<AskErpContextValue | null>(null);
 
 export function AskErpProvider({ children }: { children: ReactNode }) {
-  const [isOpen, setIsOpen] = useState(false);
+  // Docked open on wide screens, as in the design; a slide-over elsewhere.
+  const [isOpen, setIsOpen] = useState(() => window.matchMedia?.("(min-width: 1280px)").matches ?? false);
   const runnerRef = useRef<((text: string) => void) | null>(null);
 
   const open = () => setIsOpen(true);
