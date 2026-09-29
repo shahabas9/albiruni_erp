@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAskErp } from "./AskErpContext";
 import { useAppData } from "../data/AppDataProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { useLanguage } from "../i18n/LanguageProvider";
-import { ApiError, askErp, confirmAsk, type AskResponse } from "../api/client";
+import { ApiError, askErp, confirmAsk, type ActionPreview, type AskAnswer, type AskResponse } from "../api/client";
 import { BrandMark, Icon, type IconName } from "../components/Icon";
 import { useSpeech } from "../lib/useSpeech";
 import type { Lang } from "../i18n/strings";
@@ -18,7 +19,17 @@ type PreviewData = Extract<AskResponse, { type: "preview" }>;
 
 type Message =
   | { id: string; role: "user"; text: string }
-  | { id: string; role: "ai-text"; text: string }
+  | { id: string; role: "ai-text"; text: string; options?: string[] }
+  | { id: string; role: "ai-answer"; answer: AskAnswer }
+  | {
+      id: string;
+      role: "ai-action";
+      preview: ActionPreview;
+      settled: boolean;
+      confirming: boolean;
+      summary?: string;
+      link?: { label: string; to: string };
+    }
   | { id: string; role: "ai-steps"; steps: StepItem[] }
   | { id: string; role: "ai-preview"; preview: PreviewData; settled: boolean; confirming: boolean; confirmedNumber?: string };
 
@@ -40,13 +51,15 @@ const SUGGESTIONS: { key: string; icon: IconName; prompt: string }[] = [
     icon: "file",
     prompt: "Create a quotation for Rahman Traders: 50 boxes Product A and 20 boxes Product B. Give 3% discount.",
   },
-  { key: "panel.chip.report", icon: "chart", prompt: "This month's sales by branch" },
-  { key: "panel.chip.learn", icon: "chat", prompt: "How do I make a stock transfer?" },
+  { key: "panel.chip.overdue", icon: "clock", prompt: "What's overdue today?" },
+  { key: "panel.chip.stale", icon: "target", prompt: "Which deals are going stale?" },
+  { key: "panel.chip.pipeline", icon: "chart", prompt: "How's the pipeline?" },
 ];
 
 export function AskErpPanel() {
   const { isOpen, open, close, registerRunner } = useAskErp();
   const { refresh } = useAppData();
+  const navigate = useNavigate();
   const { logout } = useAuth();
   const { t, lang, setLang } = useLanguage();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -118,8 +131,12 @@ export function AskErpPanel() {
       if (response.type === "preview") {
         await playSteps();
         pushMessage({ id: uid(), role: "ai-preview", preview: response, settled: false, confirming: false });
+      } else if (response.type === "action_preview") {
+        pushMessage({ id: uid(), role: "ai-action", preview: response, settled: false, confirming: false });
+      } else if (response.type === "answer") {
+        pushMessage({ id: uid(), role: "ai-answer", answer: response });
       } else {
-        pushMessage({ id: uid(), role: "ai-text", text: response.message });
+        pushMessage({ id: uid(), role: "ai-text", text: response.message, options: response.options });
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -155,6 +172,27 @@ export function AskErpPanel() {
       const detail = err instanceof ApiError ? err.message : "Could not reach the Albiruni API.";
       pushMessage({ id: uid(), role: "ai-text", text: `Couldn't confirm: ${detail}` });
     }
+  }
+
+  async function confirmAction(messageId: string, previewToken: string) {
+    const patch = (fields: Partial<Extract<Message, { role: "ai-action" }>>) =>
+      setMessages((prev) => prev.map((m) => (m.id === messageId && m.role === "ai-action" ? { ...m, ...fields } : m)));
+    patch({ confirming: true });
+    try {
+      const result = await confirmAsk(previewToken);
+      patch({ settled: true, confirming: false, summary: result.result_summary, link: result.link });
+      await refresh();
+    } catch (err) {
+      patch({ confirming: false });
+      const detail = err instanceof ApiError ? err.message : "Could not reach the Albiruni API.";
+      pushMessage({ id: uid(), role: "ai-text", text: `Couldn't do that: ${detail}` });
+    }
+  }
+
+  function go(to: string) {
+    navigate(to);
+    // Docked on wide screens; on smaller ones the panel covers the page, so get out of the way.
+    if (!window.matchMedia("(min-width: 1280px)").matches) close();
   }
 
   function cancelPreview(messageId: string) {
@@ -231,7 +269,10 @@ export function AskErpPanel() {
               key={m.id}
               message={m}
               onConfirm={confirmQuote}
+              onConfirmAction={confirmAction}
               onCancel={cancelPreview}
+              onAsk={(text) => !busy && runQuery(text)}
+              onGo={go}
               suggestions={
                 idx === 0 ? (
                   <div className="suggestions">
@@ -307,12 +348,18 @@ function Wave({ live }: { live: boolean }) {
 function MessageView({
   message,
   onConfirm,
+  onConfirmAction,
   onCancel,
+  onAsk,
+  onGo,
   suggestions,
 }: {
   message: Message;
   onConfirm: (messageId: string, previewToken: string) => void;
+  onConfirmAction: (messageId: string, previewToken: string) => void;
   onCancel: (messageId: string) => void;
+  onAsk: (text: string) => void;
+  onGo: (to: string) => void;
   suggestions: ReactNode;
 }) {
   if (message.role === "user") {
@@ -325,7 +372,86 @@ function MessageView({
   }
   const body = (() => {
     if (message.role === "ai-text") {
-      return <div className="bubble">{message.text}</div>;
+      return (
+        <>
+          <div className="bubble">{message.text}</div>
+          {message.options && message.options.length > 0 && (
+            <div className="suggestions">
+              {message.options.map((o) => (
+                <button key={o} onClick={() => onAsk(o)}>
+                  {o}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      );
+    }
+    if (message.role === "ai-answer") {
+      const { answer } = message;
+      return (
+        <div className="bubble answer">
+          <div>{answer.message}</div>
+          {answer.items.length > 0 && (
+            <ul className="answer-list">
+              {answer.items.map((item, idx) => (
+                <li key={idx} className={item.tone ?? ""}>
+                  <button disabled={!item.link} onClick={() => item.link && onGo(item.link)}>
+                    <b>{item.title}</b>
+                    <small>{item.subtitle}</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {answer.link && (
+            <button className="answer-link" onClick={() => onGo(answer.link!.to)}>
+              {answer.link.label} <Icon name="right" size={14} />
+            </button>
+          )}
+        </div>
+      );
+    }
+    if (message.role === "ai-action") {
+      const { preview, settled, confirming, summary, link } = message;
+      return (
+        <div className={`preview-card${settled ? " settled" : ""}`}>
+          <div className="pc-title">{settled ? `✓ ${summary ?? "Done"}` : preview.title}</div>
+          {!settled && (
+            <>
+              {preview.lines.map((line) => (
+                <PreviewLine key={line.label} k={line.label} v={line.value} mono={false} />
+              ))}
+              {preview.warnings.map((w) => (
+                <div className="preview-flag" key={w}>
+                  {w}
+                </div>
+              ))}
+            </>
+          )}
+          {settled ? (
+            <div className="settled-row">
+              <span className="audit-chip">✓ Recorded to AI audit trail</span>
+              {link && (
+                <button className="answer-link" onClick={() => onGo(link.to)}>
+                  {link.label} <Icon name="right" size={14} />
+                </button>
+              )}
+            </div>
+          ) : confirming ? (
+            <span style={{ fontSize: 12.5, color: "var(--copilot-dim)" }}>Working…</span>
+          ) : (
+            <div className="pc-actions">
+              <button className="confirm" onClick={() => onConfirmAction(message.id, preview.preview_token)}>
+                Confirm
+              </button>
+              <button className="cancel" onClick={() => onCancel(message.id)}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      );
     }
     if (message.role === "ai-steps") {
       return (
@@ -392,11 +518,11 @@ function MessageView({
   );
 }
 
-function PreviewLine({ k, v }: { k: string; v: string }) {
+function PreviewLine({ k, v, mono = true }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="preview-line">
       <span>{k}</span>
-      <span className="mono">{v}</span>
+      <span className={mono ? "mono" : "text"}>{v}</span>
     </div>
   );
 }

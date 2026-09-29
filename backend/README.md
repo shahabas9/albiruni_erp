@@ -75,10 +75,11 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
 
 ## What's deliberately not here yet
 
-- **A real LLM.** `app/ai/orchestrator.py` is regex-based on purpose, so the
-  skeleton runs with no API key. Swap `classify_intent` / `parse_quotation_request`
+- **A real LLM.** Understanding is deterministic on purpose, so the skeleton
+  runs with no API key: `app/ai/crm_parser.py` classifies every request and
+  `orchestrator.parse_quotation_request` extracts quotation lines. Swap them
   for a Claude tool-calling loop against `toolgateway.registry.list_tools()` —
-  the executor, audit trail and permission checks don't need to change.
+  the tools, executor, audit trail and permission checks don't need to change.
 - **Alembic migrations.** Schema is created via `Base.metadata.create_all()`
   at startup for dev convenience. Add real migrations before this touches a
   shared environment.
@@ -95,9 +96,42 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
 
 `../frontend` is wired to this API (see its README): real login, real
 quotations/audit data, and the Ask ERP panel calling `/api/ask` +
-`/api/ask/confirm` for real. Mode chips other than "Create quotation" still
-just get the honest "I can only help with quotations right now" fallback,
-because only that one tool exists so far.
+`/api/ask/confirm` for real.
+
+## Ask ERP: CRM commands
+
+`POST /api/ask` (send the browser's IANA `timezone`) also understands CRM
+requests. Reads answer straight away; writes return an `action_preview` that
+only `POST /api/ask/confirm` executes. Every call goes through the tool
+gateway (`toolgateway/tools_crm.py`), so it's permission-checked and audited.
+
+| Say | Tool | Level |
+| --- | --- | --- |
+| "what's overdue today" / "… for the team" | `crm.list_due_followups.v1` | L1 Read |
+| "which deals are going stale" | `crm.list_stale_deals.v1` | L1 Read |
+| "how's the pipeline" | `crm.pipeline_summary.v1` | L1 Read |
+| "log a call with Rahman — no answer", "met Al Faisal about Q4" | `crm.log_activity.v1` | L2 Prepare |
+| "remind me to call Nisha tomorrow at 3pm", "follow up with Malabar on Friday" | `crm.schedule_followup.v1` | L2 Prepare |
+| "move Al Faisal to negotiation", "mark Malabar lost — price too high" | `crm.move_opportunity_stage.v1` | L2 Prepare |
+
+Names are resolved against the company's own leads, customers and deals
+(`app/ai/crm_resolver.py`) by distinctive words, not a sentence template;
+ties come back as a `clarify` with clickable options. Activity goes on the
+customer's single open deal when there is one. Dates understand today /
+tomorrow / weekdays / "next week" / "in 3 days" / "5 Oct" / dd/mm, in the
+user's timezone; a date with no time means 10:00.
+
+## CSV import
+
+`POST /api/imports/{leads|customers}` with `{"csv": "..."}` validates every
+row and reports `ok` / `duplicate` / `error` without writing; add
+`?commit=true` to create the valid rows in one transaction. Headers are
+matched loosely ("Mobile", "Business", "Party Name", "GSTIN/UIN" …), comma,
+semicolon or tab separated, Excel's BOM tolerated; 2 MB / 2,000 rows max.
+Leads are duplicates when their phone (last 10 digits) or email already
+exists; customers when their name or GSTIN does. Needs `crm.lead.write` /
+`sales.customer.write`; assigning leads to someone else needs
+`crm.lead.assign`.
 
 ## CRM API
 

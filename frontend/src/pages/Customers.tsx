@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer } from "../api/client";
+import { CsvImport } from "../components/CsvImport";
+import { useAppData } from "../data/AppDataProvider";
 
 export function Customers() {
+  const { can } = useAppData();
+  const [importing, setImporting] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,10 +40,18 @@ export function Customers() {
 
       <div className="toolbar">
         <div />
-        <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
-          {showForm ? "Cancel" : "+ New customer"}
-        </button>
+        {can("sales.customer.write") && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="ghost-btn" onClick={() => setImporting(true)}>
+              Import CSV
+            </button>
+            <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
+              {showForm ? "Cancel" : "+ New customer"}
+            </button>
+          </div>
+        )}
       </div>
+      {importing && <CsvImport kind="customers" onClose={() => setImporting(false)} onImported={refresh} />}
 
       {showForm && <CustomerForm onDone={() => { setShowForm(false); refresh(); }} />}
 
@@ -151,7 +163,7 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
             value={gstin}
             onChange={(e) => setGstin(e.target.value.toUpperCase())}
             maxLength={15}
-            placeholder="e.g. 32ABCDE1234F1Z5"
+            placeholder="e.g. 32ABCDE1234F1Z9"
             style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
           />
         </label>
