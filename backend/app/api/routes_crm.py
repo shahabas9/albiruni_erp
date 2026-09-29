@@ -9,10 +9,10 @@ from app.api.routes_leads import http_error
 from app.api.routes_opportunities import opportunity_rows
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_any_permission, require_permission
-from app.domain import activity_service, crm_service
+from app.domain import activity_service, crm_service, target_service
 from app.domain.errors import ConflictError
 from app.models.crm import OPEN_STAGES, Activity, Lead, Opportunity
-from app.schemas.crm import CrmSummary, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal
+from app.schemas.crm import CrmSummary, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetReport, TargetsIn
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -60,6 +60,37 @@ def put_rotation(
 ):
     try:
         return crm_service.set_rotation(db, context, body.enabled, body.user_ids)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/targets", response_model=TargetReport)
+def get_targets(
+    month: str = Query("", description="YYYY-MM; this month when blank"),
+    context: RequestContext = Depends(require_permission("crm.opportunity.read")),
+    db: Session = Depends(get_db),
+):
+    """Each person's target for the month against the deals they won."""
+
+    try:
+        when = target_service.parse_month(month) if month else crm_service.now_utc().date().replace(day=1)
+        return target_service.report(db, context, when)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.put("/targets", response_model=TargetReport)
+def put_targets(
+    body: TargetsIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Sets targets for the month; an amount of 0 removes that person's target."""
+
+    try:
+        when = target_service.parse_month(body.month)
+        target_service.set_targets(db, context, when, [(t.user_id, t.amount) for t in body.targets])
+        return target_service.report(db, context, when)
     except ConflictError as exc:
         raise http_error(exc) from exc
 

@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Numeric, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
@@ -175,3 +175,17 @@ class CrmSettings(Base):
     stale_after_days: Mapped[dict] = mapped_column(JSONB, default=dict)
     # {"enabled": bool, "user_ids": [ordered ids], "last_user_id": id | None}
     lead_rotation: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class SalesTarget(Base):
+    """What one person should win in one month (value of deals closed Won)."""
+
+    __tablename__ = "sales_targets"
+    __table_args__ = (UniqueConstraint("company_id", "user_id", "month", name="uq_sales_targets_user_month"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    month: Mapped[date] = mapped_column(Date)  # first day of the month
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))

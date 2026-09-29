@@ -402,6 +402,45 @@ class CrmTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
 
+    # --- Sales targets ----------------------------------------------------------
+
+    def test_targets_compare_each_persons_wins_with_their_month(self):
+        asha = self.colleague("Asha")
+        month = crm_service.now_utc().date().replace(day=1)
+        label = f"{month:%Y-%m}"
+        routes_crm.put_targets(crm.TargetsIn(month=label, targets=[
+            crm.TargetIn(user_id=asha.id, amount=100000), crm.TargetIn(user_id=self.context.user.id, amount=50000),
+        ]), self.context, self.db)
+
+        won = self.deal(name="Won big", value=60000, owner_user_id=asha.id)
+        opportunity_service.update_opportunity(self.db, self.context, won.id, crm.OpportunityUpdate(stage="Won"))
+        old = self.deal(name="Won last year", value=999, owner_user_id=asha.id)
+        opportunity_service.update_opportunity(self.db, self.context, old.id, crm.OpportunityUpdate(stage="Won"))
+        old.stage_changed_at = crm_service.now_utc() - timedelta(days=400)
+        self.deal(name="Closing soon", value=20000, probability_pct=50, owner_user_id=asha.id,
+                  expected_close_date=month + timedelta(days=5))
+        self.db.commit()
+
+        report = routes_crm.get_targets(label, self.context, self.db)
+        rows = {r["name"]: r for r in report["rows"]}
+        self.assertEqual((rows["Asha"]["target"], rows["Asha"]["won_value"], rows["Asha"]["won_count"],
+                          rows["Asha"]["pct"], rows["Asha"]["forecast"]), (100000, 60000, 1, 60, 10000))
+        self.assertEqual((rows["Test user"]["won_value"], rows["Test user"]["pct"]), (0, 0))
+        self.assertEqual((report["team_target"], report["team_won"], report["team_pct"]), (150000, 60000, 40))
+
+        # 0 removes a target; another month is separate; bad input is refused.
+        routes_crm.put_targets(crm.TargetsIn(month=label, targets=[crm.TargetIn(user_id=asha.id, amount=0)]),
+                               self.context, self.db)
+        self.assertIsNone({r["name"]: r for r in routes_crm.get_targets(label, self.context, self.db)["rows"]}["Asha"]["pct"])
+        self.assertEqual(routes_crm.get_targets("2020-01", self.context, self.db)["team_target"], 0)
+        with self.assertRaises(HTTPException):
+            routes_crm.get_targets("2026-13", self.context, self.db)
+        with self.assertRaises(HTTPException):  # not this company's user
+            routes_crm.put_targets(crm.TargetsIn(month=label, targets=[
+                crm.TargetIn(user_id=self.make_context(["*"]).user.id, amount=5)]), self.context, self.db)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.opportunity.read"]))
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

@@ -193,6 +193,13 @@ blank Owner, and web enquiries; deactivated members are skipped. The next
 person is chosen under a row lock, so leads arriving together go to
 different people. The web app edits it under CRM → Settings.
 
+**Sales targets.** `GET /api/crm/targets?month=YYYY-MM` lists each person's
+monthly target against the value of deals they moved to Won that month
+(by `stage_changed_at`, UTC), plus a forecast (their open deals expected to
+close that month × probability). `PUT` sets targets (`crm.settings.write`;
+an amount of 0 removes one). Shown under CRM → Targets and, for your own
+target, on the dashboard.
+
 **Record history.** Creating, editing, re-staging, reassigning or
 converting a lead or deal, logging or completing a follow-up, and raising a
 quotation each write a `crm_events` row in the same transaction: who, when,

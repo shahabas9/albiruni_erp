@@ -846,3 +846,39 @@ export function fetchRotation(): Promise<Rotation> {
 export function saveRotation(body: { enabled: boolean; user_ids: string[] }): Promise<Rotation> {
   return request<Rotation>("/api/crm/rotation", { method: "PUT", body: JSON.stringify(body) });
 }
+
+// --- CRM: sales targets -------------------------------------------------------
+
+export interface TargetRow {
+  user_id: string;
+  name: string;
+  active: boolean;
+  target: number;
+  /** Value of deals this person moved to Won during the month. */
+  won_value: number;
+  won_count: number;
+  /** Their open deals expected to close this month, value × probability. */
+  forecast: number;
+  pct: number | null;
+}
+
+export interface TargetReport {
+  month: string;
+  rows: TargetRow[];
+  team_target: number;
+  team_won: number;
+  team_pct: number | null;
+  /** Won by deals nobody owns — counted in the team total only. */
+  unowned_won_value: number;
+  unowned_won_count: number;
+}
+
+/** month: "YYYY-MM"; this month when omitted. */
+export function fetchTargets(month?: string): Promise<TargetReport> {
+  return request<TargetReport>(`/api/crm/targets${query({ month })}`);
+}
+
+/** An amount of 0 removes that person's target. */
+export function saveTargets(month: string, targets: { user_id: string; amount: number }[]): Promise<TargetReport> {
+  return request<TargetReport>("/api/crm/targets", { method: "PUT", body: JSON.stringify({ month, targets }) });
+}

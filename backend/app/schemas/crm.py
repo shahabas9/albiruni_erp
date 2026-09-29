@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -296,3 +297,34 @@ class RotationOut(BaseModel):
     user_ids: list[UUID]
     next_user_id: UUID | None
     next_user_name: str | None
+
+
+class TargetRow(BaseModel):
+    user_id: UUID
+    name: str
+    active: bool
+    target: float
+    won_value: float
+    won_count: int
+    forecast: float
+    pct: int | None
+
+
+class TargetReport(BaseModel):
+    month: str
+    rows: list[TargetRow]
+    team_target: float
+    team_won: float
+    team_pct: int | None
+    unowned_won_value: float
+    unowned_won_count: int
+
+
+class TargetIn(BaseModel):
+    user_id: UUID
+    amount: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+
+
+class TargetsIn(BaseModel):
+    month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    targets: list[TargetIn]
