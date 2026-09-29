@@ -2,11 +2,13 @@ import { NavLink } from "react-router-dom";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { useLanguage } from "../i18n/LanguageProvider";
 import { useAskErp } from "../askerp/AskErpContext";
+import { useAuth } from "../auth/AuthProvider";
 import type { Lang } from "../i18n/strings";
 
 export function TopBar() {
   const { t, lang, setLang } = useLanguage();
   const { open } = useAskErp();
+  const { user, logout } = useAuth();
 
   return (
     <header className="topbar">
@@ -28,9 +30,9 @@ export function TopBar() {
       </div>
       <div className="topbar-right">
         <div className="scope-chip">
-          <b>Kozhikode HQ</b>
+          <b>{user?.company ?? "—"}</b>
           <span className="dot" />
-          <span>Sep 2026</span>
+          <span>{user?.display_name}</span>
           <span className="dot" />
           <span>₹ INR</span>
         </div>
@@ -41,6 +43,9 @@ export function TopBar() {
         <ThemeToggle />
         <button className="ask-btn" onClick={open}>
           <span className="spark">✦</span> <span>{t("nav.ask")}</span>
+        </button>
+        <button className="icon-btn" style={{ color: "rgba(255,255,255,.65)" }} onClick={logout} title="Sign out" aria-label="Sign out">
+          ⏻
         </button>
       </div>
     </header>

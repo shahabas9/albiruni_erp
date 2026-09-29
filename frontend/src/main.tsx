@@ -8,19 +8,22 @@ import { ThemeProvider } from "./theme/ThemeProvider";
 import { LanguageProvider } from "./i18n/LanguageProvider";
 import { AppDataProvider } from "./data/AppDataProvider";
 import { AskErpProvider } from "./askerp/AskErpContext";
+import { AuthProvider } from "./auth/AuthProvider";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider>
-      <LanguageProvider>
-        <AppDataProvider>
-          <AskErpProvider>
-            <BrowserRouter>
-              <App />
-            </BrowserRouter>
-          </AskErpProvider>
-        </AppDataProvider>
-      </LanguageProvider>
-    </ThemeProvider>
+    <AuthProvider>
+      <ThemeProvider>
+        <LanguageProvider>
+          <AppDataProvider>
+            <AskErpProvider>
+              <BrowserRouter>
+                <App />
+              </BrowserRouter>
+            </AskErpProvider>
+          </AppDataProvider>
+        </LanguageProvider>
+      </ThemeProvider>
+    </AuthProvider>
   </StrictMode>,
 );

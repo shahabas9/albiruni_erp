@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: albiruni
+      POSTGRES_PASSWORD: albiruni
+      POSTGRES_DB: albiruni_erp
+    ports:
+      - "5432:5432"
+    volumes:
+      - albiruni_pgdata:/var/lib/postgresql/data
+
+volumes:
+  albiruni_pgdata:
