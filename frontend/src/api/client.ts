@@ -113,6 +113,8 @@ export interface Quotation {
   id: string;
   number: string;
   customer_name: string;
+  opportunity_id: string | null;
+  opportunity_title: string | null;
   subtotal: number;
   discount_pct: number;
   total: number;
@@ -124,6 +126,124 @@ export interface Quotation {
 export function fetchQuotations(): Promise<Quotation[]> {
   return request<Quotation[]>("/api/sales/quotations");
 }
+
+export interface Item {
+  id: string;
+  sku: string;
+  name: string;
+  uom: string;
+  unit_price: number;
+  stock_qty: number;
+}
+
+export function fetchItems(): Promise<Item[]> {
+  return request<Item[]>("/api/sales/items");
+}
+
+export interface QuotationLineInput {
+  item_name: string;
+  qty: number;
+}
+
+export interface CreateQuotationResult {
+  quotation_id: string;
+  number: string;
+  status: string;
+  total: number;
+  warnings: string[];
+  requires_approval: boolean;
+}
+
+// --- CRM ----------------------------------------------------------------------
+
+export const LEAD_STATUSES = ["New", "Contacted", "Qualified", "Disqualified", "Converted"] as const;
+export const OPPORTUNITY_STAGES = ["Prospecting", "Qualification", "Proposal", "Negotiation", "Won", "Lost"] as const;
+export const ACTIVITY_KINDS = ["Call", "Meeting", "Email", "Task"] as const;
+
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+export type OpportunityStage = (typeof OPPORTUNITY_STAGES)[number];
+export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+
+export interface Assignee {
+  id: string;
+  display_name: string;
+}
+
+interface FollowUpSummary {
+  owner_id: string | null;
+  owner_name: string | null;
+  open_activities: number;
+  overdue_activities: number;
+  next_due_at: string | null;
+  created_at: string;
+}
+
+export interface Lead extends FollowUpSummary {
+  id: string;
+  name: string;
+  organization: string;
+  phone: string;
+  email: string;
+  source: string;
+  status: LeadStatus;
+  converted_opportunity_id: string | null;
+}
+
+export interface Opportunity extends FollowUpSummary {
+  id: string;
+  title: string;
+  customer_name: string;
+  lead_id: string | null;
+  stage: OpportunityStage;
+  expected_value: number;
+  expected_close: string | null;
+  quotations: Quotation[];
+}
+
+export interface Activity {
+  id: string;
+  kind: ActivityKind;
+  subject: string;
+  due_at: string;
+  completed_at: string | null;
+  is_overdue: boolean;
+  lead_id: string | null;
+  opportunity_id: string | null;
+  related_name: string;
+  owner_id: string | null;
+  owner_name: string | null;
+}
+
+const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
+
+export const crm = {
+  assignees: () => request<Assignee[]>("/api/crm/assignees"),
+  leads: () => request<Lead[]>("/api/crm/leads"),
+  opportunities: () => request<Opportunity[]>("/api/crm/opportunities"),
+  activities: () => request<Activity[]>("/api/crm/activities"),
+
+  createLead: (body: { name: string; organization: string; phone: string; email: string; source: string; owner_id: string | null }) =>
+    request<Lead>("/api/crm/leads", { method: "POST", ...json(body) }),
+  assignLead: (id: string, owner_id: string | null) =>
+    request<Lead>(`/api/crm/leads/${id}/owner`, { method: "PATCH", ...json({ owner_id }) }),
+  setLeadStatus: (id: string, status: LeadStatus) =>
+    request<Lead>(`/api/crm/leads/${id}/status`, { method: "PATCH", ...json({ status }) }),
+  convertLead: (id: string, body: { title: string; expected_value: number; expected_close: string | null }) =>
+    request<Opportunity>(`/api/crm/leads/${id}/convert`, { method: "POST", ...json(body) }),
+
+  createOpportunity: (body: { title: string; customer_name: string; expected_value: number; expected_close: string | null; owner_id: string | null }) =>
+    request<Opportunity>("/api/crm/opportunities", { method: "POST", ...json(body) }),
+  assignOpportunity: (id: string, owner_id: string | null) =>
+    request<Opportunity>(`/api/crm/opportunities/${id}/owner`, { method: "PATCH", ...json({ owner_id }) }),
+  setStage: (id: string, stage: OpportunityStage) =>
+    request<Opportunity>(`/api/crm/opportunities/${id}/stage`, { method: "PATCH", ...json({ stage }) }),
+  quoteOpportunity: (id: string, body: { lines: QuotationLineInput[]; discount_pct: number }) =>
+    request<CreateQuotationResult>(`/api/crm/opportunities/${id}/quotations`, { method: "POST", ...json(body) }),
+
+  createActivity: (body: { kind: ActivityKind; subject: string; due_at: string; lead_id?: string; opportunity_id?: string }) =>
+    request<Activity>("/api/crm/activities", { method: "POST", ...json(body) }),
+  completeActivity: (id: string) => request<Activity>(`/api/crm/activities/${id}/complete`, { method: "POST" }),
+};
 
 // --- Ask ERP ----------------------------------------------------------------
 

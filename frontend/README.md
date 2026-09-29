@@ -1,19 +1,22 @@
 # Albiruni ERP — frontend
 
-React + TypeScript + Vite. The "Ask ERP" experience: a dashboard, a Sales
-module, an AI audit trail, and a global command panel — wired to the
-FastAPI backend in `../backend`.
+React + TypeScript + Vite. The "Ask ERP" experience: an Overview dashboard,
+CRM & Sales (pipeline, leads, follow-ups, quotations), an AI audit trail,
+and a docked voice-first Ask ERP copilot — wired to the FastAPI backend in
+`../backend`.
 
 ```
 src/
   api/client.ts       typed fetch client (auth token, all backend endpoints)
   auth/               AuthProvider — login/logout, session restore via /api/auth/me
-  theme/              light/dark ThemeProvider + the day/night switch
+  theme/              light/dark ThemeProvider (toggle lives in the user menu)
   i18n/                EN/ML string tables + LanguageProvider
-  data/AppDataProvider.tsx   fetches quotations + audit events from the API
-  askerp/              AskErpContext (open/close/ask-from-anywhere) + the panel itself
-  layout/TopBar.tsx
-  pages/                Login, Dashboard, Sales, AuditTrail
+  data/AppDataProvider.tsx   fetches quotations, CRM records and audit events (per permission)
+  askerp/              AskErpContext (open/close/ask-from-anywhere) + the docked copilot panel
+  crm/                 owner picker, overdue badge, modals, opportunity drawer (quote from a deal)
+  layout/              Sidebar + TopBar (search/ask box, notifications, user menu)
+  lib/                 INR/date formatting, useSpeech (browser speech-to-text)
+  pages/                Login, Setup, Overview, Crm, AuditTrail
 ```
 
 ## Run it
@@ -33,6 +36,15 @@ Sign in with the seed user: `ahmed` / `ahmed123`.
 
 ## What's real vs. scripted
 
+- Overview KPIs and charts are computed from real quotations and
+  opportunities. Revenue / gross profit / receivables from the design are
+  **not** shown — there's no Finance module to source them from, so the
+  cards show quoted value, open pipeline, won deals and pending approvals
+  instead of invented numbers.
+- Sidebar modules without a backend (Inventory, Purchasing, Finance, HR,
+  Reports, Settings) are listed but disabled with a "Soon" tag.
+- Voice input uses the browser's Web Speech API (Chrome, Edge, Safari).
+  Where it's unsupported the mic is disabled and typing still works.
 - Login, session restore, the Sales table and the Audit Trail are all live
   API data — nothing left in local mock state.
 - The Ask ERP panel's "Create quotation" flow calls the real

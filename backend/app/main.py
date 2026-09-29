@@ -4,10 +4,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.dev_schema import ensure_dev_schema
 
 # Import routers
-from app.api import routes_ask, routes_audit, routes_auth, routes_sales, routes_setup
+from app.api import routes_ask, routes_audit, routes_auth, routes_crm, routes_sales, routes_setup
 
 # Import tool modules for their registration side effect (each module calls
 # register_tool() at import time). This is the whole tool catalog today;
@@ -19,7 +19,7 @@ from app.toolgateway import tools_sales  # noqa: F401
 async def lifespan(app: FastAPI):
     # Dev convenience only — a real deployment manages schema via Alembic
     # migrations (see backend/alembic), never create_all().
-    Base.metadata.create_all(bind=engine)
+    ensure_dev_schema()
     yield
 
 
@@ -36,6 +36,7 @@ app.add_middleware(
 app.include_router(routes_setup.router)
 app.include_router(routes_auth.router)
 app.include_router(routes_sales.router)
+app.include_router(routes_crm.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)
 

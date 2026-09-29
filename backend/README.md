@@ -8,6 +8,7 @@ permissioned Tool Gateway, and every AI-initiated write is audited.
 app/
   core/          config, DB session, JWT/password hashing, auth dependency (RequestContext)
   models/        SQLAlchemy models: Tenant, Company, Role, User, Customer, Item,
+                 Lead, Opportunity, Activity (crm.py),
                  Quotation, QuotationLine, AuditEvent
   domain/        sales_service.py — deterministic business logic (pricing, discount
                  policy, stock check). No AI or HTTP concerns here.
@@ -45,6 +46,8 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
 # 3. Seed demo data (tenant_018 / company_kozhikode / user "ahmed", password "ahmed123")
+#    Re-running on a DB seeded before CRM existed grants the CRM permissions
+#    and adds demo leads/opportunities without touching anything else.
 .venv/bin/python -m app.seed
 
 # 4. Run
@@ -79,7 +82,13 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
 - **Alembic migrations.** Schema is created via `Base.metadata.create_all()`
   at startup for dev convenience. Add real migrations before this touches a
   shared environment.
-- **More domains.** Only Sales/Quotations exists. Inventory, Finance etc.
+- **CRM writes aren't audited.** Leads, opportunities, owners and follow-ups
+  are plain permission-checked form routes (`crm.read`, `crm.write`,
+  `crm.assign`). The one CRM action that creates a financial document —
+  `POST /api/crm/opportunities/{id}/quotations` — runs the same audited
+  `sales.create_quotation_draft.v1` tool as every other quotation, with
+  the opportunity linked via `quotations.opportunity_id`.
+- **More domains.** Only Sales/Quotations and CRM exist. Inventory, Finance etc.
   follow the same three-file pattern: a model, a domain service, a tool.
 
 ## Frontend
