@@ -27,6 +27,9 @@ def lock_items(db: Session, context: RequestContext, item_ids: set[UUID]) -> dic
         .where(Item.id.in_(item_ids), Item.tenant_id == context.tenant_id, Item.company_id == context.company_id)
         .order_by(Item.id)
         .with_for_update()
+        # An item this session already loaded (say, via an order line) must be
+        # re-read under the lock, or two deliveries would both see the old stock.
+        .execution_options(populate_existing=True)
     ).scalars().all()
     found = {i.id: i for i in rows}
     if len(found) != len(item_ids):

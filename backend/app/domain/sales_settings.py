@@ -21,7 +21,7 @@ def profile(db: Session, context: RequestContext) -> CompanyProfile:
 
 
 def update_profile(db: Session, context: RequestContext, body: CompanyProfileUpdate) -> CompanyProfile:
-    company = db.get(Company, context.company_id, with_for_update=True)
+    company = db.get(Company, context.company_id, with_for_update=True, populate_existing=True)
     data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     try:
         if "gstin" in data:

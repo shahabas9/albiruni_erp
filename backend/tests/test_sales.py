@@ -19,7 +19,7 @@ from app.api import routes_ask, routes_customers, routes_deliveries, routes_rece
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import credit_note_service, customer_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -389,6 +389,39 @@ class DeliveryTests(SalesTestCase):
 
         with self.assertRaises(HTTPException):  # delivered goods: the order can't just be cancelled
             routes_orders.cancel_order(order.id, ReasonIn(reason="x"), self.context, self.db)
+
+    def test_two_deliveries_of_the_last_stock_at_once_cant_both_succeed(self):
+        import threading
+        from types import SimpleNamespace
+
+        scarce = self.item("Last boxes", stock=5)
+        orders = [self.confirmed_order([{"item_id": scarce.id, "qty": 5}]) for _ in range(2)]
+        # A plain user object: each thread has its own session and must not touch this one's.
+        context = RequestContext(SimpleNamespace(id=self.context.user.id, display_name="Test user"),
+                                 self.context.tenant_id, self.context.company_id, ["*"], "en-IN")
+        results = []
+
+        def deliver(order_id, line_id):
+            db = SessionLocal()
+            try:
+                # Load the item first, as the real flow does, before the lock is taken.
+                delivery_service.create_delivery(db, context, order_id, [{"order_line_id": line_id, "qty": 5}])
+                db.commit()
+                results.append("ok")
+            except ConflictError:
+                db.rollback()
+                results.append("refused")
+            finally:
+                db.close()
+
+        threads = [threading.Thread(target=deliver, args=(o.id, o.lines[0].id)) for o in orders]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.db.expire_all()
+        self.assertEqual(sorted(results), ["ok", "refused"])
+        self.assertEqual(float(self.db.get(Item, scarce.id).stock_qty), 0)
 
     def test_stock_cant_go_negative_unless_the_company_allows_it(self):
         scarce = self.item("Scarce", stock=5)

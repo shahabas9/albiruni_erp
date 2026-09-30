@@ -47,7 +47,7 @@ def get_invoice(db: Session, context: RequestContext, invoice_id: UUID, *, lock:
         Invoice.id == invoice_id, Invoice.tenant_id == context.tenant_id, Invoice.company_id == context.company_id,
     )
     if lock:
-        stmt = stmt.with_for_update()
+        stmt = stmt.with_for_update().options(selectinload(Invoice.lines)).execution_options(populate_existing=True)
     invoice = db.execute(stmt).scalar_one_or_none()
     if invoice is None:
         raise NotFoundError(f"No invoice with id {invoice_id}")

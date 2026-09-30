@@ -38,7 +38,9 @@ def get_order(db: Session, context: RequestContext, order_id: UUID, *, lock: boo
         SalesOrder.company_id == context.company_id,
     )
     if lock:
-        stmt = stmt.with_for_update()
+        # populate_existing: rows (and lines) this session loaded earlier are
+        # re-read once the lock is held, never trusted from before it.
+        stmt = stmt.with_for_update().options(selectinload(SalesOrder.lines)).execution_options(populate_existing=True)
     order = db.execute(stmt).scalar_one_or_none()
     if order is None:
         raise NotFoundError(f"No sales order with id {order_id}")
@@ -174,7 +176,7 @@ def order_from_quotation(db: Session, context: RequestContext, quotation_id: UUI
     quotation = db.execute(select(Quotation).where(
         Quotation.id == quotation_id, Quotation.tenant_id == context.tenant_id,
         Quotation.company_id == context.company_id,
-    ).with_for_update()).scalar_one_or_none()
+    ).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
     if quotation is None:
         raise NotFoundError(f"No quotation with id {quotation_id}")
     if quotation.status in ("Pending approval", "Rejected"):

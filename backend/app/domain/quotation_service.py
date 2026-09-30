@@ -28,7 +28,7 @@ def get_quotation(db: Session, context: RequestContext, quotation_id: UUID, *, l
         Quotation.company_id == context.company_id,
     )
     if lock:
-        stmt = stmt.with_for_update()
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     quotation = db.execute(stmt).scalar_one_or_none()
     if quotation is None:
         raise NotFoundError(f"No quotation with id {quotation_id}")

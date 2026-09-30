@@ -45,7 +45,7 @@ def get_receipt(db: Session, context: RequestContext, receipt_id: UUID, *, lock:
         Receipt.id == receipt_id, Receipt.tenant_id == context.tenant_id, Receipt.company_id == context.company_id,
     )
     if lock:
-        stmt = stmt.with_for_update()
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     receipt = db.execute(stmt).scalar_one_or_none()
     if receipt is None:
         raise NotFoundError(f"No payment with id {receipt_id}")
@@ -87,7 +87,7 @@ def open_invoices(db: Session, context: RequestContext, customer_id: UUID, *, lo
         Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited > 0,
     )
     if lock:
-        stmt = stmt.order_by(Invoice.id).with_for_update()
+        stmt = stmt.order_by(Invoice.id).with_for_update().execution_options(populate_existing=True)
     rows = [i for i in db.execute(stmt).scalars() if balance(i) > 0]
     return sorted(rows, key=lambda i: (i.due_date, i.number or ""))
 
@@ -118,6 +118,7 @@ def _apply(db: Session, context: RequestContext, receipt: Receipt, allocations: 
     invoices = db.execute(
         select(Invoice).where(Invoice.id.in_(wanted), Invoice.tenant_id == context.tenant_id,
                               Invoice.company_id == context.company_id).order_by(Invoice.id).with_for_update()
+        .execution_options(populate_existing=True)
     ).scalars().all()
     by_id = {i.id: i for i in invoices}
     applied = []
@@ -205,7 +206,8 @@ def void_receipt(db: Session, context: RequestContext, receipt_id: UUID, reason:
         raise ConflictError(f"{receipt.number} is already voided.")
     ids = sorted({a.invoice_id for a in receipt.allocations})
     invoices = {i.id: i for i in db.execute(
-        select(Invoice).where(Invoice.id.in_(ids)).order_by(Invoice.id).with_for_update()).scalars()}
+        select(Invoice).where(Invoice.id.in_(ids)).order_by(Invoice.id).with_for_update()
+        .execution_options(populate_existing=True)).scalars()}
     for a in receipt.allocations:
         invoice = invoices[a.invoice_id]
         invoice.amount_paid = Decimal(str(invoice.amount_paid)) - Decimal(str(a.amount))
