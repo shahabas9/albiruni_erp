@@ -5,13 +5,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, customer_service, history, record_admin
+from app.core.deps import RequestContext, get_current_context, require_permission
+from app.domain import bulk_service, crm_service, customer_service, history, record_admin
 from app.api.routes_leads import http_error
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, Contact, Lead, Opportunity
 from app.models.sales import Quotation
-from app.schemas.crm import MergeIn, TimelineEntry
+from app.schemas.crm import BulkIn, BulkOut, MergeIn, TimelineEntry
 from app.schemas.customers import CustomerIn, CustomerOut, CustomerUpdate
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
@@ -193,3 +193,20 @@ def merge_customer(
         return _to_out(record_admin.merge_customers(db, context, customer_id, body.remove_id))
     except (NotFoundError, ConflictError) as exc:
         raise http_error(exc) from exc
+
+@router.post("/bulk", response_model=BulkOut)
+def bulk_customer(
+    body: BulkIn,
+    context: RequestContext = Depends(get_current_context),
+    db: Session = Depends(get_db),
+):
+    """Add_tag, remove_tag, activate, deactivate or delete — each record checked like a single edit; refused ones are skipped with the reason."""
+
+    try:
+        return bulk_service.run(db, context, "customer", body.action, ids=body.ids, filters=body.filters,
+                                value=body.value, lost_reason=body.lost_reason)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+

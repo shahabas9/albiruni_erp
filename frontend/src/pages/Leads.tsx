@@ -4,6 +4,7 @@ import {
   ApiError,
   LEAD_STATUSES,
   assignLead,
+  bulkAction,
   convertLead,
   createLead,
   fetchLeadCustomerMatches,
@@ -26,6 +27,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
 import { ExportButton } from "../components/ExportButton";
 import { Attachments } from "../crm/Attachments";
+import { BulkBar, useSelection, type BulkActionDef } from "../crm/BulkBar";
 import { MergeDuplicates } from "../crm/MergeDuplicates";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
@@ -91,6 +93,19 @@ export function Leads() {
     version,
   );
   const visible = list.rows;
+  const sel = useSelection(visible.map((l) => l.id), `${search}|${statusParam}|${owner}|${tag}|${list.page}`);
+  const bulkEnabled = can("crm.lead.write") || can("crm.lead.assign") || can("crm.lead.delete");
+  const bulkActions: BulkActionDef[] = [
+    ...(can("crm.lead.assign") ? [{ key: "assign", label: "Assign to", input: "owner" as const }] : []),
+    ...(can("crm.lead.write")
+      ? [
+          { key: "add_tag", label: "Add tag", input: "tag" as const },
+          { key: "remove_tag", label: "Remove tag", input: "tag" as const },
+          { key: "status", label: "Set status", input: "choice" as const, options: LEAD_STATUSES.filter((s) => s !== "Converted") },
+        ]
+      : []),
+    ...(can("crm.lead.delete") ? [{ key: "delete", label: "Delete", input: "none" as const, danger: true }] : []),
+  ];
   const filtered = Boolean(search || status || tag || owner !== "all");
 
   async function assign(lead: Lead, ownerId: string | null) {
@@ -157,6 +172,26 @@ export function Leads() {
 
       {showForm && <LeadForm ownerId={user?.id ?? null} onDone={() => { setShowForm(false); reload(); }} />}
 
+      {bulkEnabled && (
+        <BulkBar
+          selection={sel}
+          total={list.total}
+          noun="lead"
+          actions={bulkActions}
+          assignees={assignees}
+          run={(action, value, _lost, target) =>
+            bulkAction("leads", {
+              action,
+              value,
+              ...(target.all
+                ? { filters: { q: search, status: statusParam, owner: ownerParam(owner), tag } }
+                : { ids: target.ids }),
+            })
+          }
+          onDone={() => void reload()}
+        />
+      )}
+
       {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {filtered ? "No leads match this filter." : "No leads yet — add one above."}
@@ -168,6 +203,11 @@ export function Leads() {
           <table>
             <thead>
               <tr>
+                {bulkEnabled && (
+                  <th className="check-col">
+                    <input type="checkbox" aria-label="Select all on this page" checked={sel.allOnPage} onChange={sel.togglePage} />
+                  </th>
+                )}
                 <th>Lead</th>
                 <th>Status</th>
                 <th>Owner</th>
@@ -179,12 +219,17 @@ export function Leads() {
               {visible.map((l) =>
                 editingId === l.id ? (
                   <tr key={l.id}>
-                    <td colSpan={5}>
+                    <td colSpan={bulkEnabled ? 6 : 5}>
                       <LeadForm lead={l} onDone={() => { setEditingId(null); reload(); }} />
                     </td>
                   </tr>
                 ) : (
-                  <tr key={l.id}>
+                  <tr key={l.id} className={sel.has(l.id) ? "selected" : undefined}>
+                    {bulkEnabled && (
+                      <td className="check-col">
+                        <input type="checkbox" aria-label={`Select ${l.company_name || l.name}`} checked={sel.has(l.id)} onChange={() => sel.toggle(l.id)} />
+                      </td>
+                    )}
                     <td>
                       <div className="cell-with-actions">
                         <div>

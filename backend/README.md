@@ -209,6 +209,17 @@ Excel, include tags and one column per custom field, and cells that a
 spreadsheet would run as a formula are prefixed with `'`. At most 50,000
 rows per export.
 
+**Bulk actions.** `POST /api/leads/bulk`, `/api/opportunities/bulk` and
+`/api/customers/bulk` take an `action`, a `value`, and either `ids` (up to
+500) or `filters` (everything matching the list's filters, up to 2,000).
+Leads: `assign`, `add_tag`, `remove_tag`, `status`, `delete`; deals:
+`assign`, `add_tag`, `remove_tag`, `stage` (Lost needs `lost_reason`),
+`delete`; customers: `add_tag`, `remove_tag`, `activate`, `deactivate`,
+`delete`. Each needs the permission its single edit needs, and each record
+goes through the same service call (rules, visibility, history); refused
+records are skipped and listed with the reason. A bulk reassignment sends
+the new owner one summary notification.
+
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return
 the total matching count in `X-Total-Count`: leads `q` (every word must

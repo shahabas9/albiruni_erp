@@ -3355,3 +3355,54 @@ button.tag-chip:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* ================= Bulk actions ================= */
+
+.check-col {
+  width: 34px;
+  padding-right: 0 !important;
+}
+
+tr.selected td {
+  background: var(--accent-soft);
+}
+
+.bulk-bar {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  margin-bottom: 12px;
+}
+
+.bulk-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+}
+
+.bulk-row select,
+.bulk-row input {
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.bulk-row .link-btn {
+  padding: 0;
+}
+
+.bulk-bar .notice ul {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-weight: 500;
+}

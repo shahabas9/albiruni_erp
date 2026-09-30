@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ApiError,
+  bulkAction,
   createCustomer,
   deleteCustomer,
   fetchCustomerDuplicates,
@@ -12,6 +13,7 @@ import { CsvImport } from "../components/CsvImport";
 import { ExportButton } from "../components/ExportButton";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { Attachments } from "../crm/Attachments";
+import { BulkBar, useSelection, type BulkActionDef } from "../crm/BulkBar";
 import { MergeDuplicates } from "../crm/MergeDuplicates";
 import { Drawer, DuplicateWarning, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -49,6 +51,19 @@ export function Customers() {
     version,
   );
   const customers = list.rows;
+  const sel = useSelection(customers.map((c) => c.id), `${search}|${active}|${tag}|${list.page}`);
+  const bulkEnabled = can("sales.customer.write") || can("sales.customer.delete");
+  const bulkActions: BulkActionDef[] = [
+    ...(can("sales.customer.write")
+      ? [
+          { key: "add_tag", label: "Add tag", input: "tag" as const },
+          { key: "remove_tag", label: "Remove tag", input: "tag" as const },
+          { key: "deactivate", label: "Deactivate", input: "none" as const },
+          { key: "activate", label: "Activate", input: "none" as const },
+        ]
+      : []),
+    ...(can("sales.customer.delete") ? [{ key: "delete", label: "Delete", input: "none" as const, danger: true }] : []),
+  ];
   // Saves here reload only this list, so bump the tag filter's suggestions too.
   const [saves, setSaves] = useState(0);
   const refresh = async () => {
@@ -101,6 +116,26 @@ export function Customers() {
 
       {showForm && <CustomerForm onDone={() => { setShowForm(false); refresh(); }} />}
 
+      {bulkEnabled && (
+        <BulkBar
+          selection={sel}
+          total={list.total}
+          noun="customer"
+          actions={bulkActions}
+          assignees={[]}
+          run={(action, value, _lost, target) =>
+            bulkAction("customers", {
+              action,
+              value,
+              ...(target.all
+                ? { filters: { q: search, active: active === "all" ? undefined : active === "active", tag } }
+                : { ids: target.ids }),
+            })
+          }
+          onDone={() => void refresh()}
+        />
+      )}
+
       {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {search || tag || active !== "all" ? "No customers match this filter." : "No customers yet — add one above."}
@@ -112,6 +147,11 @@ export function Customers() {
           <table>
             <thead>
               <tr>
+                {bulkEnabled && (
+                  <th className="check-col">
+                    <input type="checkbox" aria-label="Select all on this page" checked={sel.allOnPage} onChange={sel.togglePage} />
+                  </th>
+                )}
                 <th>Name</th>
                 <th>GSTIN</th>
                 <th>Credit limit</th>
@@ -123,7 +163,7 @@ export function Customers() {
               {customers.map((c) =>
                 editingId === c.id ? (
                   <tr key={c.id}>
-                    <td colSpan={5}>
+                    <td colSpan={bulkEnabled ? 6 : 5}>
                       <CustomerForm
                         customer={c}
                         onDone={() => {
@@ -134,7 +174,12 @@ export function Customers() {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={c.id}>
+                  <tr key={c.id} className={sel.has(c.id) ? "selected" : undefined}>
+                    {bulkEnabled && (
+                      <td className="check-col">
+                        <input type="checkbox" aria-label={`Select ${c.name}`} checked={sel.has(c.id)} onChange={() => sel.toggle(c.id)} />
+                      </td>
+                    )}
                     <td>
                       <Link className="link-btn" style={{ padding: 0 }} to={`/customers/${c.id}`}>
                         {c.name}

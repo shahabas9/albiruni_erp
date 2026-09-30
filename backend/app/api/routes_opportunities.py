@@ -9,11 +9,13 @@ from app.ai.orchestrator import new_correlation_id
 from app.api.routes_leads import http_error
 from app.api.routes_sales import to_quotation_out
 from app.core.database import get_db
-from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, history, opportunity_service, record_admin
+from app.core.deps import RequestContext, get_current_context, require_permission
+from app.domain import bulk_service, crm_service, history, opportunity_service, record_admin
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Opportunity
 from app.schemas.crm import (
+    BulkIn,
+    BulkOut,
     OpportunityIn,
     OpportunityOut,
     OpportunityQuotationIn,
@@ -203,3 +205,20 @@ def quote_opportunity(
         correlation_id=new_correlation_id(),
         confirmed=True,
     )
+
+@router.post("/bulk", response_model=BulkOut)
+def bulk_opportunity(
+    body: BulkIn,
+    context: RequestContext = Depends(get_current_context),
+    db: Session = Depends(get_db),
+):
+    """Assign, add_tag, remove_tag, stage (lost needs lost_reason) or delete — each record checked like a single edit; refused ones are skipped with the reason."""
+
+    try:
+        return bulk_service.run(db, context, "opportunity", body.action, ids=body.ids, filters=body.filters,
+                                value=body.value, lost_reason=body.lost_reason)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+

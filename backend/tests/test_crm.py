@@ -909,6 +909,57 @@ class CrmTests(unittest.TestCase):
             export("customers", rep)
         self.assertEqual(no_read.exception.status_code, 403)
 
+    # --- Bulk actions -------------------------------------------------------------
+
+    def test_bulk_actions_apply_the_single_edit_rules(self):
+        from app.api import routes_notifications
+
+        asha = self.colleague("Asha")
+        asha_ctx = RequestContext(asha, self.context.tenant_id, self.context.company_id, ["*"], "en-IN")
+        leads = [self.lead(name=f"Bulk {i}", company_name=f"Bulk Co {i}") for i in range(3)]
+        converted = self.lead(name="Bulk converted", company_name="Bulk Co converted")
+        lead_service.convert_lead(self.db, self.context, converted.id, crm.ConvertLeadIn(create_opportunity=False))
+
+        out = routes_leads.bulk_lead(crm.BulkIn(action="assign", ids=[l.id for l in leads] + [converted.id],
+                                                value=str(asha.id)), self.context, self.db)
+        self.assertEqual((out["matched"], out["done"]), (4, 3))
+        self.assertIn("converted", out["skipped"][0]["reason"])
+        self.assertEqual({l.owner_user_id for l in self.leads_out(q="Bulk Co", status_="open")}, {asha.id})
+        inbox = routes_notifications.list_notifications(False, 30, asha_ctx, self.db)["items"]
+        self.assertEqual([n.title for n in inbox if "assigned" in n.title], ["3 leads assigned to you"])  # one alert, not three
+
+        # "All matching" uses the list filters; tags go through normal validation and history.
+        out = routes_leads.bulk_lead(crm.BulkIn(action="add_tag", filters={"q": "Bulk Co", "status": "open"}, value="Q4 Push"),
+                                     self.context, self.db)
+        self.assertEqual(out["done"], 3)
+        self.assertEqual([l.name for l in self.leads_out(tag="q4 push")], ["Bulk 2", "Bulk 1", "Bulk 0"])
+        self.assertEqual(routes_leads.lead_timeline(leads[0].id, self.context, self.db)[0]["summary"], "Tags: — → q4 push")
+        routes_leads.bulk_lead(crm.BulkIn(action="status", ids=[leads[0].id], value="Contacted"), self.context, self.db)
+        self.assertEqual(lead_service.get_lead(self.db, self.context, leads[0].id).status, "Contacted")
+
+        # Deals: moving to Lost needs a reason, like one at a time.
+        deals = [self.deal(name=f"Bulk deal {i}") for i in range(2)]
+        refused = routes_opportunities.bulk_opportunity(crm.BulkIn(action="stage", ids=[d.id for d in deals], value="Lost"),
+                                                        self.context, self.db)
+        self.assertEqual((refused["done"], len(refused["skipped"])), (0, 2))
+        lost = routes_opportunities.bulk_opportunity(
+            crm.BulkIn(action="stage", ids=[d.id for d in deals], value="Lost", lost_reason="Budget cut"), self.context, self.db)
+        self.assertEqual(lost["done"], 2)
+
+        customer = customer_service.create_customer(self.db, self.context, CustomerIn(name="Bulk customer"))
+        routes_customers.bulk_customer(crm.BulkIn(action="deactivate", ids=[customer.id]), self.context, self.db)
+        self.assertFalse(customer_service.get_customer(self.db, self.context, customer.id).active)
+
+        # Permissions per action; ids someone can't see are simply not targets.
+        writer = self.make_context(["crm.lead.read", "crm.lead.write"], *self._tenant_and_company())
+        with self.assertRaises(HTTPException) as denied:
+            routes_leads.bulk_lead(crm.BulkIn(action="assign", ids=[leads[1].id], value=None), writer, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
+        hidden = routes_leads.bulk_lead(crm.BulkIn(action="add_tag", ids=[leads[1].id], value="x"), writer, self.db)
+        self.assertEqual((hidden["matched"], hidden["done"]), (0, 0))
+        with self.assertRaises(HTTPException):
+            routes_leads.bulk_lead(crm.BulkIn(action="delete"), self.context, self.db)  # neither ids nor filters
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

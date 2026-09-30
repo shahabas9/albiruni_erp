@@ -109,7 +109,9 @@ def update_lead(db: Session, context: RequestContext, lead_id: UUID, body: LeadU
     return lead
 
 
-def assign_lead(db: Session, context: RequestContext, lead_id: UUID, owner_user_id: UUID | None) -> Lead:
+def assign_lead(
+    db: Session, context: RequestContext, lead_id: UUID, owner_user_id: UUID | None, *, notify: bool = True
+) -> Lead:
     lead = get_lead(db, context, lead_id)
     if lead.status == "Converted":
         raise ConflictError("This lead has already been converted — reassign its opportunity instead.")
@@ -117,8 +119,9 @@ def assign_lead(db: Session, context: RequestContext, lead_id: UUID, owner_user_
     if new_owner != lead.owner_user_id:
         summary, changes = history.owner_change(db, lead.owner_user_id, new_owner)
         history.record(db, context, "lead", lead.id, "owner_changed", summary, changes)
-        notifications.notify(db, context, new_owner, "lead_assigned", f"Lead assigned to you: {_label(lead)}",
-                             "", notifications.lead_link(lead.id))
+        if notify:
+            notifications.notify(db, context, new_owner, "lead_assigned", f"Lead assigned to you: {_label(lead)}",
+                                 "", notifications.lead_link(lead.id))
     lead.owner_user_id = new_owner
     db.commit()
     db.refresh(lead)

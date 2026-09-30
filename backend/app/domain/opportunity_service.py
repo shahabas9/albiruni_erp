@@ -126,15 +126,16 @@ def update_opportunity(db: Session, context: RequestContext, opportunity_id: UUI
 
 
 def assign_opportunity(
-    db: Session, context: RequestContext, opportunity_id: UUID, owner_user_id: UUID | None
+    db: Session, context: RequestContext, opportunity_id: UUID, owner_user_id: UUID | None, *, notify: bool = True
 ) -> Opportunity:
     opp = get_opportunity(db, context, opportunity_id)
     new_owner = crm_service.resolve_owner(db, context, owner_user_id)
     if new_owner != opp.owner_user_id:
         summary, changes = history.owner_change(db, opp.owner_user_id, new_owner)
         history.record(db, context, "opportunity", opp.id, "owner_changed", summary, changes)
-        notifications.notify(db, context, new_owner, "deal_assigned", f"Deal assigned to you: {opp.name}", "",
-                             notifications.deal_link(opp.id))
+        if notify:
+            notifications.notify(db, context, new_owner, "deal_assigned", f"Deal assigned to you: {opp.name}", "",
+                                 notifications.deal_link(opp.id))
     opp.owner_user_id = new_owner
     db.commit()
     db.refresh(opp)

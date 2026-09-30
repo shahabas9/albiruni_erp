@@ -1143,3 +1143,19 @@ export async function downloadExport(kind: ExportKind, filters: Params = {}): Pr
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return Number(res.headers.get("X-Row-Count") ?? 0);
 }
+
+// --- Bulk actions ------------------------------------------------------------------
+
+export interface BulkResult {
+  matched: number;
+  done: number;
+  skipped: { id: string; label: string; reason: string }[];
+}
+
+/** ids, or filters for "everything matching" (the list's own filter params). */
+export function bulkAction(
+  list: "leads" | "opportunities" | "customers",
+  body: { action: string; ids?: string[]; filters?: Params; value?: string | null; lost_reason?: string },
+): Promise<BulkResult> {
+  return request<BulkResult>(`/api/${list}/bulk`, { method: "POST", body: JSON.stringify(body) });
+}

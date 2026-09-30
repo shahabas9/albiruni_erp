@@ -4,6 +4,7 @@ import {
   ApiError,
   OPPORTUNITY_STAGES,
   assignOpportunity,
+  bulkAction,
   createOpportunity,
   fetchOpportunities,
   updateOpportunity,
@@ -15,6 +16,7 @@ import { CustomerPicker } from "../components/CustomerPicker";
 import { ExportButton } from "../components/ExportButton";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
+import { BulkBar, useSelection, type BulkActionDef } from "../crm/BulkBar";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { FollowUpBadge, IdleBadge, OwnerPicker, Pager, SearchBox, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -56,6 +58,19 @@ export function Opportunities() {
     version,
   );
   const visible = list.rows;
+  const sel = useSelection(visible.map((o) => o.id), `${search}|${stageFilter}|${owner}|${tag}|${list.page}`);
+  const bulkEnabled = can("crm.opportunity.write") || can("crm.opportunity.assign") || can("crm.opportunity.delete");
+  const bulkActions: BulkActionDef[] = [
+    ...(can("crm.opportunity.assign") ? [{ key: "assign", label: "Assign to", input: "owner" as const }] : []),
+    ...(can("crm.opportunity.write")
+      ? [
+          { key: "add_tag", label: "Add tag", input: "tag" as const },
+          { key: "remove_tag", label: "Remove tag", input: "tag" as const },
+          { key: "stage", label: "Move to stage", input: "choice" as const, options: OPPORTUNITY_STAGES },
+        ]
+      : []),
+    ...(can("crm.opportunity.delete") ? [{ key: "delete", label: "Delete", input: "none" as const, danger: true }] : []),
+  ];
   const stageCount = (s: OpportunityStage) =>
     s === "Won" ? crm?.won_deals : s === "Lost" ? crm?.lost_deals : crm?.by_stage.find((b) => b.stage === s)?.count;
 
@@ -148,6 +163,35 @@ export function Opportunities() {
         />
       )}
 
+      {bulkEnabled && (
+        <BulkBar
+          selection={sel}
+          total={list.total}
+          noun="deal"
+          actions={bulkActions}
+          assignees={assignees}
+          run={(action, value, lostReason, target) =>
+            bulkAction("opportunities", {
+              action,
+              value,
+              lost_reason: lostReason,
+              ...(target.all
+                ? {
+                    filters: {
+                    q: search,
+                    stage: stageFilter === "all" || stageFilter === "stale" ? "" : stageFilter,
+                    stale: stageFilter === "stale" || undefined,
+                    owner: ownerParam(owner),
+                    tag,
+                  },
+                  }
+                : { ids: target.ids }),
+            })
+          }
+          onDone={() => void reload()}
+        />
+      )}
+
       {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {search || tag || stageFilter !== "all" || owner !== "all" ? "No opportunities match this filter." : "No opportunities yet."}
@@ -159,6 +203,11 @@ export function Opportunities() {
           <table>
             <thead>
               <tr>
+                {bulkEnabled && (
+                  <th className="check-col">
+                    <input type="checkbox" aria-label="Select all on this page" checked={sel.allOnPage} onChange={sel.togglePage} />
+                  </th>
+                )}
                 <th>Deal</th>
                 <th>Stage</th>
                 <th>Value</th>
@@ -172,7 +221,7 @@ export function Opportunities() {
               {visible.map((o) =>
                 editingId === o.id ? (
                   <tr key={o.id}>
-                    <td colSpan={8}>
+                    <td colSpan={bulkEnabled ? 9 : 8}>
                       <OpportunityForm
                         opportunity={o}
                         onDone={() => {
@@ -183,7 +232,12 @@ export function Opportunities() {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={o.id}>
+                  <tr key={o.id} className={sel.has(o.id) ? "selected" : undefined}>
+                    {bulkEnabled && (
+                      <td className="check-col">
+                        <input type="checkbox" aria-label={`Select ${o.name}`} checked={sel.has(o.id)} onChange={() => sel.toggle(o.id)} />
+                      </td>
+                    )}
                     <td style={{ whiteSpace: "normal", minWidth: 180 }}>
                       <button
                         className="link-btn"
