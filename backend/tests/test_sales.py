@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_deliveries, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_customers, routes_deliveries, routes_receivables, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
@@ -150,6 +150,15 @@ class SalesTestCase(unittest.TestCase):
 
     def issue(self, invoice, day=None, context=None):
         return routes_invoices.issue_invoice(invoice.id, IssueIn(invoice_date=day), context or self.context, self.db)
+
+    def invoice_for(self, customer, qty, item=None):
+        item = item or self.item(stock=1000)
+        order = self.confirmed_order([{"item_id": item.id, "qty": qty}], customer)
+        return self.issue(self.draft(order))
+
+    def pay(self, customer, amount, mode="UPI", reference="UTR123", context=None, **fields):
+        body = ReceiptIn(customer_id=customer.id, amount=amount, mode=mode, reference=reference, **fields)
+        return routes_payments.record_payment(body, context or self.context, self.db)
 
 
 class GstTests(SalesTestCase):
@@ -602,15 +611,6 @@ class CreditNoteTests(SalesTestCase):
 
 
 class PaymentTests(SalesTestCase):
-    def invoice_for(self, customer, qty, item=None):
-        item = item or self.item(stock=1000)
-        order = self.confirmed_order([{"item_id": item.id, "qty": qty}], customer)
-        return self.issue(self.draft(order))
-
-    def pay(self, customer, amount, mode="UPI", reference="UTR123", context=None, **fields):
-        body = ReceiptIn(customer_id=customer.id, amount=amount, mode=mode, reference=reference, **fields)
-        return routes_payments.record_payment(body, context or self.context, self.db)
-
     def test_payments_settle_the_oldest_invoices_first_and_keep_the_rest(self):
         customer = self.customer()
         older = self.invoice_for(customer, 1)  # 496
@@ -686,6 +686,61 @@ class PaymentTests(SalesTestCase):
         self.assertIn("credit limit", over.exception.detail)
         self.pay(customer, 4956)
         self.assertEqual(self.confirm(order.id, seller).status, "Confirmed")
+
+
+
+class ReceivablesTests(SalesTestCase):
+    def age(self, invoice, days_overdue):
+        row = self.db.get(Invoice, invoice.id)
+        row.due_date = date.today() - timedelta(days=days_overdue)
+        row.invoice_date = min(row.invoice_date, row.due_date)
+        self.db.commit()
+
+    def test_ageing_buckets_by_days_overdue_less_advances(self):
+        item = self.item(stock=1000)
+        late, fresh = self.customer("Late Payer"), self.customer("Fresh Buyer")
+        for qty, days in ((1, 5), (2, 45), (1, 120)):
+            self.age(self.invoice_for(late, qty, item), days)
+        self.invoice_for(fresh, 1, item)  # not due yet
+        self.pay(fresh, 1000, allocations=[])  # an advance bigger than what it owes
+        self.customer("Quiet Co")  # owes nothing: left out
+
+        report = routes_receivables.ageing(None, "", self.context, self.db)
+        rows = {r["customer_name"]: r for r in report["rows"]}
+        self.assertEqual(set(rows), {"Late Payer", "Fresh Buyer"})
+        self.assertEqual(report["rows"][0]["customer_name"], "Late Payer")  # most overdue first
+        l = rows["Late Payer"]
+        self.assertEqual((l["d1_30"], l["d31_60"], l["d61_90"], l["d90_plus"], l["not_due"]),
+                         (496.0, 991.0, 0.0, 496.0, 0.0))
+        self.assertEqual((l["overdue"], l["open_invoices"]), (1983.0, 3))
+        f = rows["Fresh Buyer"]
+        self.assertEqual((f["not_due"], f["advance"], f["net"]), (496.0, 1000.0, -504.0))
+        self.assertEqual(report["totals"]["net"], 1983.0 - 504.0)
+
+        overview = routes_customers.customer_overview(late.id, self.context, self.db)
+        self.assertEqual((overview["account"]["overdue"], overview["account"]["open_invoices"]), (1983.0, 3))
+
+    def test_statement_runs_a_balance_from_what_was_brought_forward(self):
+        item = self.item(stock=1000)
+        customer = self.customer()
+        first = self.invoice_for(customer, 1, item)  # 496
+        row = self.db.get(Invoice, first.id)
+        row.invoice_date = date.today() - timedelta(days=40)
+        self.db.commit()
+        self.invoice_for(customer, 2, item)  # 991 today
+        self.pay(customer, 300)
+        voided = self.pay(customer, 100, mode="Cheque", reference="11")
+        routes_payments.void_payment(voided.id, ReasonIn(reason="Bounced"), self.context, self.db)
+
+        start = date.today() - timedelta(days=10)
+        st = routes_receivables.statement(customer.id, start, date.today(), self.context, self.db)
+        self.assertEqual(st["opening_balance"], 496.0)
+        self.assertEqual([(l["kind"], l["debit"], l["credit"], l["balance"]) for l in st["lines"]],
+                         [("Invoice", 991.0, 0.0, 1487.0), ("Payment", 0.0, 300.0, 1187.0)])
+        self.assertEqual(st["closing_balance"], 1187.0)
+        self.assertEqual(float(receivables.net_owed(self.db, self.context, customer.id)), 1187.0)
+        with self.assertRaises(HTTPException):
+            routes_receivables.statement(customer.id, date.today(), start, self.context, self.db)
 
 
 if __name__ == "__main__":

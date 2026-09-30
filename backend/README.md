@@ -504,3 +504,19 @@ functions with their own unit tests).
 - The credit-limit check on confirming an order now counts unpaid invoices
   (less advances) as well as what confirmed orders will still bill.
 - Receipts print at `/print/receipt/{id}`.
+
+### Receivables
+
+- `GET /api/sales/receivables` (needs `sales.invoice.read`): per customer,
+  what's owed split by days past the due date — not yet due, 1–30, 31–60,
+  61–90, 90+ — plus advances held and the net. Most overdue first; customers
+  owing nothing and holding no advance are left out. `as_of` ages at another
+  date.
+- `GET /api/sales/receivables/{customer_id}/statement?date_from&date_to`
+  (default: this financial year to date): the balance brought forward, then
+  invoices (debit), credit notes and payments (credit) with a running
+  balance. Voided payments are left out. Printable at
+  `/print/statement/{customer_id}?from=&to=`.
+- The customer page's overview adds an `account` block (owed, overdue,
+  advance, net, open invoices, oldest due) for people with
+  `sales.invoice.read`.

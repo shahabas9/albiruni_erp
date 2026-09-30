@@ -461,3 +461,70 @@ export function allocatePayment(id: string, allocations?: { invoice_id: string; 
 export function voidPayment(id: string, reason: string): Promise<Receipt> {
   return request<Receipt>(`/api/sales/payments/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
 }
+
+// --- Receivables ------------------------------------------------------------------
+
+export interface AgeingRow {
+  customer_id: string;
+  customer_name: string;
+  gstin: string;
+  credit_limit: number;
+  not_due: number;
+  d1_30: number;
+  d31_60: number;
+  d61_90: number;
+  d90_plus: number;
+  overdue: number;
+  invoiced_owed: number;
+  advance: number;
+  net: number;
+  oldest_due: string | null;
+  open_invoices: number;
+}
+
+export interface Ageing {
+  as_of: string;
+  rows: AgeingRow[];
+  totals: Pick<AgeingRow, "not_due" | "d1_30" | "d31_60" | "d61_90" | "d90_plus" | "overdue" | "invoiced_owed" | "advance" | "net">;
+}
+
+export function fetchAgeing(q = "", asOf?: string): Promise<Ageing> {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (asOf) params.set("as_of", asOf);
+  const qs = params.toString();
+  return request<Ageing>(`/api/sales/receivables${qs ? `?${qs}` : ""}`);
+}
+
+export interface StatementLine {
+  date: string;
+  kind: "Invoice" | "Credit note" | "Payment";
+  number: string;
+  id: string;
+  details: string;
+  debit: number;
+  credit: number;
+  balance: number;
+}
+
+export interface Statement {
+  customer_id: string;
+  customer_name: string;
+  gstin: string;
+  billing_address: string;
+  date_from: string;
+  date_to: string;
+  opening_balance: number;
+  closing_balance: number;
+  total_debit: number;
+  total_credit: number;
+  lines: StatementLine[];
+}
+
+export function fetchStatement(customerId: string, dateFrom?: string, dateTo?: string): Promise<Statement> {
+  const params = new URLSearchParams();
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+  const qs = params.toString();
+  return request<Statement>(`/api/sales/receivables/${customerId}/statement${qs ? `?${qs}` : ""}`);
+}

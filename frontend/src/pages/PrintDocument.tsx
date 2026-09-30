@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import {
   fetchCompanyProfile,
@@ -8,20 +8,25 @@ import {
   fetchInvoice,
   fetchOrder,
   fetchPayment,
+  fetchStatement,
   type CompanyProfile,
   type CreditNote,
   type DeliveryNote,
   type Invoice,
   type Receipt,
+  type Statement,
   type SalesOrder,
 } from "../api/sales";
 import { dayDate } from "../lib/format";
+import { StatementTable } from "./StatementPage";
 
 const money = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Print-ready documents at /print/invoice/:id and /print/delivery/:id — no app chrome; use the browser's Print / Save as PDF. */
-export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" | "receipt" }) {
+export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" | "receipt" | "statement" }) {
   const { id = "" } = useParams();
+  const [search] = useSearchParams();
+  const [statement, setStatement] = useState<{ data: Statement; company: CompanyProfile } | null>(null);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [delivery, setDelivery] = useState<{ note: DeliveryNote; order: SalesOrder; company: CompanyProfile } | null>(null);
   const [credit, setCredit] = useState<CreditNote | null>(null);
@@ -36,20 +41,25 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
           ? fetchCreditNote(id).then(setCredit)
           : kind === "receipt"
             ? Promise.all([fetchPayment(id), fetchCompanyProfile()]).then(([r, company]) => setReceipt({ receipt: r, company }))
+            : kind === "statement"
+              ? Promise.all([fetchStatement(id, search.get("from") ?? undefined, search.get("to") ?? undefined), fetchCompanyProfile()]).then(
+                  ([data, company]) => setStatement({ data, company }),
+                )
           : fetchDelivery(id).then(async (note) => {
             const [order, company] = await Promise.all([fetchOrder(note.order_id), fetchCompanyProfile()]);
             setDelivery({ note, order, company });
           });
     load.catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load the document."));
-  }, [id, kind]);
+  }, [id, kind, search]);
 
   useEffect(() => {
-    const title = invoice?.number ?? delivery?.note.number ?? credit?.number ?? receipt?.receipt.number;
+    const title =
+      invoice?.number ?? delivery?.note.number ?? credit?.number ?? receipt?.receipt.number ?? (statement && `Statement ${statement.data.customer_name}`);
     if (title) document.title = title.replace(/\//g, "-");
-  }, [invoice, delivery, credit, receipt]);
+  }, [invoice, delivery, credit, receipt, statement]);
 
   if (error) return <p className="print-error">{error}</p>;
-  if (!invoice && !delivery && !credit && !receipt) return <p className="print-error">Loading…</p>;
+  if (!invoice && !delivery && !credit && !receipt && !statement) return <p className="print-error">Loading…</p>;
 
   return (
     <div className="print-shell">
@@ -67,6 +77,8 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
         <CreditSheet note={credit} />
       ) : receipt ? (
         <ReceiptSheet {...receipt} />
+      ) : statement ? (
+        <StatementSheet {...statement} />
       ) : (
         <ChallanSheet {...delivery!} />
       )}
@@ -565,6 +577,61 @@ function ReceiptSheet({ receipt: r, company }: { receipt: Receipt; company: Comp
           <p className="sig">Authorised signatory</p>
         </div>
       </footer>
+    </article>
+  );
+}
+
+function StatementSheet({ data, company }: { data: Statement; company: CompanyProfile }) {
+  return (
+    <article className="print-doc">
+      <header className="pd-head">
+        <div>
+          <h1>{company.legal_name || company.name}</h1>
+          <p className="pre">{company.address}</p>
+          {company.gstin && (
+            <p>
+              GSTIN <b className="mono">{company.gstin}</b>
+            </p>
+          )}
+        </div>
+        <div className="pd-title">
+          <h2>STATEMENT OF ACCOUNT</h2>
+          <small>
+            {dayDate(data.date_from)} – {dayDate(data.date_to)}
+          </small>
+        </div>
+      </header>
+      <section className="pd-meta">
+        <div>
+          <h3>Customer</h3>
+          <p>
+            <b>{data.customer_name}</b>
+          </p>
+          <p className="pre">{data.billing_address}</p>
+          {data.gstin && (
+            <p>
+              GSTIN <b className="mono">{data.gstin}</b>
+            </p>
+          )}
+        </div>
+        <dl>
+          <dt>Balance due</dt>
+          <dd>
+            <b>₹{money(data.closing_balance)}</b>
+          </dd>
+        </dl>
+      </section>
+      <div className="pd-statement">
+        <StatementTable data={data} links={false} />
+      </div>
+      {company.bank_details && (
+        <footer className="pd-foot">
+          <div>
+            <h3>Pay to</h3>
+            <p className="pre">{company.bank_details}</p>
+          </div>
+        </footer>
+      )}
     </article>
   );
 }

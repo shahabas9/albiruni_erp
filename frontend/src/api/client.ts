@@ -1171,6 +1171,17 @@ export interface CustomerOverview {
   /** null without sales.quotation.read */
   quotations: number | null;
   quoted_value: number | null;
+  /** null without sales.invoice.read */
+  account: {
+    owed: number;
+    overdue: number;
+    advance: number;
+    /** owed − advance; negative when the customer is in credit. */
+    net: number;
+    open_invoices: number;
+    oldest_due: string | null;
+    credit_limit: number;
+  } | null;
 }
 
 export function fetchCustomerOverview(id: string): Promise<CustomerOverview> {

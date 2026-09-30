@@ -25,6 +25,8 @@ import { InvoicePage } from "./pages/InvoicePage";
 import { PrintDocument } from "./pages/PrintDocument";
 import { CreditNotes } from "./pages/CreditNotes";
 import { Payments } from "./pages/Payments";
+import { Receivables } from "./pages/Receivables";
+import { StatementPage } from "./pages/StatementPage";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -72,6 +74,7 @@ export default function App() {
         <Route path="/print/delivery/:id" element={<PrintDocument kind="delivery" />} />
         <Route path="/print/credit-note/:id" element={<PrintDocument kind="credit-note" />} />
         <Route path="/print/receipt/:id" element={<PrintDocument kind="receipt" />} />
+        <Route path="/print/statement/:id" element={<PrintDocument kind="statement" />} />
       </Routes>
     );
   }
@@ -97,6 +100,8 @@ export default function App() {
             <Route path="/sales/invoices/:id" element={<div className="management-page"><InvoicePage /></div>} />
             <Route path="/sales/credit-notes" element={<div className="management-page"><CreditNotes /></div>} />
             <Route path="/sales/payments" element={<div className="management-page"><Payments /></div>} />
+            <Route path="/sales/receivables" element={<div className="management-page"><Receivables /></div>} />
+            <Route path="/sales/receivables/:customerId" element={<div className="management-page"><StatementPage /></div>} />
             <Route path="/sales/settings" element={<div className="management-page"><SalesSettings /></div>} />
             <Route path="/items" element={<div className="management-page"><Items /></div>} />
             <Route path="/leads" element={<div className="management-page"><Leads /></div>} />
