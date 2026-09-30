@@ -10,17 +10,24 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
+from fastapi import HTTPException, Response
+from sqlalchemy import select
+
+from app.api import routes_orders, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import customer_service, sales_service, sales_settings, tax
+from app.domain import customer_service, order_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
+from app.models.audit import AuditEvent
+from app.models.crm import Opportunity
 from app.models.identity import Role, User
 from app.models.sales import Item
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
-from app.schemas.sales import CompanyProfileUpdate
-from app.toolgateway import tools_crm, tools_sales  # noqa: F401 — registers the tools
+from app.schemas.orders import DocLineIn, OrderIn, OrderUpdate, ReasonIn
+from app.schemas.sales import CompanyProfileUpdate, QuotationActionIn
+from app.toolgateway import tools_crm, tools_documents, tools_sales  # noqa: F401 — registers the tools
 
 KERALA_GSTIN = "32AABCA1234F1ZI"
 KERALA_CUSTOMER_GSTIN = "32AAFCR4321M1ZG"
@@ -100,6 +107,21 @@ class SalesTestCase(unittest.TestCase):
         self.db.commit()
         return item
 
+    def quote(self, customer_name="Rahman Traders", item="Product A", qty=10, discount=0, context=None):
+        context = context or self.context
+        pricing = sales_service.price_quotation(self.db, context, customer_name, [{"item_name": item, "qty": qty}],
+                                                discount)
+        quotation = sales_service.persist_quotation(self.db, context, pricing, context.user.id)
+        self.db.commit()
+        return quotation
+
+    def order(self, customer, lines, context=None, **fields):
+        body = OrderIn(customer_id=customer.id, lines=[DocLineIn(**l) for l in lines], **fields)
+        return routes_orders.create_order(body, Response(), context or self.context, self.db)
+
+    def confirm(self, order_id, context=None):
+        return routes_orders.confirm_order(order_id, context or self.context, self.db)
+
 
 class GstTests(SalesTestCase):
     def test_quotation_charges_igst_to_another_state_and_cgst_sgst_within(self):
@@ -152,6 +174,146 @@ class GstTests(SalesTestCase):
 
         unregistered = self.customer("Walk-in", state_code="33")
         self.assertEqual(unregistered.state_code, "33")
+
+
+
+class OrderTests(SalesTestCase):
+    def test_a_quotation_becomes_one_order_with_its_prices(self):
+        item = self.item()
+        self.customer(gstin=KERALA_CUSTOMER_GSTIN)
+        quotation = self.quote(qty=10, discount=2)
+        item.unit_price = 500  # a later price rise doesn't touch the agreed price
+        self.db.commit()
+
+        order = routes_orders.order_from_quotation(quotation.id, Response(), self.context, self.db)
+        self.assertEqual((order.status, order.quotation_number, order.discount_pct), ("Draft", quotation.number, 2))
+        self.assertEqual((order.lines[0].unit_price, order.grand_total), (420, float(quotation.grand_total)))
+        self.assertFalse(order.needs_approval)
+        self.assertRegex(order.number, r"^SO/\d\d-\d\d/00001$")
+        self.db.refresh(quotation)
+        self.assertEqual(quotation.status, "Accepted")
+        with self.assertRaises(HTTPException) as again:
+            routes_orders.order_from_quotation(quotation.id, Response(), self.context, self.db)
+        self.assertEqual(again.exception.status_code, 409)
+
+    def test_quotation_actions_follow_the_rules(self):
+        self.item()
+        self.customer()
+        quotation = self.quote(discount=5)
+        self.assertEqual(quotation.status, "Pending approval")
+        seller = self.make_context(["sales.quotation.create", "sales.quotation.read"],
+                                   self.context.tenant_id, self.context.company_id)
+        with self.assertRaises(HTTPException) as denied:
+            routes_sales.quotation_action(quotation.id, "approve", QuotationActionIn(), seller, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
+        with self.assertRaises(HTTPException):  # needs approval before it can go out
+            routes_sales.quotation_action(quotation.id, "send", QuotationActionIn(), seller, self.db)
+
+        approved = routes_sales.quotation_action(quotation.id, "approve", QuotationActionIn(), self.context, self.db)
+        self.assertEqual((approved.status, approved.status_note), ("Draft", "Discount approved by Test user"))
+        sent = routes_sales.quotation_action(quotation.id, "send", QuotationActionIn(), seller, self.db)
+        self.assertEqual(sent.status, "Sent")
+        with self.assertRaises(HTTPException):
+            routes_sales.quotation_action(quotation.id, "reject", QuotationActionIn(note=" "), seller, self.db)
+        rejected = routes_sales.quotation_action(quotation.id, "reject", QuotationActionIn(note="Too dear"),
+                                                 seller, self.db)
+        self.assertEqual((rejected.status, rejected.status_note), ("Rejected", "Too dear"))
+        with self.assertRaises(ConflictError):
+            order_service.order_from_quotation(self.db, self.context, quotation.id)
+
+        # An approved quote's discount carries its approval onto the order.
+        reopened = quotation_service.change_status(self.db, self.context, quotation.id, "reopen")
+        self.assertEqual(reopened.status, "Draft")
+        order = routes_orders.order_from_quotation(quotation.id, Response(), seller, self.db)
+        self.assertFalse(order.needs_approval)
+        self.assertEqual(self.confirm(order.id, self.with_orders(seller)).status, "Confirmed")
+
+    def with_orders(self, context):
+        return self.make_context([*context.permissions, "sales.order.read", "sales.order.write"],
+                                 context.tenant_id, context.company_id)
+
+    def test_big_discounts_and_low_prices_need_a_manager_to_confirm(self):
+        item = self.item()
+        customer = self.customer()
+        seller = self.make_context(["sales.order.read", "sales.order.write"], self.context.tenant_id,
+                                   self.context.company_id)
+        discounted = self.order(customer, [{"item_id": item.id, "qty": 5}], seller, discount_pct=5)
+        cheap = self.order(customer, [{"item_id": item.id, "qty": 5, "unit_price": 400}], seller)
+        fair = self.order(customer, [{"item_id": item.id, "qty": 5, "unit_price": 450}], seller, discount_pct=2)
+        self.assertEqual([o.needs_approval for o in (discounted, cheap, fair)], [True, True, False])
+
+        for order in (discounted, cheap):
+            with self.assertRaises(HTTPException) as refused:
+                self.confirm(order.id, seller)
+            self.assertEqual(refused.exception.status_code, 422)
+            self.assertIn("manager", refused.exception.detail)
+        self.assertEqual(self.confirm(fair.id, seller).status, "Confirmed")
+        manager = self.confirm(discounted.id)
+        self.assertEqual((manager.status, manager.approved_by_name), ("Confirmed", "Test user"))
+        audit = self.db.execute(select(AuditEvent).where(
+            AuditEvent.tenant_id == self.context.tenant_id, AuditEvent.tool_name == "sales.confirm_order.v1",
+        )).scalars().all()
+        self.assertEqual(sorted(a.validation_result for a in audit), ["FAIL", "FAIL", "PASS", "PASS"])
+
+    def test_credit_limit_counts_open_orders(self):
+        item = self.item()
+        customer = self.customer(credit_limit=10000)
+        seller = self.make_context(["sales.order.read", "sales.order.write"], self.context.tenant_id,
+                                   self.context.company_id)
+        first = self.order(customer, [{"item_id": item.id, "qty": 10}], seller)  # 4,956 with GST
+        second = self.order(customer, [{"item_id": item.id, "qty": 12}], seller)  # 5,947
+        self.assertEqual(self.confirm(first.id, seller).status, "Confirmed")
+        with self.assertRaises(HTTPException) as over:
+            self.confirm(second.id, seller)
+        self.assertIn("credit limit", over.exception.detail)
+        self.assertEqual(order_service.credit_exposure(self.db, self.context, customer.id), 4956.0)
+        self.assertEqual(self.confirm(second.id).status, "Confirmed")  # override via "*"
+
+    def test_confirming_wins_the_deal_and_cancelling_needs_a_clean_order(self):
+        item = self.item()
+        customer = self.customer()
+        opp = Opportunity(tenant_id=self.context.tenant_id, company_id=self.context.company_id,
+                          customer_id=customer.id, name="Deal", value=1000, stage="Proposal")
+        self.db.add(opp)
+        self.db.commit()
+        pricing = sales_service.price_quotation(self.db, self.context, customer.name,
+                                                [{"item_name": item.name, "qty": 2}], 0)
+        quotation = sales_service.persist_quotation(self.db, self.context, pricing, self.context.user.id)
+        quotation.opportunity_id = opp.id
+        self.db.commit()
+        order = routes_orders.order_from_quotation(quotation.id, Response(), self.context, self.db)
+        self.confirm(order.id)
+        self.db.refresh(opp)
+        self.assertEqual(opp.stage, "Won")
+
+        with self.assertRaises(HTTPException):  # confirmed: no more edits
+            routes_orders.update_order(order.id, OrderUpdate(discount_pct=1), Response(), self.context, self.db)
+        cancelled = routes_orders.cancel_order(order.id, ReasonIn(reason="Customer changed mind"), self.context,
+                                               self.db)
+        self.assertEqual((cancelled.status, cancelled.cancel_reason), ("Cancelled", "Customer changed mind"))
+        with self.assertRaises(HTTPException):
+            self.confirm(order.id)
+        # A cancelled order frees the quotation for a new one.
+        self.assertEqual(routes_orders.order_from_quotation(quotation.id, Response(), self.context, self.db).status,
+                         "Draft")
+
+    def test_drafts_reprice_and_refuse_items_without_a_rate(self):
+        item = self.item(stock=3)
+        customer = self.customer(gstin=KARNATAKA_GSTIN)
+        draft = self.order(customer, [{"item_id": item.id, "qty": 5}])
+        self.assertEqual((draft.igst, draft.grand_total), (378.0, 2478.0))
+        self.assertTrue(any("only 3" in w for w in draft.warnings))
+        edited = routes_orders.update_order(draft.id, OrderUpdate(lines=[DocLineIn(item_id=item.id, qty=1)]),
+                                            Response(), self.context, self.db)
+        self.assertEqual((len(edited.lines), edited.grand_total), (1, 496.0))
+
+        untaxed = self.item("Loose part", rate=None)
+        with self.assertRaises(HTTPException) as refused:
+            self.order(customer, [{"item_id": untaxed.id, "qty": 1}])
+        self.assertIn("GST rate", refused.exception.detail)
+        routes_orders.delete_order(draft.id, self.context, self.db)
+        with self.assertRaises(HTTPException):
+            routes_orders.get_order(draft.id, self.context, self.db)
 
 
 if __name__ == "__main__":

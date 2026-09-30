@@ -45,6 +45,16 @@ function isChildActive(to: string, pathname: string, search: string): boolean {
   return [...new URLSearchParams(query)].every(([k, v]) => params.get(k) === v);
 }
 
+/** The menu entry for the current page: an exact match, else the entry whose
+ * path is the longest prefix of it (so /sales/orders/123 lights up Orders). */
+function activeLinkFor(links: string[], pathname: string, search: string): string | undefined {
+  const exact = links.find((to) => isChildActive(to, pathname, search));
+  if (exact) return exact;
+  return links
+    .filter((to) => !to.includes("?") && pathname.startsWith(`${to}/`))
+    .sort((a, b) => b.length - a.length)[0];
+}
+
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const { crm, quotes, can } = useAppData();
   const { open: openAsk } = useAskErp();
@@ -73,6 +83,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       icon: "file",
       children: [
         { to: "/sales", label: "Quotations", permission: "sales.quotation.read" },
+        { to: "/sales/orders", label: "Orders", permission: "sales.order.read" },
         { to: "/customers", label: "Customers", permission: "sales.customer.read" },
         { to: "/sales?status=pending", label: "Approvals", permission: "sales.quotation.read", count: pending },
         { to: "/sales/settings", label: "Company & GST", permission: "sales.settings.write" },
@@ -98,7 +109,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
     .map((g) => ({ ...g, children: g.children.filter((c) => !c.permission || can(c.permission)) }))
     .filter((g) => g.children.length > 0);
 
-  const activeGroup = groups.find((g) => g.children.some((c) => isChildActive(c.to, pathname, search)))?.id;
+  const activeTo = activeLinkFor(groups.flatMap((g) => g.children.map((c) => c.to)), pathname, search);
+  const activeGroup = groups.find((g) => g.children.some((c) => c.to === activeTo))?.id;
   const [expanded, setExpanded] = useState<Record<string, boolean>>(readOpenGroups);
 
   // Landing on a page (link, notification, back button) always reveals its group.
@@ -160,7 +172,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                         to={c.to}
                         end
                         onClick={onNavigate}
-                        className={() => (isChildActive(c.to, pathname, search) ? "active" : "")}
+                        className={() => (c.to === activeTo ? "active" : "")}
                       >
                         {c.label}
                         {!!c.count && <span className="count">{c.count}</span>}

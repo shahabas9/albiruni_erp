@@ -48,7 +48,30 @@ export function toLocalInput(d: Date): string {
 }
 
 export function quoteStatusClass(status: string): string {
-  if (status === "Sent") return "status-confirmed";
+  if (status === "Sent" || status === "Accepted") return "status-confirmed";
   if (status === "Pending approval") return "status-pending";
+  if (status === "Rejected") return "status-rejected";
   return "status-draft";
+}
+
+/** Badge class for any sales document status. */
+export function docStatusClass(status: string): string {
+  if (["Confirmed", "Delivered", "Issued", "Paid", "Accepted", "Sent", "Invoiced"].includes(status)) return "status-confirmed";
+  if (["Pending approval", "Partly delivered", "Partly paid", "Partly invoiced"].includes(status)) return "status-pending";
+  if (["Cancelled", "Rejected", "Overdue", "Voided"].includes(status)) return "status-rejected";
+  return "status-draft";
+}
+
+/** 2026-09-30 → 30 Sep 2026 (a date with no time of day). */
+export function dayDate(iso: string | null): string {
+  if (!iso) return "—";
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  return new Date(y!, m! - 1, d!).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Today as yyyy-mm-dd in local time. */
+export function todayIso(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }

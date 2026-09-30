@@ -16,6 +16,9 @@ import { useAuth } from "../auth/AuthProvider";
 const PERMISSION_HINTS: Record<string, string> = {
   "crm.records.all": "See every lead, deal and follow-up. Without it, people see only the ones they own.",
   "crm.export": "Download CRM lists as CSV (every export is recorded in the audit trail).",
+  "sales.order.read": "See sales orders.",
+  "sales.order.write": "Create, edit, confirm and cancel sales orders. Big discounts still need sales.quotation.approve to confirm.",
+  "sales.credit.override": "Confirm an order that takes a customer past their credit limit.",
   "sales.settings.write": "Edit the company's GST details, invoice terms and sales defaults (Sales → Company & GST).",
   "crm.settings.write": "Change CRM settings: lead rotation, stale limits, custom fields, targets, web form.",
 };

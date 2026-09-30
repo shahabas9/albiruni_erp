@@ -105,6 +105,8 @@ def ensure_dev_schema() -> None:
                 "igst": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
                 "round_off": "NUMERIC(6, 2) NOT NULL DEFAULT 0",
                 "grand_total": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
+                "status_note": "VARCHAR(200) NOT NULL DEFAULT ''",
+                "approved_by": "UUID REFERENCES users(id)",
             },
             "crm_settings": {
                 "lead_rotation": "JSONB NOT NULL DEFAULT '{}'::jsonb",
@@ -209,3 +211,10 @@ def ensure_dev_schema() -> None:
             conn.execute(text("UPDATE quotation_lines SET taxable_value = line_total WHERE taxable_value = 0"))
         if once("customer-state-from-gstin"):
             conn.execute(text("UPDATE customers SET state_code = left(gstin, 2) WHERE gstin <> '' AND state_code = ''"))
+        if once("grant-sales-orders"):
+            # Sales orders arrived with their own permissions; whoever could
+            # raise quotations can take orders.
+            conn.execute(text("""
+                UPDATE roles SET permissions = permissions || ARRAY['sales.order.read', 'sales.order.write']::VARCHAR[]
+                WHERE 'sales.quotation.create' = ANY(permissions) AND NOT 'sales.order.write' = ANY(permissions)
+            """))

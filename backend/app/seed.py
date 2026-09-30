@@ -40,7 +40,7 @@ CRM_PERMISSIONS = [
 
 
 # The sales cycle: quotations to payments, plus the company's GST profile.
-SALES_PERMISSIONS = ["sales.settings.write"]
+SALES_PERMISSIONS = ["sales.settings.write", "sales.order.read", "sales.order.write", "sales.credit.override"]
 
 DEMO_COMPANY = dict(
     legal_name="Albiruni Trading Group Pvt Ltd", gstin="32AABCA1234F1ZI", state_code="32",

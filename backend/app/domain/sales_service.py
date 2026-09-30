@@ -209,6 +209,23 @@ def next_quotation_number(db: Session, context: RequestContext) -> str:
     return f"{prefix}{db.execute(stmt).scalar_one():05d}"
 
 
+def next_document_number(db: Session, context: RequestContext, kind: str, prefix: str, day) -> str:
+    """<prefix>/<yy-yy>/<n>: counting from 1 per tenant each Indian financial
+    year (April–March), as GST requires of invoice numbers. The counter row
+    stays locked until commit, so numbers are never shared or skipped."""
+
+    stmt = (
+        pg_insert(DocumentCounter)
+        .values(tenant_id=context.tenant_id, kind=kind, year=tax.fy_start_year(day), last_value=1)
+        .on_conflict_do_update(
+            index_elements=[DocumentCounter.tenant_id, DocumentCounter.kind, DocumentCounter.year],
+            set_={"last_value": DocumentCounter.last_value + 1},
+        )
+        .returning(DocumentCounter.last_value)
+    )
+    return f"{prefix}/{tax.fy_label(day)}/{db.execute(stmt).scalar_one():05d}"
+
+
 def persist_quotation(
     db: Session,
     context: RequestContext,

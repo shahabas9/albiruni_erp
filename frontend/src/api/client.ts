@@ -179,7 +179,12 @@ export interface Quotation extends TaxTotals {
   subtotal: number;
   discount_pct: number;
   place_of_supply: string;
-  status: "Draft" | "Pending approval" | "Sent";
+  status: "Draft" | "Pending approval" | "Sent" | "Accepted" | "Rejected";
+  status_note: string;
+  customer_id: string | null;
+  /** The order this quotation became (not cancelled), if any. */
+  order_id: string | null;
+  order_number: string | null;
   created_at: string;
   lines: QuotationLine[];
 }
@@ -435,6 +440,9 @@ export const KNOWN_PERMISSIONS = [
   "sales.customer.read",
   "sales.customer.write",
   "sales.settings.write",
+  "sales.order.read",
+  "sales.order.write",
+  "sales.credit.override",
   "inventory.item.read",
   "inventory.item.write",
   "crm.lead.read",

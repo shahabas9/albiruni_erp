@@ -74,9 +74,13 @@ class Quotation(Base):
     round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
     # What the customer pays: total + GST, rounded to the rupee.
     grand_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # Draft, Pending approval, Sent, Accepted, Rejected.
     status: Mapped[str] = mapped_column(String(24), default="Draft")
+    # Why it was rejected, or who approved the discount.
+    status_note: Mapped[str] = mapped_column(String(200), default="")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
     lines: Mapped[list["QuotationLine"]] = relationship(back_populates="quotation", cascade="all, delete-orphan")
     customer: Mapped["Customer"] = relationship()

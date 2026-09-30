@@ -1,24 +1,25 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useLanguage } from "../i18n/LanguageProvider";
 import { useAskErp } from "../askerp/AskErpContext";
 import { useAppData } from "../data/AppDataProvider";
-import type { Quotation } from "../api/client";
+import { ApiError, type Quotation } from "../api/client";
+import { orderFromQuotation, quotationAction, type QuotationAction } from "../api/sales";
+import { Drawer, ErrorNote } from "../crm/ui";
+import { dateTime, inr, quoteStatusClass } from "../lib/format";
+import { DocTotals } from "../sales/DocTotals";
+import { ReasonModal } from "../sales/ReasonModal";
 
 type QuoteStatus = Quotation["status"];
 
-const FILTERS: { key: "all" | QuoteStatus; labelKey: string }[] = [
+const FILTERS: { key: "all" | QuoteStatus; labelKey?: string; label?: string }[] = [
   { key: "all", labelKey: "sales.f.all" },
   { key: "Draft", labelKey: "sales.f.draft" },
   { key: "Pending approval", labelKey: "sales.f.pending" },
   { key: "Sent", labelKey: "sales.f.sent" },
+  { key: "Accepted", label: "Accepted" },
+  { key: "Rejected", label: "Rejected" },
 ];
-
-function statusClass(status: QuoteStatus) {
-  if (status === "Sent") return "status-confirmed";
-  if (status === "Pending approval") return "status-pending";
-  return "status-draft";
-}
 
 /** The API doesn't (yet) return a per-record action level; approximate it
  * from status, same as the original prototype: a quote still needing sign-off
@@ -41,7 +42,9 @@ function formatDateTime(iso: string) {
 export function Sales() {
   const { t } = useLanguage();
   const { open } = useAskErp();
-  const { quotes, loading, quotesError: error } = useAppData();
+  const { quotes, loading, quotesError: error, refresh } = useAppData();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const opened = quotes.find((q) => q.id === openId) ?? null;
   const [params, setParams] = useSearchParams();
   const fromUrl: "all" | QuoteStatus = params.get("status") === "pending" ? "Pending approval" : "all";
   const [filter, setFilterState] = useState<"all" | QuoteStatus>(fromUrl);
@@ -66,7 +69,7 @@ export function Sales() {
         <div className="filters">
           {FILTERS.map((f) => (
             <button key={f.key} className={filter === f.key ? "on" : ""} onClick={() => setFilter(f.key)}>
-              {t(f.labelKey)} ({f.key === "all" ? quotes.length : quotes.filter((q) => q.status === f.key).length})
+              {f.labelKey ? t(f.labelKey) : f.label} ({f.key === "all" ? quotes.length : quotes.filter((q) => q.status === f.key).length})
             </button>
           ))}
         </div>
@@ -98,15 +101,20 @@ export function Sales() {
             </thead>
             <tbody>
               {visible.map((q) => (
-                <tr key={q.id}>
-                  <td className="mono">{q.number}</td>
+                <tr key={q.id} className="clickable" onClick={() => setOpenId(q.id)}>
+                  <td className="mono">
+                    <button className="link-btn mono" style={{ padding: 0 }} onClick={() => setOpenId(q.id)}>
+                      {q.number}
+                    </button>
+                  </td>
                   <td>{q.customer_name}</td>
                   <td>
                     {q.lines.length} line{q.lines.length === 1 ? "" : "s"}
                   </td>
                   <td className="mono">₹{(q.grand_total || q.total).toLocaleString("en-IN")}</td>
                   <td>
-                    <span className={`badge ${statusClass(q.status)}`}>{q.status}</span>
+                    <span className={`badge ${quoteStatusClass(q.status)}`}>{q.status}</span>
+                    {q.order_number && <small className="mono"> → {q.order_number}</small>}
                   </td>
                   <td>
                     <span className={`badge ${riskClass(riskFor(q.status))}`}>{riskFor(q.status)}</span>
@@ -119,6 +127,119 @@ export function Sales() {
         </div>
       )}
       <p className="footnote">{t("sales.foot")}</p>
+      {opened && <QuotationDrawer quotation={opened} onClose={() => setOpenId(null)} onChanged={() => void refresh()} />}
     </section>
+  );
+}
+
+function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quotation; onClose: () => void; onChanged: () => void }) {
+  const { can } = useAppData();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState(false);
+  const canAct = can("sales.quotation.create");
+
+  async function run(action: QuotationAction) {
+    setBusy(true);
+    setError(null);
+    try {
+      await quotationAction(q.id, action);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't do that.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function makeOrder() {
+    setBusy(true);
+    setError(null);
+    try {
+      const order = await orderFromQuotation(q.id);
+      onChanged();
+      navigate(`/sales/orders/${order.id}`, { state: { warnings: order.warnings } });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't make the order.");
+      setBusy(false);
+    }
+  }
+
+  const button = (action: QuotationAction, label: string, primary = false) => (
+    <button key={action} className={primary ? "primary-btn" : "ghost-btn"} disabled={busy} onClick={() => run(action)}>
+      {label}
+    </button>
+  );
+
+  return (
+    <Drawer title={q.number} subtitle={`${q.customer_name} · ${dateTime(q.created_at)}`} onClose={onClose}>
+      <p>
+        <span className={`badge ${quoteStatusClass(q.status)}`}>{q.status}</span>
+        {q.status_note && <span className="card-note"> {q.status_note}</span>}
+      </p>
+      <ErrorNote message={error} />
+      <div className="table-wrap">
+        <table className="doc-lines">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th className="num">Qty</th>
+              <th className="num">Rate</th>
+              <th className="num">GST</th>
+              <th className="num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {q.lines.map((l, i) => (
+              <tr key={i}>
+                <td>{l.item_name}</td>
+                <td className="num">{l.qty}</td>
+                <td className="num">{inr(l.unit_price)}</td>
+                <td className="num">{l.gst_rate ?? 0}%</td>
+                <td className="num">{inr(l.line_total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <DocTotals doc={q} subtotal={q.subtotal} discountPct={q.discount_pct} />
+      {q.order_id && (
+        <p className="card-note">
+          On order <Link to={`/sales/orders/${q.order_id}`}>{q.order_number}</Link>.
+        </p>
+      )}
+      {canAct && (
+        <div className="head-actions" style={{ marginTop: 16 }}>
+          {q.status === "Pending approval" && can("sales.quotation.approve") && button("approve", "Approve discount", true)}
+          {q.status === "Draft" && button("send", "Mark as sent")}
+          {(q.status === "Draft" || q.status === "Sent") && button("accept", "Customer accepted")}
+          {q.status === "Rejected" && button("reopen", "Reopen")}
+          {!q.order_id && ["Draft", "Sent", "Accepted"].includes(q.status) && can("sales.order.write") && (
+            <button className="primary-btn" disabled={busy} onClick={makeOrder}>
+              Create sales order
+            </button>
+          )}
+          {["Draft", "Sent", "Pending approval"].includes(q.status) && (
+            <button className="danger-btn" disabled={busy} onClick={() => setRejecting(true)}>
+              Rejected
+            </button>
+          )}
+        </div>
+      )}
+      {rejecting && (
+        <ReasonModal
+          title={`Mark ${q.number} as rejected?`}
+          label="Why did the customer say no?"
+          action="Mark rejected"
+          onClose={() => setRejecting(false)}
+          onConfirm={async (reason) => {
+            await quotationAction(q.id, "reject", reason);
+            setRejecting(false);
+            onChanged();
+          }}
+        />
+      )}
+    </Drawer>
   );
 }

@@ -386,3 +386,32 @@ functions with their own unit tests).
   CRM counts as the deal's worth) and add `cgst`, `sgst`, `igst`, `round_off`
   and `grand_total`. Quotations made before GST existed keep a grand total
   equal to their old total.
+
+### Quotations and sales orders
+
+- A quotation moves Draft → Sent → Accepted, or to Rejected (with a reason,
+  and it can be reopened). One over the discount limit starts as Pending
+  approval; `POST /api/sales/quotations/{id}/approve` needs
+  `sales.quotation.approve`. Other actions: `/send`, `/accept`, `/reject`,
+  `/reopen`.
+- `POST /api/sales/quotations/{id}/order` turns a quotation into a draft
+  sales order with its lines, prices and discount (the quotation becomes
+  Accepted; a quotation feeds one live order at a time). Orders can also be
+  made directly (`POST /api/sales/orders`) and edited while they're drafts.
+- Order numbers are `SO/26-27/00001`: per tenant, restarting each Indian
+  financial year (April–March). The counter row is locked until commit, so
+  numbers are never shared or skipped.
+- Every order line needs an item with a GST rate — an order becomes an
+  invoice. Prices, tax, names and addresses are copied onto the order, so
+  later edits to an item or customer don't change it.
+- **Confirming** (`/confirm`, audited tool `sales.confirm_order.v1`) locks
+  the order. A discount over 2% or a price below list needs someone with
+  `sales.quotation.approve` (an approved quotation carries its approval
+  over). Going over the customer's credit limit — counting what confirmed
+  orders will still bill — needs `sales.credit.override`. The linked CRM deal
+  is marked Won.
+- **Cancelling** (`/cancel`, audited, needs a reason) works only while
+  nothing has been delivered or invoiced.
+- Permissions: `sales.order.read`, `sales.order.write`,
+  `sales.credit.override`. Roles that could create quotations get the order
+  permissions once, on upgrade.

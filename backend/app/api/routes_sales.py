@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,21 +9,35 @@ from app.ai.orchestrator import new_correlation_id
 from app.api.routes_items import _to_out as item_out
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_any_permission, require_permission
-from app.domain import sales_settings, tax
-from app.domain.errors import ConflictError
+from app.domain import quotation_service, sales_settings, tax
+from app.domain.errors import ConflictError, NotFoundError
+from app.models.documents import SalesOrder
 from app.models.sales import Item, Quotation
 from app.schemas.sales import (
-    CompanyProfile, CompanyProfileUpdate, CreateQuotationIn, ItemOut, QuotationLineOut, QuotationOut, StateOut,
+    CompanyProfile, CompanyProfileUpdate, CreateQuotationIn, ItemOut, QuotationActionIn, QuotationLineOut, QuotationOut,
+    StateOut,
 )
 from app.toolgateway.executor import execute_tool
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 
 
-def to_quotation_out(q: Quotation) -> QuotationOut:
+def orders_for(db: Session, quotation_ids: list[UUID]) -> dict[UUID, tuple[UUID, str]]:
+    """The live (not cancelled) order each quotation became."""
+
+    if not quotation_ids:
+        return {}
+    rows = db.execute(select(SalesOrder.quotation_id, SalesOrder.id, SalesOrder.number).where(
+        SalesOrder.quotation_id.in_(quotation_ids), SalesOrder.status != "Cancelled",
+    )).all()
+    return {qid: (oid, number) for qid, oid, number in rows}
+
+
+def to_quotation_out(q: Quotation, order: tuple[UUID, str] | None = None) -> QuotationOut:
     return QuotationOut(
         id=q.id,
         number=q.number,
+        customer_id=q.customer_id,
         customer_name=q.customer.name,
         opportunity_id=q.opportunity_id,
         opportunity_title=q.opportunity.title if q.opportunity else None,
@@ -36,6 +51,9 @@ def to_quotation_out(q: Quotation) -> QuotationOut:
         round_off=float(q.round_off),
         grand_total=float(q.grand_total),
         status=q.status,
+        status_note=q.status_note or "",
+        order_id=order[0] if order else None,
+        order_number=order[1] if order else None,
         created_at=q.created_at,
         lines=[
             QuotationLineOut(
@@ -69,7 +87,42 @@ def list_quotations(
     if customer_id is not None:
         stmt = stmt.where(Quotation.customer_id == customer_id)
     quotations = db.execute(stmt).scalars().all()
-    return [to_quotation_out(q) for q in quotations]
+    orders = orders_for(db, [q.id for q in quotations])
+    return [to_quotation_out(q, orders.get(q.id)) for q in quotations]
+
+
+@router.get("/quotations/{quotation_id}", response_model=QuotationOut)
+def get_quotation(
+    quotation_id: UUID,
+    context: RequestContext = Depends(require_permission("sales.quotation.read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        q = quotation_service.get_quotation(db, context, quotation_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return to_quotation_out(q, orders_for(db, [q.id]).get(q.id))
+
+
+@router.post("/quotations/{quotation_id}/{action}", response_model=QuotationOut)
+def quotation_action(
+    quotation_id: UUID,
+    action: Literal["approve", "send", "accept", "reject", "reopen"],
+    body: QuotationActionIn,
+    context: RequestContext = Depends(require_permission("sales.quotation.create")),
+    db: Session = Depends(get_db),
+):
+    """Approve (needs sales.quotation.approve), send, accept, reject (with a reason) or reopen."""
+
+    try:
+        q = quotation_service.change_status(db, context, quotation_id, action, body.note)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return to_quotation_out(q, orders_for(db, [q.id]).get(q.id))
 
 
 @router.get("/items", response_model=list[ItemOut])

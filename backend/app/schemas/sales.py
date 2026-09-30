@@ -33,6 +33,7 @@ class QuotationLineOut(BaseModel):
 class QuotationOut(BaseModel):
     id: UUID
     number: str
+    customer_id: UUID | None = None
     customer_name: str
     opportunity_id: UUID | None = None
     opportunity_title: str | None = None
@@ -46,8 +47,15 @@ class QuotationOut(BaseModel):
     round_off: float = 0
     grand_total: float = 0
     status: str
+    status_note: str = ""
     created_at: datetime
     lines: list[QuotationLineOut]
+    order_id: UUID | None = None
+    order_number: str | None = None
+
+
+class QuotationActionIn(BaseModel):
+    note: str = Field(default="", max_length=200)
 
 
 class ItemOut(BaseModel):
