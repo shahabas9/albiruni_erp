@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, createContact, deleteContact, fetchContacts, updateContact, type Contact } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { ContactActions } from "../crm/ContactActions";
@@ -78,7 +79,9 @@ export function Contacts() {
                 ) : (
                   <tr key={c.id}>
                     <td>{c.name}</td>
-                    <td>{c.customer_name}</td>
+                    <td>
+                      <Link to={`/customers/${c.customer_id}`}>{c.customer_name}</Link>
+                    </td>
                     <td>{c.title || "—"}</td>
                     <td>{c.email || "—"}</td>
                     <td>

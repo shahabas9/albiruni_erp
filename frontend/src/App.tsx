@@ -14,6 +14,7 @@ import { Opportunities } from "./pages/Opportunities";
 import { Activities } from "./pages/Activities";
 import { CrmSettings } from "./pages/CrmSettings";
 import { Targets } from "./pages/Targets";
+import { CustomerPage } from "./pages/CustomerPage";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -64,6 +65,7 @@ export default function App() {
             <Route path="/crm" element={<Crm />} />
             <Route path="/sales" element={<div className="management-page"><Sales /></div>} />
             <Route path="/customers" element={<div className="management-page"><Customers /></div>} />
+            <Route path="/customers/:id" element={<div className="management-page"><CustomerPage /></div>} />
             <Route path="/items" element={<div className="management-page"><Items /></div>} />
             <Route path="/leads" element={<div className="management-page"><Leads /></div>} />
             <Route path="/contacts" element={<div className="management-page"><Contacts /></div>} />

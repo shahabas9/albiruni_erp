@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   ApiError,
   createCustomer,
@@ -129,7 +130,9 @@ export function Customers() {
                 ) : (
                   <tr key={c.id}>
                     <td>
-                      {c.name}
+                      <Link className="link-btn" style={{ padding: 0 }} to={`/customers/${c.id}`}>
+                        {c.name}
+                      </Link>
                       <TagChips tags={c.tags} onClick={setTag} />
                     </td>
                     <td>{c.gstin ? <span className="mono">{c.gstin}</span> : <span className="followup none">Unregistered</span>}</td>
@@ -203,7 +206,7 @@ export function Customers() {
   );
 }
 
-function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () => void }) {
+export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () => void }) {
   const [name, setName] = useState(customer?.name ?? "");
   const [creditLimit, setCreditLimit] = useState(String(customer?.credit_limit ?? 0));
   const [gstin, setGstin] = useState(customer?.gstin ?? "");

@@ -838,6 +838,35 @@ class CrmTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             routes_customers.merge_customer(a.id, crm.MergeIn(remove_id=a.id), self.context, self.db)
 
+    # --- Customer page ------------------------------------------------------------
+
+    def test_customer_page_brings_everything_together(self):
+        customer = customer_service.create_customer(self.db, self.context, CustomerIn(name="Page Co", credit_limit=5000))
+        customer_service.update_customer(self.db, self.context, customer.id, CustomerUpdate(credit_limit=8000, tags=["key account"]))
+        lead = self.lead(name="Page lead", company_name="Page Co")
+        lead_service.convert_lead(self.db, self.context, lead.id, crm.ConvertLeadIn(customer_id=customer.id, opportunity_value=300))
+        won = opportunity_service.create_opportunity(self.db, self.context, crm.OpportunityIn(customer_id=customer.id, name="Won one", value=1000))
+        opportunity_service.update_opportunity(self.db, self.context, won.id, crm.OpportunityUpdate(stage="Won"))
+        self.deal(name="Elsewhere")  # another customer's deal
+
+        overview = routes_customers.customer_overview(customer.id, self.context, self.db)
+        self.assertEqual((overview["open_deals"], overview["open_value"], overview["won_deals"], overview["won_value"],
+                          overview["contacts"], overview["quotations"]), (1, 300, 1, 1000, 1, 0))
+        deals = self.opps_out(customer_id=customer.id)
+        self.assertEqual({o.name for o in deals}, {"Won one", "Page Co — new opportunity"})
+
+        timeline = routes_customers.customer_timeline(customer.id, self.context, self.db)
+        summaries = [e["summary"] for e in timeline]
+        self.assertIn("Credit limit: ₹5,000 → ₹8,000; Tags: — → key account", summaries)
+        self.assertIn("Customer created: Page Co", summaries)
+        self.assertIn("Deal created: Won one (stage New)", summaries)
+        self.assertEqual({e["record_type"] for e in timeline}, {"customer", "opportunity", "lead"})
+
+        # Someone who can't see the deals doesn't get their numbers or history here.
+        rep = self.make_context(["sales.customer.read", "crm.opportunity.read"], *self._tenant_and_company())
+        self.assertEqual(routes_customers.customer_overview(customer.id, rep, self.db)["open_deals"], 0)
+        self.assertEqual({e["record_type"] for e in routes_customers.customer_timeline(customer.id, rep, self.db)}, {"customer"})
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

@@ -1,14 +1,17 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, customer_service, record_admin
+from app.domain import crm_service, customer_service, history, record_admin
 from app.api.routes_leads import http_error
 from app.domain.errors import ConflictError, NotFoundError
-from app.schemas.crm import MergeIn
+from app.models.crm import OPEN_STAGES, Contact, Lead, Opportunity
+from app.models.sales import Quotation
+from app.schemas.crm import MergeIn, TimelineEntry
 from app.schemas.customers import CustomerIn, CustomerOut, CustomerUpdate
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
@@ -64,6 +67,75 @@ def get_customer(
         return _to_out(customer_service.get_customer(db, context, customer_id))
     except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/{customer_id}/overview")
+def customer_overview(
+    customer_id: UUID,
+    context: RequestContext = Depends(require_permission("sales.customer.read")),
+    db: Session = Depends(get_db),
+):
+    """Headline numbers for the customer page. Deal figures only count deals
+    the caller may see; quotation figures need sales.quotation.read."""
+
+    try:
+        customer = customer_service.get_customer(db, context, customer_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    deals = crm_service.only_visible(
+        select(Opportunity.stage, func.count(), func.coalesce(func.sum(Opportunity.value), 0))
+        .where(Opportunity.tenant_id == context.tenant_id, Opportunity.customer_id == customer.id),
+        Opportunity.owner_user_id, context,
+    ).group_by(Opportunity.stage)
+    by_stage = {stage: (n, float(v)) for stage, n, v in db.execute(deals)}
+    open_ = [by_stage.get(s, (0, 0.0)) for s in OPEN_STAGES]
+    out = {
+        "customer": _to_out(customer),
+        "open_deals": sum(n for n, _ in open_),
+        "open_value": sum(v for _, v in open_),
+        "won_deals": by_stage.get("Won", (0, 0.0))[0],
+        "won_value": by_stage.get("Won", (0, 0.0))[1],
+        "lost_deals": by_stage.get("Lost", (0, 0.0))[0],
+        "contacts": db.execute(select(func.count()).select_from(Contact).where(Contact.customer_id == customer.id)).scalar_one(),
+        "quotations": None,
+        "quoted_value": None,
+    }
+    if context.has_permission("sales.quotation.read"):
+        count, total = db.execute(
+            select(func.count(), func.coalesce(func.sum(Quotation.total), 0))
+            .where(Quotation.tenant_id == context.tenant_id, Quotation.customer_id == customer.id)
+        ).one()
+        out["quotations"], out["quoted_value"] = count, float(total)
+    return out
+
+
+@router.get("/{customer_id}/timeline", response_model=list[TimelineEntry])
+def customer_timeline(
+    customer_id: UUID,
+    context: RequestContext = Depends(require_permission("sales.customer.read")),
+    db: Session = Depends(get_db),
+):
+    """The customer's own history plus that of its deals and the leads it
+    came from — as far as the caller may see them."""
+
+    try:
+        customer = customer_service.get_customer(db, context, customer_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    refs = [("customer", customer.id)]
+    if context.has_permission("crm.opportunity.read"):
+        deals = crm_service.only_visible(
+            select(Opportunity.id).where(Opportunity.tenant_id == context.tenant_id, Opportunity.customer_id == customer.id),
+            Opportunity.owner_user_id, context,
+        )
+        refs += [("opportunity", i) for (i,) in db.execute(deals)]
+    if context.has_permission("crm.lead.read"):
+        leads = crm_service.only_visible(
+            select(Lead.id).where(Lead.tenant_id == context.tenant_id, Lead.converted_customer_id == customer.id),
+            Lead.owner_user_id, context,
+        )
+        refs += [("lead", i) for (i,) in db.execute(leads)]
+    return history.timeline(db, context, refs)
 
 
 @router.post("", response_model=CustomerOut)

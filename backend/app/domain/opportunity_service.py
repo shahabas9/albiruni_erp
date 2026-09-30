@@ -23,6 +23,7 @@ def list_opportunities(
     closed_since: date | None = None,
     stale_only: bool = False,
     tag: str = "",
+    customer_id: UUID | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> tuple[list[Opportunity], int]:
@@ -51,6 +52,8 @@ def list_opportunities(
     stmt = crm_service.filter_owner(stmt, Opportunity.owner_user_id, owner, context)
     if tag.strip():
         stmt = stmt.where(Opportunity.tags.contains([tag.strip().lower()]))
+    if customer_id is not None:
+        stmt = stmt.where(Opportunity.customer_id == customer_id)
     if q.strip():
         stmt = stmt.where(crm_service.search(q, Opportunity.name, Customer.name))
     if stale_only:

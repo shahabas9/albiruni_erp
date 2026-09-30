@@ -189,6 +189,16 @@ quotations and converted leads) moved over. `GET /api/leads/duplicates` and
 `/api/customers/duplicates` list groups sharing a phone/email or a
 name/GSTIN. Deletes and merges are recorded in history.
 
+**Customer page.** `GET /api/customers/{id}/overview` (open pipeline, won,
+lost, contacts, quotations) and `GET /api/customers/{id}/timeline` (the
+customer's history plus its deals' and source leads') back the web app's
+customer page at `/customers/:id`, which also lists the customer's deals
+(`/api/opportunities?customer_id=`), quotations
+(`/api/sales/quotations?customer_id=`), contacts, account follow-ups and
+files. Deal figures and history only include deals the caller may see.
+Customer create/edit (including tags and custom fields) is now recorded in
+history.
+
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return
 the total matching count in `X-Total-Count`: leads `q` (every word must

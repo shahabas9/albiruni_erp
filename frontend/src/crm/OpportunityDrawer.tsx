@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   ApiError,
   assignOpportunity,
@@ -102,7 +103,10 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
       title={opp.name}
       subtitle={
         <>
-          {opp.customer_name} · {inr(opp.value)} · {opp.probability_pct}% likely
+          <Link to={`/customers/${opp.customer_id}`} onClick={onClose}>
+            {opp.customer_name}
+          </Link>{" "}
+          · {inr(opp.value)} · {opp.probability_pct}% likely
           {opp.expected_close_date ? ` · closes ${new Date(opp.expected_close_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}
         </>
       }

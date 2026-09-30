@@ -65,6 +65,7 @@ def list_opportunities(
     closed_since: date | None = Query(None, description="Open deals plus those won/lost since this date"),
     stale: bool = False,
     tag: str = "",
+    customer_id: UUID | None = None,
     limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
     offset: int = Query(0, ge=0),
     context: RequestContext = Depends(require_permission("crm.opportunity.read")),
@@ -74,7 +75,7 @@ def list_opportunities(
 
     try:
         opps, total = opportunity_service.list_opportunities(
-            db, context, q=q, stage=stage, owner=owner, closed_since=closed_since, stale_only=stale, tag=tag,
+            db, context, q=q, stage=stage, owner=owner, closed_since=closed_since, stale_only=stale, tag=tag, customer_id=customer_id,
             limit=limit, offset=offset,
         )
     except ConflictError as exc:

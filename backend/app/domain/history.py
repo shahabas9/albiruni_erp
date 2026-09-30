@@ -31,6 +31,9 @@ LABELS = {
     "expected_close_date": "Expected close",
     "lost_reason": "Lost reason",
     "tags": "Tags",
+    "gstin": "GSTIN",
+    "credit_limit": "Credit limit",
+    "active": "Active",
 }
 
 
@@ -52,7 +55,7 @@ def _show(field: str, value: Any) -> str:
         return "Yes" if value else "No"
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
-    if field == "value":
+    if field in ("value", "credit_limit"):
         return f"₹{float(value):,.0f}"
     if field == "probability_pct":
         return f"{value}%"
@@ -122,14 +125,17 @@ def timeline(db: Session, context: RequestContext, refs: list[tuple[str, UUID]])
 
     if not refs:
         return []
-    events = []
+    by_type: dict[str, list[UUID]] = {}
     for record_type, record_id in refs:
+        by_type.setdefault(record_type, []).append(record_id)
+    events = []
+    for record_type, ids in by_type.items():  # one query per record type, however many records
         events += db.execute(
             select(CrmEvent).where(
                 CrmEvent.tenant_id == context.tenant_id,
                 CrmEvent.company_id == context.company_id,
                 CrmEvent.record_type == record_type,
-                CrmEvent.record_id == record_id,
+                CrmEvent.record_id.in_(ids),
             )
         ).scalars().all()
     actor_ids = {e.actor_user_id for e in events if e.actor_user_id}

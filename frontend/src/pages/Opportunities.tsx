@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   OPPORTUNITY_STAGES,
@@ -182,7 +182,7 @@ export function Opportunities() {
                         {o.name}
                       </button>
                       <span className="sub">
-                        {o.customer_name}
+                        <Link to={`/customers/${o.customer_id}`}>{o.customer_name}</Link>
                         {o.quotations.length ? ` · ${o.quotations.length} quote${o.quotations.length === 1 ? "" : "s"}` : ""}
                       </span>
                       <TagChips tags={o.tags} onClick={setTag} />

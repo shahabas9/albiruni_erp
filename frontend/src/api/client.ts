@@ -168,8 +168,8 @@ export interface Quotation {
   lines: QuotationLine[];
 }
 
-export function fetchQuotations(): Promise<Quotation[]> {
-  return request<Quotation[]>("/api/sales/quotations");
+export function fetchQuotations(customerId?: string): Promise<Quotation[]> {
+  return request<Quotation[]>(`/api/sales/quotations${query({ customer_id: customerId })}`);
 }
 
 export function fetchSalesItems(): Promise<Item[]> {
@@ -668,6 +668,7 @@ export interface OpportunityInput {
 
 /** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */
 export interface OpportunityQuery {
+  customer_id?: string;
   /** Only records carrying this tag. */
   tag?: string;
   q?: string;
@@ -1100,4 +1101,27 @@ export function mergeCustomers(keepId: string, removeId: string): Promise<Custom
 
 export function fetchCustomerDuplicates(): Promise<{ reason: string; customers: Customer[] }[]> {
   return request<{ reason: string; customers: Customer[] }[]>("/api/customers/duplicates");
+}
+
+// --- Customer page -----------------------------------------------------------------
+
+export interface CustomerOverview {
+  customer: Customer;
+  open_deals: number;
+  open_value: number;
+  won_deals: number;
+  won_value: number;
+  lost_deals: number;
+  contacts: number;
+  /** null without sales.quotation.read */
+  quotations: number | null;
+  quoted_value: number | null;
+}
+
+export function fetchCustomerOverview(id: string): Promise<CustomerOverview> {
+  return request<CustomerOverview>(`/api/customers/${id}/overview`);
+}
+
+export function fetchCustomerTimeline(id: string): Promise<TimelineEntry[]> {
+  return request<TimelineEntry[]>(`/api/customers/${id}/timeline`);
 }
