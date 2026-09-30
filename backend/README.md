@@ -175,6 +175,20 @@ up to 3 times. A background loop in the API (`NOTIFICATION_WORKER`,
 email; it claims rows with `SKIP LOCKED`, so several processes can run it.
 WhatsApp alerts need a WhatsApp Business provider and aren't built in.
 
+**Delete and merge.** `DELETE /api/leads/{id}` (`crm.lead.delete`),
+`/api/opportunities/{id}` (`crm.opportunity.delete`), `/api/contacts/{id}`
+(`crm.contact.write`) and `/api/customers/{id}` (`sales.customer.delete`)
+remove a record with its follow-ups and files — but never history others
+depend on: converted leads, deals with quotations, and customers with deals,
+quotations or converted leads are refused with what to do instead (mark
+Lost, or merge). `POST /api/leads/{id}/merge` and
+`POST /api/customers/{id}/merge` with `{"remove_id": …}` fold the second
+record into the first: blank details filled, notes/tags/custom values
+combined, and follow-ups, files, history (and for customers contacts, deals,
+quotations and converted leads) moved over. `GET /api/leads/duplicates` and
+`/api/customers/duplicates` list groups sharing a phone/email or a
+name/GSTIN. Deletes and merges are recorded in history.
+
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return
 the total matching count in `X-Total-Count`: leads `q` (every word must

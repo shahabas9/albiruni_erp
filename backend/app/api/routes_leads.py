@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, history, lead_service, opportunity_service
+from app.domain import crm_service, history, lead_service, opportunity_service, record_admin
 from app.domain.duplicates import DuplicateError
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Lead
@@ -16,6 +16,7 @@ from app.schemas.crm import (
     LeadIn,
     LeadOut,
     LeadUpdate,
+    MergeIn,
     OwnerIn,
     TimelineEntry,
 )
@@ -76,6 +77,19 @@ def list_leads(
     stats = crm_service.FollowUpStats(db, context, lead_ids=[lead.id for lead in leads])
     owners = crm_service.owner_names(db, {lead.owner_user_id for lead in leads})
     return [_to_out(lead, stats, owners) for lead in leads]
+
+
+@router.get("/duplicates")
+def lead_duplicates(
+    context: RequestContext = Depends(require_permission("crm.lead.read")),
+    db: Session = Depends(get_db),
+):
+    """Groups of open leads sharing a phone number or email — candidates to merge."""
+
+    groups = record_admin.lead_duplicate_groups(db, context)
+    owners = crm_service.owner_names(db, {lead.owner_user_id for g in groups for lead in g["leads"]})
+    stats = crm_service.FollowUpStats(db, context, lead_ids=[lead.id for g in groups for lead in g["leads"]])
+    return [{"reason": g["reason"], "leads": [_to_out(lead, stats, owners) for lead in g["leads"]]} for g in groups]
 
 
 @router.get("/{lead_id}", response_model=LeadOut)
@@ -164,6 +178,38 @@ def assign_lead(
 ):
     try:
         return _single_out(db, context, lead_service.assign_lead(db, context, lead_id, body.owner_user_id))
+    except (NotFoundError, ConflictError) as exc:
+        raise http_error(exc) from exc
+
+
+@router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_lead(
+    lead_id: UUID,
+    context: RequestContext = Depends(require_permission("crm.lead.delete")),
+    db: Session = Depends(get_db),
+):
+    """Removes a lead with its follow-ups and files. Converted leads are kept."""
+
+    try:
+        record_admin.delete_lead(db, context, lead_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/{lead_id}/merge", response_model=LeadOut)
+def merge_lead(
+    lead_id: UUID,
+    body: MergeIn,
+    context: RequestContext = Depends(require_permission("crm.lead.delete")),
+    db: Session = Depends(get_db),
+):
+    """Folds lead `remove_id` into this one (details, notes, tags, follow-ups,
+    files and history), then removes it."""
+
+    if not context.has_permission("crm.lead.write"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing permission: crm.lead.write")
+    try:
+        return _single_out(db, context, record_admin.merge_leads(db, context, lead_id, body.remove_id))
     except (NotFoundError, ConflictError) as exc:
         raise http_error(exc) from exc
 

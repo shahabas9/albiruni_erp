@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ApiError,
   assignOpportunity,
+  deleteOpportunity,
   fetchActivities,
   fetchContacts,
   fetchOpportunity,
@@ -308,6 +309,20 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
         </div>
         <Timeline load={() => fetchOpportunityTimeline(opp.id)} version={version} />
       </div>
+
+      {can("crm.opportunity.delete") && (
+        <div className="danger-zone">
+          <button
+            className="danger-btn"
+            onClick={async () => {
+              if (!window.confirm(`Delete “${opp.name}”? Its follow-ups and files go too. This can't be undone.`)) return;
+              if (await run(() => deleteOpportunity(opp.id))) onClose();
+            }}
+          >
+            Delete deal
+          </button>
+        </div>
+      )}
 
       {lostOpen && (
         <LostReasonModal

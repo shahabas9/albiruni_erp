@@ -419,6 +419,9 @@ export const KNOWN_PERMISSIONS = [
   "crm.activity.write",
   "crm.settings.write",
   "crm.records.all",
+  "crm.lead.delete",
+  "crm.opportunity.delete",
+  "sales.customer.delete",
   "admin.users.read",
   "admin.users.write",
   "audit.read",
@@ -1061,4 +1064,40 @@ export function fetchNotificationPreferences(): Promise<NotificationPreferences>
 
 export function saveNotificationPreferences(body: { email?: string; notify_email?: boolean }): Promise<NotificationPreferences> {
   return request<NotificationPreferences>("/api/notifications/preferences", { method: "PUT", body: JSON.stringify(body) });
+}
+
+// --- Delete and merge -------------------------------------------------------------
+
+export function deleteLead(id: string): Promise<void> {
+  return request<void>(`/api/leads/${id}`, { method: "DELETE" });
+}
+
+/** Folds lead `removeId` into `keepId`, then removes it. */
+export function mergeLeads(keepId: string, removeId: string): Promise<Lead> {
+  return request<Lead>(`/api/leads/${keepId}/merge`, { method: "POST", body: JSON.stringify({ remove_id: removeId }) });
+}
+
+export function fetchLeadDuplicates(): Promise<{ reason: string; leads: Lead[] }[]> {
+  return request<{ reason: string; leads: Lead[] }[]>("/api/leads/duplicates");
+}
+
+export function deleteOpportunity(id: string): Promise<void> {
+  return request<void>(`/api/opportunities/${id}`, { method: "DELETE" });
+}
+
+export function deleteContact(id: string): Promise<void> {
+  return request<void>(`/api/contacts/${id}`, { method: "DELETE" });
+}
+
+export function deleteCustomer(id: string): Promise<void> {
+  return request<void>(`/api/customers/${id}`, { method: "DELETE" });
+}
+
+/** Moves everything of customer `removeId` onto `keepId`, then removes it. */
+export function mergeCustomers(keepId: string, removeId: string): Promise<Customer> {
+  return request<Customer>(`/api/customers/${keepId}/merge`, { method: "POST", body: JSON.stringify({ remove_id: removeId }) });
+}
+
+export function fetchCustomerDuplicates(): Promise<{ reason: string; customers: Customer[] }[]> {
+  return request<{ reason: string; customers: Customer[] }[]>("/api/customers/duplicates");
 }

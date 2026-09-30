@@ -7,8 +7,11 @@ import {
   convertLead,
   createLead,
   fetchLeadCustomerMatches,
+  deleteLead,
   fetchLead,
+  fetchLeadDuplicates,
   fetchLeadTimeline,
+  mergeLeads,
   fetchLeads,
   fetchRotation,
   updateLead,
@@ -22,6 +25,7 @@ import {
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
 import { Attachments } from "../crm/Attachments";
+import { MergeDuplicates } from "../crm/MergeDuplicates";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
@@ -49,6 +53,18 @@ export function Leads() {
   const [importing, setImporting] = useState(false);
   const [historyFor, setHistoryFor] = useState<Lead | null>(null);
   const [fileChanges, setFileChanges] = useState(0);
+  const [findingDupes, setFindingDupes] = useState(false);
+
+  async function removeLead(lead: Lead) {
+    if (!window.confirm(`Delete ${lead.company_name || lead.name}? Its follow-ups and files go too. This can't be undone.`)) return;
+    try {
+      await deleteLead(lead.id);
+      setHistoryFor(null);
+      await reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't delete.");
+    }
+  }
   // Notification links point at /leads?lead=<id>: open that lead's drawer.
   const linkedLead = params.get("lead");
   useEffect(() => {
@@ -120,6 +136,11 @@ export function Leads() {
             <button className="ghost-btn" onClick={() => setImporting(true)}>
               Import CSV
             </button>
+            {can("crm.lead.delete") && (
+              <button className="ghost-btn" onClick={() => setFindingDupes(true)}>
+                Find duplicates
+              </button>
+            )}
             <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
               {showForm ? "Cancel" : "+ New lead"}
             </button>
@@ -262,7 +283,36 @@ export function Leads() {
           />
           <h3 className="drawer-section">History</h3>
           <Timeline load={() => fetchLeadTimeline(historyFor.id)} version={version + fileChanges} />
+          {can("crm.lead.delete") && historyFor.status !== "Converted" && (
+            <div className="danger-zone">
+              <button className="danger-btn" onClick={() => removeLead(historyFor)}>
+                Delete lead
+              </button>
+            </div>
+          )}
         </Drawer>
+      )}
+
+      {findingDupes && (
+        <MergeDuplicates
+          noun="lead"
+          explain="Open leads that share a phone number or email. The one you keep gets the others' missing details, notes, tags, follow-ups, files and history."
+          load={async () =>
+            (await fetchLeadDuplicates()).map((g) => ({
+              reason: g.reason,
+              records: g.leads.map((l) => ({
+                id: l.id,
+                title: l.company_name ? `${l.company_name} (${l.name})` : l.name,
+                detail: [l.status, l.phone, l.email, l.owner_name ?? "Unassigned", `added ${new Date(l.created_at).toLocaleDateString("en-IN")}`]
+                  .filter(Boolean)
+                  .join(" · "),
+              })),
+            }))
+          }
+          merge={mergeLeads}
+          onMerged={() => void reload()}
+          onClose={() => setFindingDupes(false)}
+        />
       )}
 
       {followUpFor && (

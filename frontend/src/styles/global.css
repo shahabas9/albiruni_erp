@@ -3290,3 +3290,35 @@ button.tag-chip:hover {
 .notif-time {
   color: var(--ink-faint);
 }
+
+.dup-group {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.danger-zone {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.danger-btn {
+  background: none;
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  border-radius: 10px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.danger-btn:hover {
+  background: var(--bad-soft);
+}
+
+.danger-btn.sm {
+  padding: 4px 9px;
+  font-size: 12px;
+}

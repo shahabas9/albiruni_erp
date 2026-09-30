@@ -44,6 +44,12 @@ class LeadUpdate(BaseModel):
     custom: dict[str, Any] | None = None
 
 
+class MergeIn(BaseModel):
+    """Fold the record `remove_id` into the one in the URL."""
+
+    remove_id: UUID
+
+
 class OwnerIn(BaseModel):
     """owner_user_id=None unassigns."""
 

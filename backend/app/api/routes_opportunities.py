@@ -10,7 +10,7 @@ from app.api.routes_leads import http_error
 from app.api.routes_sales import to_quotation_out
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, history, opportunity_service
+from app.domain import crm_service, history, opportunity_service, record_admin
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Opportunity
 from app.schemas.crm import (
@@ -137,6 +137,21 @@ def update_opportunity(
 ):
     try:
         return _single_out(db, context, opportunity_service.update_opportunity(db, context, opportunity_id, body))
+    except (NotFoundError, ConflictError) as exc:
+        raise http_error(exc) from exc
+
+
+@router.delete("/{opportunity_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_opportunity(
+    opportunity_id: UUID,
+    context: RequestContext = Depends(require_permission("crm.opportunity.delete")),
+    db: Session = Depends(get_db),
+):
+    """Removes a deal with its follow-ups and files — unless it has quotations
+    (mark it Lost instead)."""
+
+    try:
+        record_admin.delete_opportunity(db, context, opportunity_id)
     except (NotFoundError, ConflictError) as exc:
         raise http_error(exc) from exc
 

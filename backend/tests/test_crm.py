@@ -24,7 +24,7 @@ from app.core.dev_schema import ensure_dev_schema
 from app.domain import activity_service, crm_service, customer_service, lead_service, opportunity_service, sales_service
 from app.domain.duplicates import DuplicateError
 from app.domain.errors import ConflictError, NotFoundError
-from app.models.crm import Activity, Contact, Lead, Opportunity
+from app.models.crm import Activity, Contact, CrmEvent, Lead, Opportunity
 from app.models.identity import Role, User
 from app.models.sales import Customer, Item, Quotation
 from app.models.tenant import Company, Tenant
@@ -760,6 +760,83 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(notifications.send_pending_emails(self.db, send=lambda *a: sent.append(a))["sent"], 0)
         with self.assertRaises(ValidationError):
             routes_notifications.PreferencesIn(email="not an email")
+
+    # --- Delete and merge ---------------------------------------------------------
+
+    def test_delete_refuses_history_others_depend_on(self):
+        from app.domain import record_admin
+
+        lead = self.lead(name="Throwaway")
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(type="Call", subject="x", lead_id=lead.id))
+        routes_leads.delete_lead(lead.id, self.context, self.db)
+        self.assertEqual(self.leads_out(q="Throwaway"), [])
+        self.assertEqual(self.db.execute(select(Activity).where(Activity.lead_id == lead.id)).first(), None)
+        events = self.db.execute(select(CrmEvent).where(CrmEvent.record_id == lead.id)).scalars().all()
+        self.assertIn("deleted", [e.action for e in events])  # the trail survives the record
+
+        converted = self.lead(name="Converted one")
+        _, customer, contact, opp = lead_service.convert_lead(self.db, self.context, converted.id, crm.ConvertLeadIn())
+        with self.assertRaises(HTTPException):
+            routes_leads.delete_lead(converted.id, self.context, self.db)
+        with self.assertRaises(ConflictError):  # has a deal (and a converted lead)
+            record_admin.delete_customer(self.db, self.context, customer.id)
+
+        quoted = self.deal(name="Quoted deal")
+        self.db.add(Quotation(tenant_id=self.context.tenant_id, company_id=self.context.company_id,
+                              number=f"QT-T-{uuid4().hex[:6]}", customer_id=quoted.customer_id, opportunity_id=quoted.id,
+                              subtotal=0, total=0, created_by=self.context.user.id))
+        self.db.commit()
+        with self.assertRaises(ConflictError):
+            record_admin.delete_opportunity(self.db, self.context, quoted.id)
+        record_admin.delete_opportunity(self.db, self.context, opp.id)  # no quotes: fine, lead link cleared
+        self.db.refresh(converted)
+        self.assertIsNone(converted.converted_opportunity_id)
+
+        routes_contacts.delete_contact(contact.id, self.context, self.db)
+        empty = crm_service.find_or_create_customer(self.db, self.context, "Empty Co")
+        self.db.commit()
+        record_admin.delete_customer(self.db, self.context, empty.id)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.lead.delete")(self.make_context(["crm.lead.write"]))
+
+    def test_merging_folds_everything_into_the_kept_record(self):
+        from app.domain import record_admin
+
+        keep = self.lead(name="Nisha", company_name="Kannur Tiles", phone="9447000001", tags=["vip"], notes="First")
+        dupe = lead_service.create_lead(self.db, self.context, crm.LeadIn(
+            name="Nisha R", company_name="", email="nisha@example.test", phone="09447000001", tags=["export"],
+            notes="Second", allow_duplicate=True))
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(type="Call", subject="On dupe", lead_id=dupe.id))
+        groups = routes_leads.lead_duplicates(self.context, self.db)
+        self.assertEqual([{l.id for l in g["leads"]} for g in groups], [{keep.id, dupe.id}])
+
+        merged = routes_leads.merge_lead(keep.id, crm.MergeIn(remove_id=dupe.id), self.context, self.db)
+        self.assertEqual((merged.email, merged.company_name, merged.tags), ("nisha@example.test", "Kannur Tiles", ["vip", "export"]))
+        self.assertEqual(lead_service.get_lead(self.db, self.context, keep.id).notes, "First\n\nSecond")
+        self.assertEqual([a.subject for a in self.activities_out(lead_id=keep.id)], ["On dupe"])
+        history_actions = [e["action"] for e in routes_leads.lead_timeline(keep.id, self.context, self.db)]
+        self.assertEqual(history_actions[0], "merged")
+        self.assertEqual(history_actions.count("created"), 2)  # dupe's history came along
+        with self.assertRaises(HTTPException):
+            routes_leads.get_lead(dupe.id, self.context, self.db)
+        self.assertEqual(routes_leads.lead_duplicates(self.context, self.db), [])
+
+        # Customers: contacts, deals, quotations and converted leads all move over.
+        a = customer_service.create_customer(self.db, self.context, CustomerIn(name="Rahman Traders"))
+        b = customer_service.create_customer(self.db, self.context, CustomerIn(name="rahman  traders", gstin="32ABCDE1234F1Z9",
+                                                                                allow_duplicate=True))
+        self.db.add(Contact(tenant_id=self.context.tenant_id, company_id=self.context.company_id, customer_id=b.id, name="Rafi"))
+        deal = opportunity_service.create_opportunity(self.db, self.context, crm.OpportunityIn(customer_id=b.id, name="B deal"))
+        groups = routes_customers.customer_duplicates(self.context, self.db)
+        self.assertEqual([{c.id for c in g["customers"]} for g in groups], [{a.id, b.id}])
+        kept = routes_customers.merge_customer(a.id, crm.MergeIn(remove_id=b.id), self.context, self.db)
+        self.assertEqual(kept.gstin, "32ABCDE1234F1Z9")
+        self.db.refresh(deal)
+        self.assertEqual(deal.customer_id, a.id)
+        self.assertEqual(self.db.execute(select(Contact).where(Contact.customer_id == a.id)).scalar_one().name, "Rafi")
+        self.assertIsNone(self.db.get(Customer, b.id))
+        with self.assertRaises(HTTPException):
+            routes_customers.merge_customer(a.id, crm.MergeIn(remove_id=a.id), self.context, self.db)
 
     # --- Quotation numbers ------------------------------------------------------
 

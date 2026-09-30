@@ -1,8 +1,16 @@
 import { useCallback, useState } from "react";
-import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
+import {
+  ApiError,
+  createCustomer,
+  deleteCustomer,
+  fetchCustomerDuplicates,
+  fetchCustomers,
+  mergeCustomers,
+  updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { Attachments } from "../crm/Attachments";
+import { MergeDuplicates } from "../crm/MergeDuplicates";
 import { Drawer, DuplicateWarning, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
@@ -20,6 +28,18 @@ export function Customers() {
   const [active, setActive] = useState<ActiveFilter>("all");
   const [tag, setTag] = useState("");
   const [filesFor, setFilesFor] = useState<Customer | null>(null);
+  const [findingDupes, setFindingDupes] = useState(false);
+
+  async function removeCustomer(c: Customer) {
+    if (!window.confirm(`Delete ${c.name}? Its contacts, notes and files go too. This can't be undone.`)) return;
+    setError(null);
+    try {
+      await deleteCustomer(c.id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't delete.");
+    }
+  }
   const list = usePaged(
     (limit, offset) =>
       fetchCustomers({ q: search, active: active === "all" ? undefined : active === "active", tag, limit, offset }),
@@ -59,6 +79,11 @@ export function Customers() {
             <button className="ghost-btn" onClick={() => setImporting(true)}>
               Import CSV
             </button>
+            {can("sales.customer.delete") && (
+              <button className="ghost-btn" onClick={() => setFindingDupes(true)}>
+                Find duplicates
+              </button>
+            )}
             <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
               {showForm ? "Cancel" : "+ New customer"}
             </button>
@@ -121,6 +146,11 @@ export function Customers() {
                       <button className="secondary-btn" onClick={() => setFilesFor(c)}>
                         Files
                       </button>
+                      {can("sales.customer.delete") && (
+                        <button className="danger-btn sm" onClick={() => removeCustomer(c)}>
+                          Delete
+                        </button>
+                      )}
                       <button
                         className="secondary-btn"
                         onClick={async () => {
@@ -143,6 +173,26 @@ export function Customers() {
         </div>
       )}
       <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
+
+      {findingDupes && (
+        <MergeDuplicates
+          noun="customer"
+          explain="Customers that share a name or GSTIN. Everything on the others — contacts, deals, quotations, follow-ups, files and history — moves to the one you keep."
+          load={async () =>
+            (await fetchCustomerDuplicates()).map((g) => ({
+              reason: g.reason,
+              records: g.customers.map((c) => ({
+                id: c.id,
+                title: c.name,
+                detail: [c.gstin || "No GSTIN", c.active ? "Active" : "Inactive", c.tags.join(", ")].filter(Boolean).join(" · "),
+              })),
+            }))
+          }
+          merge={mergeCustomers}
+          onMerged={() => void refresh()}
+          onClose={() => setFindingDupes(false)}
+        />
+      )}
 
       {filesFor && (
         <Drawer title={filesFor.name} subtitle="Files" onClose={() => setFilesFor(null)}>

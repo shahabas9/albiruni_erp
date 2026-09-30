@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ApiError, createContact, fetchContacts, updateContact, type Contact } from "../api/client";
+import { ApiError, createContact, deleteContact, fetchContacts, updateContact, type Contact } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { ContactActions } from "../crm/ContactActions";
 import { Pager, SearchBox } from "../crm/ui";
@@ -90,6 +90,16 @@ export function Contacts() {
                     <td>
                       <button className="secondary-btn" onClick={() => setEditingId(c.id)}>
                         Edit
+                      </button>{" "}
+                      <button
+                        className="danger-btn sm"
+                        onClick={async () => {
+                          if (!window.confirm(`Delete ${c.name}?`)) return;
+                          await deleteContact(c.id);
+                          await refresh();
+                        }}
+                      >
+                        Delete
                       </button>
                     </td>
                   </tr>
