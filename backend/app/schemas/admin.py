@@ -25,6 +25,7 @@ class UserIn(BaseModel):
     password: str = Field(min_length=8, max_length=200)
     role_id: UUID
     locale: str = "en-IN"
+    email: str = Field(default="", max_length=160)
 
 
 class UserUpdate(BaseModel):
@@ -33,6 +34,7 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=200)
     locale: str | None = None
     active: bool | None = None
+    email: str | None = Field(default=None, max_length=160)
 
 
 class UserOut(BaseModel):
@@ -43,3 +45,4 @@ class UserOut(BaseModel):
     role_name: str | None
     locale: str
     active: bool
+    email: str

@@ -273,6 +273,7 @@ function UserForm({ roles, user, onDone }: { roles: Role[]; user?: AdminUser; on
   const [displayName, setDisplayName] = useState(user?.display_name ?? "");
   const [username, setUsername] = useState(user?.username ?? "");
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(user?.email ?? "");
   const [roleId, setRoleId] = useState(user?.role_id ?? roles[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -285,10 +286,11 @@ function UserForm({ roles, user, onDone }: { roles: Role[]; user?: AdminUser; on
         await updateAdminUser(user.id, {
           display_name: displayName,
           role_id: roleId,
+          email: email.trim(),
           ...(password ? { password } : {}),
         });
       } else {
-        await createAdminUser({ username, display_name: displayName, password, role_id: roleId });
+        await createAdminUser({ username, display_name: displayName, password, role_id: roleId, email: email.trim() });
       }
       onDone();
     } catch (err) {
@@ -313,6 +315,10 @@ function UserForm({ roles, user, onDone }: { roles: Role[]; user?: AdminUser; on
             <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
           </label>
         )}
+        <label className="field">
+          <span>Email (for notifications)</span>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
+        </label>
         <label className="field">
           <span>{user ? "New password (optional)" : "Password"}</span>
           <input

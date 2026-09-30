@@ -369,6 +369,8 @@ export interface AdminUser {
   role_name: string | null;
   locale: string;
   active: boolean;
+  /** Where their notifications are emailed; "" for in-app only. */
+  email: string;
 }
 
 export function fetchAdminUsers(): Promise<AdminUser[]> {
@@ -380,13 +382,14 @@ export function createAdminUser(body: {
   display_name: string;
   password: string;
   role_id: string;
+  email?: string;
 }): Promise<AdminUser> {
   return request<AdminUser>("/api/admin/users", { method: "POST", body: JSON.stringify(body) });
 }
 
 export function updateAdminUser(
   id: string,
-  body: Partial<{ display_name: string; role_id: string; password: string; active: boolean }>,
+  body: Partial<{ display_name: string; role_id: string; password: string; active: boolean; email: string }>,
 ): Promise<AdminUser> {
   return request<AdminUser>(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
@@ -1021,4 +1024,41 @@ export function saveWebForm(body: Partial<{ enabled: boolean; source: string; th
 
 export function newWebFormKey(): Promise<WebForm> {
   return request<WebForm>("/api/crm/web-form/new-key", { method: "POST" });
+}
+
+// --- Notifications ----------------------------------------------------------------
+
+export interface AppNotification {
+  id: string;
+  kind: "lead_assigned" | "deal_assigned" | "followup_assigned" | "followup_overdue" | "web_enquiry" | "import" | string;
+  title: string;
+  body: string;
+  /** A path in this app, e.g. /crm?opp=… */
+  link: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export function fetchNotifications(): Promise<{ unread: number; items: AppNotification[] }> {
+  return request<{ unread: number; items: AppNotification[] }>("/api/notifications");
+}
+
+/** Omit ids to mark everything read. */
+export function markNotificationsRead(ids?: string[]): Promise<{ marked: number }> {
+  return request<{ marked: number }>("/api/notifications/read", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+export interface NotificationPreferences {
+  email: string;
+  notify_email: boolean;
+  /** Whether the server can send email at all. */
+  email_enabled: boolean;
+}
+
+export function fetchNotificationPreferences(): Promise<NotificationPreferences> {
+  return request<NotificationPreferences>("/api/notifications/preferences");
+}
+
+export function saveNotificationPreferences(body: { email?: string; notify_email?: boolean }): Promise<NotificationPreferences> {
+  return request<NotificationPreferences>("/api/notifications/preferences", { method: "PUT", body: JSON.stringify(body) });
 }

@@ -3236,3 +3236,57 @@ button.tag-chip:hover {
   font-size: 12.5px;
   color: var(--ink-dim);
 }
+
+/* ================= Notifications ================= */
+
+.bell-count {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bad);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.notif-list {
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.notif-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px 8px;
+  font-size: 14px;
+}
+
+.notif-head .link-btn {
+  padding: 0;
+  font-size: 12.5px;
+}
+
+.notif-list button.unread b {
+  color: var(--ink);
+}
+
+.notif-list button.unread {
+  background: var(--accent-soft);
+}
+
+.notif-list button.read b {
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+
+.notif-time {
+  color: var(--ink-faint);
+}

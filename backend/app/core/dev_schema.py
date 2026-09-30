@@ -40,7 +40,11 @@ def ensure_dev_schema() -> None:
                     conn.execute(text(f'ALTER TABLE {table} RENAME COLUMN {old} TO {new}'))
 
         additions = {
-            "users": {"active": "BOOLEAN NOT NULL DEFAULT TRUE"},
+            "users": {
+                "active": "BOOLEAN NOT NULL DEFAULT TRUE",
+                "email": "VARCHAR(160) NOT NULL DEFAULT ''",
+                "notify_email": "BOOLEAN NOT NULL DEFAULT TRUE",
+            },
             "leads": {
                 "notes": "TEXT NOT NULL DEFAULT ''",
                 "converted_customer_id": "UUID REFERENCES customers(id)",
@@ -62,6 +66,7 @@ def ensure_dev_schema() -> None:
                 "customer_id": "UUID REFERENCES customers(id)",
                 "created_by": "UUID REFERENCES users(id)",
                 "owner_id": "UUID REFERENCES users(id)",
+                "overdue_notified_at": "TIMESTAMPTZ",
             },
             "quotations": {"opportunity_id": "UUID REFERENCES opportunities(id)"},
             "crm_settings": {
@@ -143,6 +148,13 @@ def ensure_dev_schema() -> None:
             return conn.execute(
                 text("INSERT INTO dev_upgrades (name) VALUES (:n) ON CONFLICT DO NOTHING RETURNING name"), {"n": name}
             ).first() is not None
+
+        if once("overdue-alerts-start-now"):
+            # Don't alert everyone about follow-ups that went overdue before
+            # notifications existed; only new ones from here on.
+            conn.execute(text(
+                "UPDATE activities SET overdue_notified_at = now() WHERE NOT done AND due_at < now()"
+            ))
 
         if once("grant-crm-records-all"):
             # Record visibility arrived with crm.records.all; roles that could

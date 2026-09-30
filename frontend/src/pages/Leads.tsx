@@ -7,6 +7,7 @@ import {
   convertLead,
   createLead,
   fetchLeadCustomerMatches,
+  fetchLead,
   fetchLeadTimeline,
   fetchLeads,
   fetchRotation,
@@ -48,6 +49,14 @@ export function Leads() {
   const [importing, setImporting] = useState(false);
   const [historyFor, setHistoryFor] = useState<Lead | null>(null);
   const [fileChanges, setFileChanges] = useState(0);
+  // Notification links point at /leads?lead=<id>: open that lead's drawer.
+  const linkedLead = params.get("lead");
+  useEffect(() => {
+    if (!linkedLead) return;
+    fetchLead(linkedLead)
+      .then(setHistoryFor)
+      .catch(() => setError("That lead isn't available — it may have been reassigned or removed."));
+  }, [linkedLead]);
   const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
   const [status, setStatus] = useState(params.get("status") ?? "");
   const [tag, setTag] = useState(params.get("tag") ?? "");

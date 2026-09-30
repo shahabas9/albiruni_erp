@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, history
+from app.domain import crm_service, history, notifications
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.lead_service import get_lead
@@ -160,6 +160,10 @@ def create_activity(db: Session, context: RequestContext, body: ActivityIn) -> A
     else:
         when = f" for {activity.due_date.strftime('%d %b %Y')}" if activity.due_date else ""
         _record_on_parent(db, context, activity, "followup_scheduled", f"Follow-up scheduled{when} — {what}")
+    link = notifications.deal_link(activity.opportunity_id) if activity.opportunity_id else "/activities"
+    notifications.notify(db, context, activity.owner_id, "followup_assigned",
+                         f"{'Logged for you' if activity.done else 'Follow-up for you'}: {what}",
+                         f"Due {activity.due_date:%d %b %Y}" if activity.due_date and not activity.done else "", link)
     db.commit()
     db.refresh(activity)
     return activity
@@ -170,6 +174,7 @@ def update_activity(db: Session, context: RequestContext, activity_id: UUID, bod
     changes = body.model_dump(exclude_unset=True)
     if "due_date" in changes:
         activity.due_at = _due_at(changes["due_date"])
+        activity.overdue_notified_at = None  # a new due time can go overdue (and be alerted) again
     if "done" in changes and changes["done"] != activity.done:
         what = f"{activity.type}: {activity.subject}" if activity.subject else activity.type
         if changes["done"]:

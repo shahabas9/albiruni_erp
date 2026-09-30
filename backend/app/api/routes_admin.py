@@ -21,7 +21,7 @@ def _user_out(row: tuple[User, str | None]) -> UserOut:
     user, role_name = row
     return UserOut(
         id=user.id, username=user.username, display_name=user.display_name, role_id=user.role_id,
-        role_name=role_name, locale=user.locale, active=user.active,
+        role_name=role_name, locale=user.locale, active=user.active, email=user.email or "",
     )
 
 

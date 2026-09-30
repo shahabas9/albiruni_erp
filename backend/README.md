@@ -161,6 +161,20 @@ Customers and contacts stay shared. On upgrade, every existing role that
 could read leads or deals is granted `crm.records.all` once (tracked in
 `dev_upgrades`), so nothing changes until an admin takes it away.
 
+**Notifications.** People are told (bell in the app, `GET /api/notifications`,
+`POST /api/notifications/read`) when a lead, deal or follow-up is given to
+them by someone else (including the rotation and conversions), when CSV
+import gives them leads (one alert per import), when a web enquiry arrives
+(its owner, or everyone who can assign leads when it's unassigned), and when
+one of their follow-ups goes overdue (once per due time). Each user sets an
+email and on/off at `/api/notifications/preferences`; with `SMTP_HOST`,
+`SMTP_FROM` (and optionally `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
+`SMTP_STARTTLS`, `APP_URL` for links) notifications are emailed too, retried
+up to 3 times. A background loop in the API (`NOTIFICATION_WORKER`,
+`NOTIFICATION_INTERVAL_SECONDS`, default 60) raises overdue alerts and sends
+email; it claims rows with `SKIP LOCKED`, so several processes can run it.
+WhatsApp alerts need a WhatsApp Business provider and aren't built in.
+
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return
 the total matching count in `X-Total-Count`: leads `q` (every word must

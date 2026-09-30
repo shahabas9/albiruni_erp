@@ -699,6 +699,68 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(len(self.opps_out(context=self.context)), 2)
         self.assertEqual(mine.owner_user_id, rep.user.id)
 
+    # --- Notifications ------------------------------------------------------------
+
+    def test_notifications_reach_the_right_people(self):
+        from app.api import routes_notifications
+        from app.domain import notifications, web_form
+
+        asha = self.colleague("Asha")
+        asha_ctx = RequestContext(asha, self.context.tenant_id, self.context.company_id, ["*"], "en-IN")
+        inbox = lambda ctx=asha_ctx: routes_notifications.list_notifications(False, 30, ctx, self.db)  # noqa: E731
+
+        lead = self.lead(name="For Asha", owner_user_id=asha.id)
+        mine = self.lead(name="Mine")  # created and owned by me: nobody to tell
+        lead_service.assign_lead(self.db, self.context, mine.id, asha.id)
+        deal = self.deal(name="Asha deal", owner_user_id=asha.id)
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Ring them", lead_id=lead.id, owner_id=asha.id, due_date=date.today()))
+        titles = [n.title for n in inbox()["items"]]
+        self.assertEqual(titles, ["Follow-up for you: Call: Ring them", "New deal for you: Asha deal",
+                                  "Lead assigned to you: Customer Co", "New lead for you: Customer Co"])
+        self.assertEqual(inbox()["unread"], 4)
+        self.assertEqual(routes_notifications.list_notifications(False, 30, self.context, self.db)["unread"], 0)
+
+        # Overdue alerts: once, to the owner; again only after the due time changes.
+        late = activity_service.create_activity(self.db, asha_ctx, crm.ActivityIn(
+            type="Task", subject="Send price list", opportunity_id=deal.id, due_date=date.today() - timedelta(days=1)))
+        self.assertEqual(notifications.raise_overdue_alerts(self.db) >= 1, True)
+        notifications.raise_overdue_alerts(self.db)
+        overdue = [n for n in inbox()["items"] if n.kind == "followup_overdue"]
+        self.assertEqual([n.title for n in overdue], ["Overdue: Send price list"])
+        self.assertEqual(overdue[0].link, f"/crm?opp={deal.id}")
+        activity_service.update_activity(self.db, asha_ctx, late.id,
+                                         crm.ActivityUpdate(due_date=date.today() - timedelta(days=1)))
+        notifications.raise_overdue_alerts(self.db)
+        self.assertEqual(len([n for n in inbox()["items"] if n.kind == "followup_overdue"]), 2)
+
+        # Web enquiries with no owner go to people who can hand leads out.
+        web_form.reset_rate_limits()
+        key = routes_crm.put_web_form(crm.WebFormIn(enabled=True), self.context, self.db)["key"]
+        web_form.submit(self.db, key, {"name": "Visitor", "phone": "9444455555", "message": "Hi"}, "10.1.1.1")
+        me = routes_notifications.list_notifications(False, 30, self.context, self.db)["items"]
+        self.assertEqual(me[0].title, "New web enquiry: Visitor")
+
+        # Mark read; email goes to people with an address, skipped otherwise.
+        routes_notifications.mark_read(routes_notifications.ReadIn(ids=[inbox()["items"][0].id]), asha_ctx, self.db)
+        self.assertEqual(inbox()["unread"], 6)  # 4 + 2 overdue + the web enquiry (she can hand leads out) - 1 read
+        routes_notifications.mark_read(routes_notifications.ReadIn(), asha_ctx, self.db)
+        self.assertEqual(inbox()["unread"], 0)
+
+        from app.core.config import settings
+        self.addCleanup(setattr, settings, "smtp_host", settings.smtp_host)
+        self.addCleanup(setattr, settings, "smtp_from", settings.smtp_from)
+        settings.smtp_host, settings.smtp_from = "smtp.test", "crm@example.test"
+        routes_notifications.put_preferences(routes_notifications.PreferencesIn(email="asha@example.test"),
+                                             asha_ctx, self.db)
+        sent = []
+        outcome = notifications.send_pending_emails(self.db, send=lambda to, subject, text: sent.append((to, subject)))
+        self.assertTrue(all(to == "asha@example.test" for to, _ in sent) and len(sent) == 7)
+        self.assertGreaterEqual(outcome["skipped"], 1)  # my own notifications: no address
+        self.assertEqual(notifications.send_pending_emails(self.db, send=lambda *a: sent.append(a))["sent"], 0)
+        with self.assertRaises(ValidationError):
+            routes_notifications.PreferencesIn(email="not an email")
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

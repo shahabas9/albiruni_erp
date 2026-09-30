@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, contains_eager
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, fields, history
+from app.domain import crm_service, fields, history, notifications
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, OPPORTUNITY_STAGES, Opportunity
@@ -86,6 +86,8 @@ def create_opportunity(db: Session, context: RequestContext, body: OpportunityIn
     db.add(opp)
     db.flush()
     history.record(db, context, "opportunity", opp.id, "created", f"Deal created: {opp.name} (stage New)")
+    notifications.notify(db, context, opp.owner_user_id, "deal_assigned", f"New deal for you: {opp.name}", "",
+                         notifications.deal_link(opp.id))
     db.commit()
     db.refresh(opp)
     return opp
@@ -128,6 +130,8 @@ def assign_opportunity(
     if new_owner != opp.owner_user_id:
         summary, changes = history.owner_change(db, opp.owner_user_id, new_owner)
         history.record(db, context, "opportunity", opp.id, "owner_changed", summary, changes)
+        notifications.notify(db, context, new_owner, "deal_assigned", f"Deal assigned to you: {opp.name}", "",
+                             notifications.deal_link(opp.id))
     opp.owner_user_id = new_owner
     db.commit()
     db.refresh(opp)

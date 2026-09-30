@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, duplicates, history
+from app.domain import crm_service, duplicates, history, notifications
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Activity, CrmSettings, Lead
 from app.models.tenant import Company
@@ -196,6 +196,9 @@ def submit(db: Session, key: str, data: dict, client_ip: str) -> dict:
             completed_at=crm_service.now_utc(),
         ))
         history.record(db, context, "lead", lead.id, "activity_logged", "New enquiry from the website form")
+        for user_id in [lead.owner_user_id] if lead.owner_user_id else notifications.managers(db, context):
+            notifications.notify(db, context, user_id, "web_enquiry", f"New web enquiry from {lead.name}",
+                                 message[:300], notifications.lead_link(lead.id))
         db.commit()
         return {"thank_you": thank_you, "lead_id": lead.id, "created": False}
 
@@ -209,5 +212,8 @@ def submit(db: Session, key: str, data: dict, client_ip: str) -> dict:
     db.flush()
     by = f" — assigned by rotation to {rotated.display_name}" if rotated else ""
     history.record(db, context, "lead", lead.id, "created", f"Lead created from the website enquiry form{by}")
+    for user_id in [lead.owner_user_id] if lead.owner_user_id else notifications.managers(db, context):
+        notifications.notify(db, context, user_id, "web_enquiry", f"New web enquiry: {lead.name}",
+                             message[:300] or "No message.", notifications.lead_link(lead.id))
     db.commit()
     return {"thank_you": thank_you, "lead_id": lead.id, "created": True}
