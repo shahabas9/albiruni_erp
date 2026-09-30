@@ -25,6 +25,9 @@ INTENTS = (
     "crm.log_activity",
     "crm.targets",
     "crm.find",
+    "sales.receivables",
+    "sales.record_payment",
+    "sales.invoice_order",
     "unknown",
 )
 
@@ -38,6 +41,17 @@ _TARGET = re.compile(r"\b(targets?|quotas?|on track|how am i doing|how are we do
 _FIND = re.compile(
     r"\b(show|list|find|which|any|get|give me|who are)\b.*\b(leads?|deals?|opportunit(y|ies)|customers?|clients?|accounts?)\b"
     r"|\b(leads?|deals?|opportunit(y|ies)|customers?|clients?)\b\s+(tagged|with|in|from|marked)\b"
+)
+_RECEIVABLE = re.compile(
+    r"\b(who owes|owes? (us|me|money)|outstanding|receivables?|dues|unpaid|pending payments?|balance due"
+    r"|overdue (invoices?|bills?|payments?|amounts?)|how much does .+ owe|yet to pay|not paid)\b"
+)
+_PAYMENT_IN = re.compile(
+    r"\b(received|receive|got|collected|record(ed)?( a)? payment|payment (of|from|received)|paid us|has paid|have paid)\b"
+)
+_INVOICE_ORDER = re.compile(
+    r"\b(invoice|bill)\b\s+(the\s+|for\s+)?\S+.*\border\b|\b(make|create|raise|prepare|generate|draft|issue)\b.*\b(invoice|bill)\b"
+    r"|^\s*(invoice|bill)\s+\S+"
 )
 _STAGE_VERB = re.compile(r"\b(mark|move|set|change|update|put)\b|\bwe (won|lost)\b|\b(won|lost) the\b")
 _QUOTE_CREATE = re.compile(r"\b(create|make|prepare|draft|new|raise|generate)\b.*\b(quotation|quote)\b|\b(quotation|quote) for\b")
@@ -65,6 +79,12 @@ def classify_intent(text: str, now: datetime | None = None) -> str:
         re.search(r"\b(quotation|quote)\b", t) and re.search(r"\d+\s*(boxes?|units?|pcs?|pieces?)\b", t)
     ):
         return "sales.create_quotation"
+    if _PAYMENT_IN.search(t) and parse_amount(text) is not None and re.search(r"\bfrom\b", t):
+        return "sales.record_payment"
+    if _RECEIVABLE.search(t):
+        return "sales.receivables"
+    if _INVOICE_ORDER.search(t) and not _QUESTION.search(t):
+        return "sales.invoice_order"
     if _STALE.search(t):
         return "crm.stale"
     if _TARGET.search(t):
@@ -256,3 +276,52 @@ def mentions(text: str, phrase: str) -> bool:
     """`phrase` appears in `text` as whole words, ignoring case."""
 
     return bool(phrase) and re.search(r"(?<![\w])" + re.escape(phrase.lower()) + r"(?![\w])", text.lower()) is not None
+
+
+# --- Payments ---------------------------------------------------------------------
+
+_REFERENCE = re.compile(
+    r"\b(?:utr|ref(?:erence)?(?:\s+no\.?)?|txn(?:\s+id)?|transaction(?:\s+id)?|cheque(?:\s+no\.?|\s+number)?|chq(?:\s+no\.?)?)"
+    r"\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9/-]{2,})",
+    re.I,
+)
+_AMOUNT = re.compile(
+    r"(?:₹|\brs\.?|\binr)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k\b|thousand\b|lakhs?\b|lacs?\b|crores?\b|cr\b)?", re.I
+)
+_UNITS = {"k": 1_000, "thousand": 1_000, "lakh": 100_000, "lakhs": 100_000, "lac": 100_000, "lacs": 100_000,
+          "crore": 10_000_000, "crores": 10_000_000, "cr": 10_000_000}
+MODES = (
+    (r"\b(cash)\b", "Cash"),
+    (r"\b(upi|gpay|google ?pay|phone ?pe|paytm|bhim)\b", "UPI"),
+    (r"\b(neft|rtgs|imps|bank|transfer|wire)\b", "Bank transfer"),
+    (r"\b(cheque|check|chq)\b", "Cheque"),
+    (r"\b(card|swipe|pos)\b", "Card"),
+)
+
+
+def payment_reference(text: str) -> str:
+    match = _REFERENCE.search(text)
+    return match.group(1) if match else ""
+
+
+def parse_amount(text: str) -> float | None:
+    """The amount in "received ₹25,000", "got 1.5 lakh", "12k". References (UTR…) don't count."""
+
+    cleaned = _REFERENCE.sub(" ", text)
+    for match in _AMOUNT.finditer(cleaned):
+        number, unit = match.group(1).replace(",", ""), (match.group(2) or "").lower()
+        try:
+            value = float(number) * _UNITS.get(unit, 1)
+        except ValueError:
+            continue
+        if value > 0:
+            return round(value, 2)
+    return None
+
+
+def payment_mode(text: str) -> str | None:
+    t = text.lower()
+    for pattern, mode in MODES:
+        if re.search(pattern, t):
+            return mode
+    return None

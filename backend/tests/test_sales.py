@@ -8,14 +8,14 @@ import os
 import unittest
 from datetime import date
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Response
 from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_ask, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
@@ -29,6 +29,7 @@ from app.models.sales import Item
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
+from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.items import ItemIn, ItemUpdate
 from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn
 from app.schemas.orders import (
@@ -801,6 +802,82 @@ class ReportTests(SalesTestCase):
             routes_reports.gstr1(date.today(), date.today() - timedelta(days=1), self.context, self.db)
         self.assertEqual(sales_reports.uqc("Boxes"), "BOX")
         self.assertEqual(sales_reports.uqc("bundle"), "OTH")
+
+
+
+class AskAndAlertTests(SalesTestCase):
+    def ask(self, text, context=None):
+        return routes_ask.ask(AskRequest(text=text), context or self.context, self.db)
+
+    def test_ask_who_owes_and_how_much_one_customer_owes(self):
+        item = self.item(stock=100)
+        customer = self.customer("Rahman Traders")
+        invoice = self.invoice_for(customer, 2, item)  # 991
+        self.age_invoice(invoice, 40)
+        answer = self.ask("Who owes us money?")
+        self.assertEqual(answer["type"], "answer")
+        self.assertIn("₹991 is overdue", answer["message"])
+        self.assertEqual(answer["items"][0]["title"], "Rahman Traders — ₹991")
+        one = self.ask("how much does Rahman Traders owe")
+        self.assertIn("Rahman Traders owes ₹991 on 1 invoice, ₹991 of it overdue", one["message"])
+        self.assertEqual(one["items"][0]["link"], f"/sales/invoices/{invoice.id}")
+        clerk = self.make_context(["crm.lead.read"], self.context.tenant_id, self.context.company_id)
+        self.assertEqual(self.ask("Who owes us money?", clerk)["type"], "denied")
+
+    def test_ask_records_a_payment_only_after_confirmation(self):
+        item = self.item(stock=100)
+        customer = self.customer("Coastal Traders")
+        invoice = self.invoice_for(customer, 2, item)  # 991
+        needs_ref = self.ask("Received ₹500 from Coastal Traders by UPI")
+        self.assertEqual(needs_ref["type"], "clarify")
+        preview = self.ask("Received ₹500 from Coastal Traders by UPI, UTR 998877")
+        self.assertEqual(preview["type"], "action_preview")
+        self.assertIn({"label": "Applies to", "value": f"Oldest first: {invoice.number}"}, preview["lines"])
+        self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).amount_paid, 0)  # nothing yet
+        done = routes_ask.confirm(ConfirmRequest(preview_token=preview["preview_token"]), self.context, self.db)
+        self.assertIn("Recorded payment RCT/", done["result_summary"])
+        self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).balance, 491.0)
+        how = self.ask("received 200 from Coastal Traders")
+        self.assertEqual((how["type"], how["message"]), ("clarify", "How was it paid?"))
+
+    def test_ask_drafts_an_invoice_for_the_one_order_waiting(self):
+        item = self.item(stock=100)
+        customer = self.customer("Malabar Hardware")
+        self.assertEqual(self.ask("invoice Malabar Hardware order")["type"], "message")  # nothing to invoice
+        order = self.confirmed_order([{"item_id": item.id, "qty": 3}], customer)
+        self.deliver(order, {0: 3})
+        preview = self.ask("Invoice Malabar Hardware's order")
+        self.assertEqual((preview["type"], preview["tool_name"]), ("action_preview", "sales.draft_invoice.v1"))
+        done = routes_ask.confirm(ConfirmRequest(preview_token=preview["preview_token"]), self.context, self.db)
+        draft = routes_invoices.get_invoice(UUID(done["invoice_id"]), self.context, self.db)
+        self.assertEqual((draft.status, draft.lines[0].qty, draft.order_number), ("Draft", 3, order.number))
+
+    def age_invoice(self, invoice, days):
+        row = self.db.get(Invoice, invoice.id)
+        row.due_date = date.today() - timedelta(days=days)
+        self.db.commit()
+
+    def test_overdue_invoices_alert_once(self):
+        from app.domain import notifications
+        from app.models.crm import Notification
+
+        item = self.item(stock=100)
+        issuer = self.make_context(["*"], self.context.tenant_id, self.context.company_id)
+        invoice = self.invoice_for(self.customer(), 1, item)
+        row = self.db.get(Invoice, invoice.id)
+        row.issued_by = issuer.user.id
+        self.db.commit()
+        self.age_invoice(invoice, 1)
+        paid = self.invoice_for(self.customer("Paid Up"), 1, item)
+        self.age_invoice(paid, 1)
+        self.pay(self.db.get(Invoice, paid.id).customer, 496)
+
+        notifications.raise_overdue_invoice_alerts(self.db)
+        notifications.raise_overdue_invoice_alerts(self.db)  # once only
+        alerts = self.db.execute(select(Notification).where(
+            Notification.tenant_id == self.context.tenant_id, Notification.kind == "invoice_overdue",
+        )).scalars().all()
+        self.assertEqual([(a.user_id, a.link) for a in alerts], [(issuer.user.id, f"/sales/invoices/{invoice.id}")])
 
 
 if __name__ == "__main__":

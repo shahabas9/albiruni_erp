@@ -90,6 +90,7 @@ def record_payment(db: Session, context: RequestContext, args: dict[str, Any]) -
     )
     left = payment_service.unallocated(receipt)
     return {"receipt_id": str(receipt.id), "number": receipt.number,
+            "link": {"label": "Open payments", "to": "/sales/payments"},
             "result_summary": f"Recorded payment {receipt.number}: ₹{float(receipt.amount):,.2f} from "
                               f"{receipt.customer.name}" + (f" (₹{float(left):,.2f} advance)" if left > 0 else "")}
 
@@ -148,4 +149,71 @@ def export_report(db: Session, context: RequestContext, args: dict[str, Any]) ->
 register_tool(ToolDefinition(
     name="sales.export_report.v1", purpose="Download a sales register or GSTR-1 section as CSV.",
     permission="sales.reports.read", risk_level="L1 Read", handler=export_report,
+))
+
+
+# --- Ask ERP: reads and drafts ---------------------------------------------------------
+
+
+def receivables_summary(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    from app.domain import receivables
+
+    customer_id = UUID(str(args["customer_id"])) if args.get("customer_id") else None
+    report = receivables.ageing(db, context, customer_id=customer_id)
+    if customer_id:
+        row = next(iter(report["rows"]), None)
+        name = args.get("customer_name", "This customer")
+        if row is None or (row["invoiced_owed"] <= 0 and row["advance"] <= 0):
+            message = f"{name} doesn't owe anything right now."
+            items = []
+        else:
+            open_invoices, _ = invoice_service.list_invoices(db, context, status="unpaid", customer_id=customer_id,
+                                                            limit=8)
+            message = (
+                f"{name} owes ₹{row['invoiced_owed']:,.0f} on {row['open_invoices']} invoice"
+                f"{'' if row['open_invoices'] == 1 else 's'}"
+                + (f", ₹{row['overdue']:,.0f} of it overdue" if row["overdue"] > 0 else ", none of it overdue yet")
+                + (f". They also have ₹{row['advance']:,.0f} in advance." if row["advance"] > 0 else ".")
+            )
+            items = [{
+                "title": f"{i.number} — ₹{float(invoice_service.balance(i)):,.0f} left",
+                "subtitle": f"Due {i.due_date:%d %b %Y}", "tone": "bad" if invoice_service.payment_status(i) == "Overdue" else None,
+                "link": f"/sales/invoices/{i.id}",
+            } for i in open_invoices]
+        return {"message": message, "items": items,
+                "link": {"label": "Open statement", "to": f"/sales/receivables/{customer_id}"},
+                "result_summary": f"Receivables for {name}"}
+    rows = [r for r in report["rows"] if r["net"] > 0]
+    totals = report["totals"]
+    if not rows:
+        message = "Nobody owes you anything right now."
+    else:
+        message = (f"Customers owe ₹{totals['invoiced_owed']:,.0f} in all; ₹{totals['overdue']:,.0f} is overdue"
+                   + (f" (₹{totals['d90_plus']:,.0f} for more than 90 days)." if totals["d90_plus"] > 0 else "."))
+    items = [{
+        "title": f"{r['customer_name']} — ₹{r['net']:,.0f}",
+        "subtitle": (f"₹{r['overdue']:,.0f} overdue" if r["overdue"] > 0 else "Not due yet")
+                    + (f" · oldest due {r['oldest_due']:%d %b}" if r["oldest_due"] else ""),
+        "tone": "bad" if r["d61_90"] + r["d90_plus"] > 0 else ("warn" if r["overdue"] > 0 else None),
+        "link": f"/sales/receivables/{r['customer_id']}",
+    } for r in rows[:8]]
+    return {"message": message, "items": items, "link": {"label": "Open receivables", "to": "/sales/receivables"},
+            "result_summary": "Receivables summary"}
+
+
+@_guard
+def draft_invoice(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    invoice = invoice_service.create_draft(db, context, UUID(str(args["order_id"])))
+    return {"invoice_id": str(invoice.id), "result_summary": f"Drafted an invoice for order {invoice.order.number} "
+                                                             f"(₹{float(invoice.grand_total):,.2f}) — check it and issue it",
+            "link": {"label": "Open the draft", "to": f"/sales/invoices/{invoice.id}"}}
+
+
+register_tool(ToolDefinition(
+    name="sales.receivables_summary.v1", purpose="Who owes what: all customers, or one customer's open invoices.",
+    permission="sales.invoice.read", risk_level="L1 Read", handler=receivables_summary,
+))
+register_tool(ToolDefinition(
+    name="sales.draft_invoice.v1", purpose="Draft an invoice for what's delivered and not yet invoiced on an order.",
+    permission="sales.invoice.write", risk_level="L2 Prepare", handler=draft_invoice,
 ))

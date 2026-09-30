@@ -537,3 +537,34 @@ functions with their own unit tests).
   tool `sales.export_report.v1`. Needs `sales.reports.read`.
 - These are figures to file from, not a filing: an accountant should check
   them (and the GST portal's own validation) before uploading.
+
+### Sales in Ask ERP, alerts and permissions
+
+- Ask ERP understands (still without an LLM):
+  - "Who owes us money?" / "overdue invoices" — receivables, most overdue
+    first (read tool `sales.receivables_summary.v1`).
+  - "How much does Rahman Traders owe?" — that customer's open invoices.
+  - "Received ₹25,000 from Rahman Traders by UPI, UTR 998877" — a payment
+    preview (amount, mode, reference, what it will pay) that records only on
+    Confirm. It asks for the mode, or the UTR / cheque number, when missing.
+    Amounts like "12k", "1.5 lakh" and "Rs. 1,25,000" are understood.
+  - "Invoice Malabar Hardware's order" — drafts an invoice for the one order
+    waiting to be invoiced (issuing stays on the invoice page).
+- **Overdue invoices** raise one notification each (the day after the due
+  date passes with money owed), to whoever issued the invoice and the owner
+  of the deal it came from. It runs in the same background worker as
+  follow-up alerts and is emailed the same way.
+- **Permissions** added by the sales cycle, each granted once on upgrade to
+  roles that already did the step before it:
+
+  | Permission | Allows |
+  |---|---|
+  | `sales.settings.write` | Company & GST details, invoice terms, defaults |
+  | `sales.order.read` / `sales.order.write` | See / make, confirm and cancel orders |
+  | `sales.credit.override` | Confirm an order past the credit limit |
+  | `sales.delivery.write` | Record and cancel deliveries |
+  | `inventory.stock.adjust` | Stock counts (with a reason) |
+  | `sales.invoice.read` / `sales.invoice.write` | See invoices and receivables / draft and issue invoices |
+  | `sales.credit_note.write` | Issue credit notes |
+  | `sales.payment.read` / `sales.payment.write` | See / record, apply and void payments |
+  | `sales.reports.read` | Sales register and GSTR-1 (downloads audited) |
