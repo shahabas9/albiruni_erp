@@ -12,6 +12,7 @@ import {
   type OpportunityStage,
 } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { ExportButton } from "../components/ExportButton";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
@@ -119,6 +120,17 @@ export function Opportunities() {
         </div>
         <TagFilter recordType="opportunity" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search deal or customer" />
+        <ExportButton
+          kind="opportunities"
+          filters={{
+            q: search,
+            stage: stageFilter === "all" || stageFilter === "stale" ? "" : stageFilter,
+            stale: stageFilter === "stale" || undefined,
+            owner: ownerParam(owner),
+            tag,
+          }}
+          onError={setError}
+        />
         {can("crm.opportunity.write") && (
           <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
             {showForm ? "Cancel" : "+ New opportunity"}

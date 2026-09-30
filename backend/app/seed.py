@@ -34,7 +34,7 @@ CRM_PERMISSIONS = [
     "crm.opportunity.read", "crm.opportunity.write", "crm.opportunity.assign",
     "crm.activity.read", "crm.activity.write",
     "crm.settings.write", "crm.records.all",
-    "crm.lead.delete", "crm.opportunity.delete", "sales.customer.delete",
+    "crm.lead.delete", "crm.opportunity.delete", "sales.customer.delete", "crm.export",
     "sales.customer.read", "sales.customer.write",
 ]
 

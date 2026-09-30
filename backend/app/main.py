@@ -20,6 +20,7 @@ from app.api import (
     routes_auth,
     routes_contacts,
     routes_customers,
+    routes_exports,
     routes_imports,
     routes_items,
     routes_leads,
@@ -63,7 +64,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Total-Count"],  # list totals for paging
+    expose_headers=["X-Total-Count", "X-Row-Count", "Content-Disposition"],  # paging totals, export downloads
 )
 # Added last, so it runs first: /api/public/* (the web enquiry form) is open to any origin.
 app.add_middleware(PublicCORSMiddleware)
@@ -86,6 +87,7 @@ app.include_router(routes_crm.router)
 app.include_router(routes_attachments.router)
 app.include_router(routes_public.router)
 app.include_router(routes_notifications.router)
+app.include_router(routes_exports.router)
 
 
 @app.get("/api/health")

@@ -867,6 +867,48 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(routes_customers.customer_overview(customer.id, rep, self.db)["open_deals"], 0)
         self.assertEqual({e["record_type"] for e in routes_customers.customer_timeline(customer.id, rep, self.db)}, {"customer"})
 
+    # --- Export -------------------------------------------------------------------
+
+    def test_exports_follow_filters_visibility_and_are_audited(self):
+        import csv as csvlib
+        from starlette.requests import Request
+        from app.api import routes_exports
+
+        def export(kind, context=None, **params):
+            query = "&".join(f"{k}={v}" for k, v in params.items()).encode()
+            request = Request({"type": "http", "method": "GET", "path": f"/api/exports/{kind}.csv",
+                               "query_string": query, "headers": []})
+            response = routes_exports.export_csv(kind, request, context or self.context, self.db)
+            text = response.body.decode("utf-8")
+            self.assertTrue(text.startswith("\ufeff"))
+            return list(csvlib.reader(text[1:].splitlines()))
+
+        budget = self.field("lead", "Budget", "number")
+        self.lead(name="Export me", company_name="=HYPERLINK(\"http://x\")", tags=["vip"], custom={budget.key: 5000})
+        self.lead(name="Not me", tags=["cold"])
+        rows = export("leads", tag="vip")
+        self.assertEqual(rows[0][:3] + rows[0][-1:], ["Name", "Company", "Phone", "Budget"])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual((rows[1][0], rows[1][1], rows[1][7], rows[1][-1]),
+                         ("Export me", "'=HYPERLINK(\"http://x\")", "vip", "5000"))
+
+        self.deal(name="Exported deal", value=1000, probability_pct=40)
+        deal_rows = export("opportunities")
+        self.assertEqual(deal_rows[1][:6], ["Exported deal", "Deal customer", "New", "1000.0", "40", "400.0"])
+
+        audit = self.db.execute(select(AuditEvent).where(AuditEvent.tool_name == "crm.export_records.v1")
+                                .order_by(AuditEvent.created_at.desc())).scalars().first()
+        self.assertEqual((audit.result_summary, audit.validation_result), ("Exported 1 opportunities (filters: none)", "PASS"))
+
+        rep = self.make_context(["crm.lead.read", "crm.export"], *self._tenant_and_company())
+        self.assertEqual(len(export("leads", rep)), 1)  # header only: owns none of them
+        with self.assertRaises(HTTPException) as no_export:
+            export("leads", self.make_context(["crm.lead.read", "crm.records.all"], *self._tenant_and_company()))
+        self.assertEqual(no_export.exception.status_code, 403)
+        with self.assertRaises(HTTPException) as no_read:
+            export("customers", rep)
+        self.assertEqual(no_read.exception.status_code, 403)
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

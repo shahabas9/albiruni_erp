@@ -199,6 +199,16 @@ files. Deal figures and history only include deals the caller may see.
 Customer create/edit (including tags and custom fields) is now recorded in
 history.
 
+**Export.** `GET /api/exports/{leads|opportunities|customers|contacts|activities}.csv`
+takes the same filters as the lists and applies the same record visibility;
+it needs `crm.export` (seeded for Sales Manager, not granted to existing
+roles) plus read permission on that list. Every export runs as the audited
+tool `crm.export_records.v1`, so the AI audit trail records who exported
+what, with which filters and how many rows. Files are UTF-8 with a BOM for
+Excel, include tags and one column per custom field, and cells that a
+spreadsheet would run as a formula are prefixed with `'`. At most 50,000
+rows per export.
+
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return
 the total matching count in `X-Total-Count`: leads `q` (every word must

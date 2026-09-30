@@ -42,7 +42,7 @@ export interface Page<T> {
   total: number;
 }
 
-type Params = Record<string, string | number | boolean | null | undefined>;
+export type Params = Record<string, string | number | boolean | null | undefined>;
 
 function query(params: Params): string {
   const q = new URLSearchParams();
@@ -422,6 +422,7 @@ export const KNOWN_PERMISSIONS = [
   "crm.lead.delete",
   "crm.opportunity.delete",
   "sales.customer.delete",
+  "crm.export",
   "admin.users.read",
   "admin.users.write",
   "audit.read",
@@ -1124,4 +1125,21 @@ export function fetchCustomerOverview(id: string): Promise<CustomerOverview> {
 
 export function fetchCustomerTimeline(id: string): Promise<TimelineEntry[]> {
   return request<TimelineEntry[]>(`/api/customers/${id}/timeline`);
+}
+
+// --- Export ----------------------------------------------------------------------
+
+export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+
+/** Downloads a list as CSV with the given filters (same as the list's query parameters). */
+export async function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
+  const res = await send(`/api/exports/${kind}.csv${query(filters)}`);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? `${kind}.csv`;
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return Number(res.headers.get("X-Row-Count") ?? 0);
 }

@@ -12,6 +12,7 @@ import {
   type Activity,
   type ActivityType,
 } from "../api/client";
+import { ExportButton } from "../components/ExportButton";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { Pager, SearchBox } from "../crm/ui";
@@ -86,6 +87,7 @@ export function Activities() {
             Mine
           </button>
         </div>
+        <ExportButton kind="activities" filters={{ show, owner: mine ? "me" : "" }} onError={setError} />
         {can("crm.activity.write") && (
           <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
             {showForm ? "Cancel" : "+ Log activity"}

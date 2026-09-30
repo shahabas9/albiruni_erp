@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, createContact, deleteContact, fetchContacts, updateContact, type Contact } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { ExportButton } from "../components/ExportButton";
 import { ContactActions } from "../crm/ContactActions";
 import { Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -9,6 +10,7 @@ import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
 export function Contacts() {
   const { version } = useAppData();
+  const [exportError, setExportError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -25,10 +27,11 @@ export function Contacts() {
         <p className="page-sub">People at your customers — who you actually talk to, distinct from the account itself.</p>
       </div>
 
-      {list.error && <div className="error-banner">{list.error}</div>}
+      {(list.error ?? exportError) && <div className="error-banner">{list.error ?? exportError}</div>}
 
       <div className="toolbar">
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, customer, phone, email" />
+        <ExportButton kind="contacts" filters={{ q: search }} onError={setExportError} />
         <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "Cancel" : "+ New contact"}
         </button>

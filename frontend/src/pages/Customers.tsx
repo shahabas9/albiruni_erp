@@ -9,6 +9,7 @@ import {
   mergeCustomers,
   updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
+import { ExportButton } from "../components/ExportButton";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { Attachments } from "../crm/Attachments";
 import { MergeDuplicates } from "../crm/MergeDuplicates";
@@ -75,6 +76,11 @@ export function Customers() {
         </div>
         <TagFilter recordType="customer" value={tag} onChange={setTag} version={version + saves} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name or GSTIN" />
+        <ExportButton
+          kind="customers"
+          filters={{ q: search, active: active === "all" ? undefined : active === "active", tag }}
+          onError={setError}
+        />
         {can("sales.customer.write") && (
           <div style={{ display: "flex", gap: 8 }}>
             <button className="ghost-btn" onClick={() => setImporting(true)}>

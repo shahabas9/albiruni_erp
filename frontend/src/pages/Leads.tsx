@@ -24,6 +24,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
+import { ExportButton } from "../components/ExportButton";
 import { Attachments } from "../crm/Attachments";
 import { MergeDuplicates } from "../crm/MergeDuplicates";
 import { Icon } from "../components/Icon";
@@ -131,6 +132,11 @@ export function Leads() {
         </select>
         <TagFilter recordType="lead" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, company, phone, email" />
+        <ExportButton
+          kind="leads"
+          filters={{ q: search, status: statusParam, owner: ownerParam(owner), tag }}
+          onError={setError}
+        />
         {can("crm.lead.write") && (
           <div style={{ display: "flex", gap: 8 }}>
             <button className="ghost-btn" onClick={() => setImporting(true)}>

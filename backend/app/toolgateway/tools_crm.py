@@ -16,7 +16,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import activity_service, crm_service, opportunity_service
+from app.domain import activity_service, crm_service, export_service, opportunity_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, Activity, Opportunity
 from app.schemas.crm import ActivityIn, OpportunityUpdate
@@ -224,11 +224,23 @@ def pipeline_summary(db: Session, context: RequestContext, args: dict[str, Any])
     ]
     return {"message": message, "items": items, "link": {"label": "Open pipeline", "to": "/crm"}, "result_summary": message}
 
+def export_records(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        filename, text, count = export_service.build(db, context, args["kind"], args.get("filters", {}))
+    except (ConflictError, PermissionError, ValueError) as exc:
+        raise ToolValidationError(str(exc)) from exc
+    filters = ", ".join(f"{k}={v}" for k, v in sorted(args.get("filters", {}).items()) if v not in (None, "")) or "none"
+    return {"filename": filename, "csv": text, "rows": count,
+            "result_summary": f"Exported {count} {args['kind']} (filters: {filters})"}
+
+
 for definition in (
     ToolDefinition("crm.log_activity.v1", "Log a call, WhatsApp, meeting or note that already happened.",
                    "crm.activity.write", "L2 Prepare", log_activity),
     ToolDefinition("crm.schedule_followup.v1", "Schedule a follow-up (call, meeting, task) at a date/time.",
                    "crm.activity.write", "L2 Prepare", schedule_followup),
+    ToolDefinition("crm.export_records.v1", "Download a CRM list as CSV (with the screen's filters).",
+                   "crm.export", "L1 Read", export_records),
     ToolDefinition("crm.move_opportunity_stage.v1", "Move a deal to another stage, or close it as Won/Lost.",
                    "crm.opportunity.write", "L2 Prepare", move_opportunity_stage),
     ToolDefinition("crm.list_due_followups.v1", "Follow-ups that are overdue or due today.",
