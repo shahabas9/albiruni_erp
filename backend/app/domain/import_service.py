@@ -250,7 +250,7 @@ def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> 
             db.add(Customer(
                 tenant_id=context.tenant_id, company_id=context.company_id,
                 name=v["name"], gstin=v["gstin"], credit_limit=Decimal(v["credit_limit"]), active=True,
-                tags=_tag_list(v),
+                tags=_tag_list(v), state_code=v["gstin"][:2],
             ))
         created += 1
     for owner, count in per_owner.items():  # one alert per person, not one per row

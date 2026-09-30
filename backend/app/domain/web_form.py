@@ -67,7 +67,7 @@ def _row(db: Session, context: RequestContext) -> CrmSettings:
     row = db.execute(
         select(CrmSettings).where(
             CrmSettings.company_id == context.company_id, CrmSettings.tenant_id == context.tenant_id
-        ).with_for_update()
+        ).with_for_update().execution_options(populate_existing=True)
     ).scalar_one_or_none()
     if row is None:
         row = CrmSettings(company_id=context.company_id, tenant_id=context.tenant_id, stale_after_days={})

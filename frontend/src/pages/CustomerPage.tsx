@@ -25,7 +25,7 @@ import { FollowUpModal } from "../crm/forms";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-import { dateTime, inr, inrShort, quoteStatusClass, relativeDue } from "../lib/format";
+import { dateTime, dayDate, inr, inrShort, quoteStatusClass, relativeDue } from "../lib/format";
 import { CustomerForm } from "./Customers";
 
 /** Everything about one customer on one page. */
@@ -112,7 +112,10 @@ export function CustomerPage() {
           <p className="page-sub">
             <span className={`badge ${c.active ? "status-confirmed" : "status-draft"}`}>{c.active ? "Active" : "Inactive"}</span>{" "}
             {c.gstin ? <span className="mono">GSTIN {c.gstin}</span> : "Unregistered for GST"} · Credit limit {inr(c.credit_limit)}
+            {c.state_code ? ` · State ${c.state_code}` : ""}
+            {c.payment_terms_days != null ? ` · Pays in ${c.payment_terms_days} days` : ""}
           </p>
+          {c.billing_address && <p className="page-sub" style={{ whiteSpace: "pre-line" }}>{c.billing_address}</p>}
           <TagChips tags={c.tags} />
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -271,6 +274,38 @@ export function CustomerPage() {
         </div>
 
         <div>
+          {overview.account && (overview.account.owed > 0 || overview.account.advance > 0 || overview.account.open_invoices > 0) && (
+            <div className="card account-card">
+              <div className="card-head">
+                <span className="card-title">Account</span>
+                <Link className="link-btn" to={`/sales/receivables/${c.id}`}>
+                  Statement
+                </Link>
+              </div>
+              <div className="row">
+                <span>Owed on {overview.account.open_invoices} invoice{overview.account.open_invoices === 1 ? "" : "s"}</span>
+                <b className="num">{inr(overview.account.owed)}</b>
+              </div>
+              {overview.account.overdue > 0 && (
+                <div className="row">
+                  <span>Overdue{overview.account.oldest_due ? ` (since ${dayDate(overview.account.oldest_due)})` : ""}</span>
+                  <b className="num qty-out">{inr(overview.account.overdue)}</b>
+                </div>
+              )}
+              {overview.account.advance > 0 && (
+                <div className="row">
+                  <span>Advance held</span>
+                  <b className="num">{inr(overview.account.advance)}</b>
+                </div>
+              )}
+              {overview.account.credit_limit > 0 && (
+                <div className="row">
+                  <span>Credit limit</span>
+                  <span className="num">{inr(overview.account.credit_limit)}</span>
+                </div>
+              )}
+            </div>
+          )}
           {fields.length > 0 && (
             <div className="card">
               <div className="card-head">

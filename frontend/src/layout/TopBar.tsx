@@ -104,6 +104,7 @@ const KIND_ICON: Record<string, IconName> = {
   followup_overdue: "alert",
   web_enquiry: "send",
   import: "file",
+  invoice_overdue: "wallet",
 };
 
 function Notifications() {

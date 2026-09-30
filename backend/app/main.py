@@ -20,13 +20,19 @@ from app.api import (
     routes_auth,
     routes_contacts,
     routes_customers,
+    routes_deliveries,
     routes_exports,
     routes_imports,
+    routes_invoices,
     routes_items,
     routes_leads,
     routes_notifications,
     routes_opportunities,
+    routes_orders,
+    routes_payments,
     routes_public,
+    routes_receivables,
+    routes_reports,
     routes_sales,
     routes_setup,
     routes_views,
@@ -35,7 +41,7 @@ from app.api import (
 # Import tool modules for their registration side effect (each module calls
 # register_tool() at import time). This is the whole tool catalog today;
 # new domains add a module here and nowhere else needs to change.
-from app.toolgateway import tools_crm, tools_sales  # noqa: F401
+from app.toolgateway import tools_crm, tools_documents, tools_sales  # noqa: F401
 
 
 @asynccontextmanager
@@ -72,6 +78,13 @@ app.add_middleware(PublicCORSMiddleware)
 
 app.include_router(routes_setup.router)
 app.include_router(routes_auth.router)
+# Before routes_sales: /api/sales/quotations/{id}/order must win over /quotations/{id}/{action}.
+app.include_router(routes_orders.router)
+app.include_router(routes_deliveries.router)
+app.include_router(routes_invoices.router)
+app.include_router(routes_payments.router)
+app.include_router(routes_receivables.router)
+app.include_router(routes_reports.router)
 app.include_router(routes_sales.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)

@@ -39,6 +39,53 @@ CRM_PERMISSIONS = [
 ]
 
 
+# The sales cycle: quotations to payments, plus the company's GST profile.
+SALES_PERMISSIONS = [
+    "sales.settings.write", "sales.order.read", "sales.order.write", "sales.credit.override", "sales.delivery.write",
+    "inventory.item.read", "inventory.item.write", "inventory.stock.adjust",
+    "sales.invoice.read", "sales.invoice.write", "sales.credit_note.write", "sales.payment.read",
+    "sales.payment.write", "sales.reports.read",
+]
+
+DEMO_COMPANY = dict(
+    legal_name="Albiruni Trading Group Pvt Ltd", gstin="32AABCA1234F1ZI", state_code="32",
+    address="2nd Floor, Mavoor Road\nKozhikode, Kerala 673004", phone="+91 495 270 0000",
+    email="accounts@albiruni.example", bank_details="Federal Bank, Mavoor Road\nA/c 1234 5678 9012\nIFSC FDRL0001234",
+    invoice_terms="Goods once sold will be taken back only with a credit note.\nInterest at 18% p.a. on overdue bills.",
+)
+DEMO_CUSTOMERS = {
+    "Rahman Traders": ("32AAFCR4321M1ZG", "32", "Big Bazaar Road, Kozhikode, Kerala"),
+    "Coastal Traders": ("29AAGCC5678K1ZZ", "29", "Bunder, Mangaluru, Karnataka"),
+    "Malabar Hardware": ("", "32", "Main Road, Vadakara, Kerala"),
+    "Al Faisal Trading": ("", "32", "Thalassery, Kerala"),
+}
+DEMO_HSN = {"PRD-A": "6907", "PRD-B": "6907", "PRD-C": "6910"}
+
+
+def seed_sales(db: Session, tenant: Tenant) -> None:
+    """Idempotent: grants the sales permissions to the Sales Manager and fills
+    in demo GST details only where they are still blank."""
+
+    role = db.execute(select(Role).where(Role.tenant_id == tenant.id, Role.name == "Sales Manager")).scalar_one()
+    missing = [p for p in SALES_PERMISSIONS if p not in role.permissions]
+    if missing:
+        role.permissions = [*role.permissions, *missing]
+
+    company = db.execute(select(Company).where(Company.tenant_id == tenant.id, Company.code == "company_kozhikode")).scalar_one()
+    if not company.gstin:
+        for key, value in DEMO_COMPANY.items():
+            setattr(company, key, value)
+    for customer in db.execute(select(Customer).where(Customer.company_id == company.id)).scalars():
+        demo = DEMO_CUSTOMERS.get(customer.name)
+        if demo and not customer.state_code:
+            customer.gstin = customer.gstin or demo[0]
+            customer.state_code = customer.gstin[:2] if customer.gstin else demo[1]
+            customer.billing_address = customer.billing_address or demo[2]
+    for item in db.execute(select(Item).where(Item.company_id == company.id)).scalars():
+        if item.gst_rate is None and item.sku in DEMO_HSN:
+            item.gst_rate, item.hsn_code = 18, DEMO_HSN[item.sku]
+
+
 def seed_crm(db: Session, tenant: Tenant) -> None:
     """Idempotent: grants CRM permissions to the seeded Sales Manager and adds
     demo leads/opportunities/activities once. Safe on a DB seeded before CRM existed."""
@@ -92,8 +139,9 @@ def run() -> None:
     try:
         existing = db.execute(select(Tenant).where(Tenant.code == "tenant_018")).scalar_one_or_none()
         if existing is not None:
-            print("Seed data already present (tenant_018) — topping up CRM only.")
+            print("Seed data already present (tenant_018) — topping up CRM and sales only.")
             seed_crm(db, existing)
+            seed_sales(db, existing)
             db.commit()
             return
 
@@ -101,7 +149,13 @@ def run() -> None:
         db.add(tenant)
         db.flush()
 
-        company = Company(tenant_id=tenant.id, name="Kozhikode HQ", code="company_kozhikode", currency="INR")
+        company = Company(
+            tenant_id=tenant.id, name="Kozhikode HQ", code="company_kozhikode", currency="INR",
+            legal_name="Albiruni Trading Group Pvt Ltd", gstin="32AABCA1234F1ZI", state_code="32",
+            address="2nd Floor, Mavoor Road\nKozhikode, Kerala 673004", phone="+91 495 270 0000",
+            email="accounts@albiruni.example", bank_details="Federal Bank, Mavoor Road\nA/c 1234 5678 9012\nIFSC FDRL0001234",
+            invoice_terms="Goods once sold will be taken back only with a credit note.\nInterest at 18% p.a. on overdue bills.",
+        )
         db.add(company)
         db.flush()
 
@@ -114,6 +168,7 @@ def run() -> None:
                 "sales.quotation.approve",
                 "audit.read",
                 *CRM_PERMISSIONS,
+                *SALES_PERMISSIONS,
             ],
         )
         db.add(sales_manager_role)
@@ -132,20 +187,23 @@ def run() -> None:
         db.flush()
 
         customers = {
-            name: Customer(tenant_id=tenant.id, company_id=company.id, name=name, credit_limit=credit_limit)
-            for name, credit_limit in [
-                ("Rahman Traders", 200_000),
-                ("Coastal Traders", 500_000),
-                ("Malabar Hardware", 1_000_000),
-                ("Al Faisal Trading", 300_000),
+            name: Customer(
+                tenant_id=tenant.id, company_id=company.id, name=name, credit_limit=credit_limit, gstin=gstin,
+                state_code=state, billing_address=address,
+            )
+            for name, credit_limit, gstin, state, address in [
+                ("Rahman Traders", 200_000, "32AAFCR4321M1ZG", "32", "Big Bazaar Road, Kozhikode, Kerala"),
+                ("Coastal Traders", 500_000, "29AAGCC5678K1ZZ", "29", "Bunder, Mangaluru, Karnataka"),
+                ("Malabar Hardware", 1_000_000, "", "32", "Main Road, Vadakara, Kerala"),
+                ("Al Faisal Trading", 300_000, "", "32", "Thalassery, Kerala"),
             ]
         }
         db.add_all(customers.values())
 
         items = [
-            Item(tenant_id=tenant.id, company_id=company.id, sku="PRD-A", name="Product A", uom="box", unit_price=420, stock_qty=500),
-            Item(tenant_id=tenant.id, company_id=company.id, sku="PRD-B", name="Product B", uom="box", unit_price=610, stock_qty=300),
-            Item(tenant_id=tenant.id, company_id=company.id, sku="PRD-C", name="Product C", uom="box", unit_price=955, stock_qty=40),
+            Item(tenant_id=tenant.id, company_id=company.id, sku="PRD-A", hsn_code="6907", gst_rate=18, name="Product A", uom="box", unit_price=420, stock_qty=500),
+            Item(tenant_id=tenant.id, company_id=company.id, sku="PRD-B", hsn_code="6907", gst_rate=18, name="Product B", uom="box", unit_price=610, stock_qty=300),
+            Item(tenant_id=tenant.id, company_id=company.id, sku="PRD-C", hsn_code="6910", gst_rate=18, name="Product C", uom="box", unit_price=955, stock_qty=40),
         ]
         db.add_all(items)
         db.flush()
@@ -176,6 +234,7 @@ def run() -> None:
         )
 
         seed_crm(db, tenant)
+        seed_sales(db, tenant)
 
         db.commit()
         print("Seeded tenant_018 / company_kozhikode with user 'ahmed' (password: ahmed123).")

@@ -49,6 +49,29 @@ class IntentTests(unittest.TestCase):
         self.assertTrue(p.mentions("show VIP leads", "vip"))
         self.assertFalse(p.mentions("show vipul's leads", "vip"))
 
+    def test_sales_questions_and_payments(self):
+        cases = {
+            "Who owes us money?": "sales.receivables",
+            "how much does Rahman Traders owe": "sales.receivables",
+            "show overdue invoices": "sales.receivables",
+            "Received ₹25,000 from Rahman Traders by UPI, UTR 998877": "sales.record_payment",
+            "got 1.5 lakh from Coastal Traders cheque no 004512": "sales.record_payment",
+            "Invoice Coastal Traders order": "sales.invoice_order",
+            "make an invoice for Malabar Hardware": "sales.invoice_order",
+            "what's overdue today": "crm.overdue",  # follow-ups, not invoices
+            "Create a quotation for Rahman Traders: 5 boxes Product A": "sales.create_quotation",
+        }
+        for text, intent in cases.items():
+            self.assertEqual(p.classify_intent(text, NOW), intent, text)
+        self.assertEqual(p.parse_amount("received Rs. 1,25,000.50 from X"), 125000.5)
+        self.assertEqual(p.parse_amount("got 12k from X, UTR 99887766"), 12000)
+        self.assertEqual(p.parse_amount("got 2 lakh from X"), 200000)
+        self.assertIsNone(p.parse_amount("received from X, ref 4455"))
+        self.assertEqual(p.payment_mode("paid by gpay"), "UPI")
+        self.assertEqual(p.payment_mode("via NEFT"), "Bank transfer")
+        self.assertIsNone(p.payment_mode("paid"))
+        self.assertEqual(p.payment_reference("cheque no. 004512 from X"), "004512")
+
     def test_team_scope(self):
         self.assertTrue(p.wants_everyone("what's overdue for the team"))
         self.assertFalse(p.wants_everyone("what's overdue today"))

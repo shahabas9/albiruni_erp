@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
+from app.domain import stock_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.sales import Item
 from app.schemas.items import ItemIn, ItemUpdate
@@ -43,9 +44,15 @@ def create_item(db: Session, context: RequestContext, body: ItemIn) -> Item:
         name=body.name,
         uom=body.uom,
         unit_price=body.unit_price,
-        stock_qty=body.stock_qty,
+        stock_qty=0,
+        kind=body.kind,
+        hsn_code=body.hsn_code,
+        gst_rate=body.gst_rate,
     )
     db.add(item)
+    db.flush()
+    if body.stock_qty:
+        stock_service.move(db, context, item, body.stock_qty, "Opening", note="Opening stock")
     db.commit()
     db.refresh(item)
     return item
@@ -56,8 +63,17 @@ def update_item(db: Session, context: RequestContext, item_id: UUID, body: ItemU
     data = body.model_dump(exclude_unset=True)
     if "sku" in data and _sku_taken(db, context, data["sku"], exclude_id=item.id):
         raise ConflictError(f"SKU '{data['sku']}' is already in use.")
+    counted = data.pop("stock_qty", None)
     for field, value in data.items():
         setattr(item, field, value)
+    if counted is not None and float(counted) != float(item.stock_qty):
+        if not context.has_permission("inventory.stock.adjust"):
+            raise ConflictError("Changing stock needs the inventory.stock.adjust permission.")
+        # Stock only changes through a movement, so the ledger always adds up.
+        db.flush()
+        item = stock_service.lock_items(db, context, {item.id})[item.id]
+        stock_service.move(db, context, item, float(counted) - float(item.stock_qty), "Adjustment",
+                           note="Set on the item form", allow_negative=True)
     db.commit()
     db.refresh(item)
     return item

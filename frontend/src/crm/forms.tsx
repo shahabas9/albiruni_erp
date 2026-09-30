@@ -126,9 +126,13 @@ export function QuoteForm({
 }) {
   const [lines, setLines] = useState<DraftLine[]>([{ item_name: items[0]?.name ?? "", qty: "1" }]);
   const [discount, setDiscount] = useState("0");
-  const priceOf = (name: string) => items.find((i) => i.name === name)?.unit_price ?? 0;
-  const subtotal = lines.reduce((s, l) => s + priceOf(l.item_name) * (Number(l.qty) || 0), 0);
-  const total = subtotal * (1 - (Number(discount) || 0) / 100);
+  const itemOf = (name: string) => items.find((i) => i.name === name);
+  const factor = 1 - (Number(discount) || 0) / 100;
+  const total = lines.reduce((s, l) => s + (itemOf(l.item_name)?.unit_price ?? 0) * (Number(l.qty) || 0) * factor, 0);
+  const gst = lines.reduce(
+    (s, l) => s + (itemOf(l.item_name)?.unit_price ?? 0) * (Number(l.qty) || 0) * factor * ((itemOf(l.item_name)?.gst_rate ?? 0) / 100),
+    0,
+  );
 
   const { busy, error, submit } = useSubmit(
     () =>
@@ -199,8 +203,10 @@ export function QuoteForm({
         </label>
       </div>
       <div className="quote-total">
-        <span>Estimated total (server re-prices on save)</span>
-        <b className="num">{inr(total)}</b>
+        <span>
+          Estimated {inr(total)} + GST {inr(gst)} (worked out exactly on save)
+        </span>
+        <b className="num">{inr(Math.round(total + gst))}</b>
       </div>
       <button type="submit" className="primary-btn" disabled={busy} style={{ alignSelf: "flex-end" }}>
         <Icon name="file" size={16} /> {busy ? "Creating…" : `Create quotation for ${opportunity.customer_name}`}

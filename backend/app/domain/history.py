@@ -34,6 +34,10 @@ LABELS = {
     "gstin": "GSTIN",
     "credit_limit": "Credit limit",
     "active": "Active",
+    "billing_address": "Billing address",
+    "shipping_address": "Shipping address",
+    "state_code": "State",
+    "payment_terms_days": "Payment terms (days)",
 }
 
 
@@ -59,7 +63,7 @@ def _show(field: str, value: Any) -> str:
         return f"₹{float(value):,.0f}"
     if field == "probability_pct":
         return f"{value}%"
-    if field == "notes":
+    if field in ("notes", "billing_address", "shipping_address"):
         return "updated"
     return str(_plain(value))
 

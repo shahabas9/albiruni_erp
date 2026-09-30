@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, get_current_context, require_permission
-from app.domain import bulk_service, crm_service, customer_service, history, record_admin
+from app.domain import bulk_service, crm_service, customer_service, history, receivables, record_admin
 from app.api.routes_leads import http_error
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, Contact, Lead, Opportunity
@@ -20,7 +20,9 @@ router = APIRouter(prefix="/api/customers", tags=["customers"])
 def _to_out(c) -> CustomerOut:
     return CustomerOut(
         id=c.id, name=c.name, credit_limit=float(c.credit_limit), active=c.active, gstin=c.gstin,
-        tags=list(c.tags or []), custom=dict(c.custom or {}),
+        tags=list(c.tags or []), custom=dict(c.custom or {}), billing_address=c.billing_address or "",
+        shipping_address=c.shipping_address or "", state_code=c.state_code or "",
+        payment_terms_days=c.payment_terms_days,
     )
 
 
@@ -106,6 +108,15 @@ def customer_overview(
             .where(Quotation.tenant_id == context.tenant_id, Quotation.customer_id == customer.id)
         ).one()
         out["quotations"], out["quoted_value"] = count, float(total)
+    out["account"] = None
+    if context.has_permission("sales.invoice.read"):
+        aged = next(iter(receivables.ageing(db, context, customer_id=customer.id)["rows"]), None)
+        out["account"] = {
+            "owed": aged["invoiced_owed"] if aged else 0.0, "overdue": aged["overdue"] if aged else 0.0,
+            "advance": aged["advance"] if aged else 0.0, "net": aged["net"] if aged else 0.0,
+            "open_invoices": aged["open_invoices"] if aged else 0, "oldest_due": aged["oldest_due"] if aged else None,
+            "credit_limit": float(customer.credit_limit or 0),
+        }
     return out
 
 

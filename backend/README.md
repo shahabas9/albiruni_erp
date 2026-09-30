@@ -93,8 +93,11 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
   `AuditEvent`s. `POST /api/opportunities/{id}/quotations` runs the same
   audited `sales.create_quotation_draft.v1` tool as every other quotation,
   with the opportunity linked via `quotations.opportunity_id`.
-- **More domains.** Only Sales/Quotations and CRM exist. Inventory, Finance etc.
-  follow the same three-file pattern: a model, a domain service, a tool.
+- **More domains.** CRM and the sales cycle (quotation to payment, with a
+  stock ledger) exist. Purchasing, a full accounts ledger, more than one
+  warehouse, e-invoicing / e-way bills, customer refunds and multi-currency
+  are not built; each follows the same pattern: a model, a domain service,
+  and tools for anything that commits the business.
 
 ## Frontend
 
@@ -358,3 +361,213 @@ To run the CRM integration tests, supply an empty disposable PostgreSQL
 CRM_TEST_DB=1 DATABASE_URL=postgresql+psycopg://USER:PASS@localhost/TEST_DB \
   .venv/bin/python -m unittest discover -s tests -v
 ```
+
+## Sales cycle
+
+Quotation → sales order → delivery → tax invoice → payment, with Indian GST
+worked out the same way on every document (`app/domain/tax.py`, pure
+functions with their own unit tests).
+
+### GST
+
+- **Prices exclude GST.** A document's discount comes off each line first,
+  then tax is added per line and rounded to the paisa; the grand total is
+  rounded to the rupee and the difference shown as round-off.
+- **CGST + SGST or IGST** depends on the place of supply: the customer's GST
+  state against the company's. A registered customer's state is the first two
+  digits of their GSTIN and can't be set to anything else; an unregistered
+  customer's state is picked by hand. A customer with no state is treated as
+  a sale within your own state (over the counter), with a warning.
+- **Company & GST** (`GET/PUT /api/sales/company`, needs `sales.settings.write`
+  to change): legal name, GSTIN, state, address, bank details, invoice terms,
+  default payment terms and whether deliveries may take stock below zero.
+  `GET /api/sales/states` lists GST state codes.
+- **Items** carry `kind` (goods move stock, services don't), an HSN/SAC code
+  (4, 6 or 8 digits) and `gst_rate` (0, 0.25, 3, 5, 12, 18, 28 or 40). A
+  quotation for an item with no rate warns and adds no tax for it.
+- Quotations keep `total` as the value after discount and before GST (what the
+  CRM counts as the deal's worth) and add `cgst`, `sgst`, `igst`, `round_off`
+  and `grand_total`. Quotations made before GST existed keep a grand total
+  equal to their old total.
+
+### Quotations and sales orders
+
+- A quotation moves Draft → Sent → Accepted, or to Rejected (with a reason,
+  and it can be reopened). One over the discount limit starts as Pending
+  approval; `POST /api/sales/quotations/{id}/approve` needs
+  `sales.quotation.approve`. Other actions: `/send`, `/accept`, `/reject`,
+  `/reopen`.
+- `POST /api/sales/quotations/{id}/order` turns a quotation into a draft
+  sales order with its lines, prices and discount (the quotation becomes
+  Accepted; a quotation feeds one live order at a time). Orders can also be
+  made directly (`POST /api/sales/orders`) and edited while they're drafts.
+- Order numbers are `SO/26-27/00001`: per tenant, restarting each Indian
+  financial year (April–March). The counter row is locked until commit, so
+  numbers are never shared or skipped.
+- Every order line needs an item with a GST rate — an order becomes an
+  invoice. Prices, tax, names and addresses are copied onto the order, so
+  later edits to an item or customer don't change it.
+- **Confirming** (`/confirm`, audited tool `sales.confirm_order.v1`) locks
+  the order. A discount over 2% or a price below list needs someone with
+  `sales.quotation.approve` (an approved quotation carries its approval
+  over). Going over the customer's credit limit — counting what confirmed
+  orders will still bill — needs `sales.credit.override`. The linked CRM deal
+  is marked Won.
+- **Cancelling** (`/cancel`, audited, needs a reason) works only while
+  nothing has been delivered or invoiced.
+- Permissions: `sales.order.read`, `sales.order.write`,
+  `sales.credit.override`. Roles that could create quotations get the order
+  permissions once, on upgrade.
+
+### Deliveries and stock
+
+- **Stock is a ledger.** Every change is a `stock_movements` row (Opening,
+  Delivery, Delivery cancelled, Adjustment, Return) with the balance after
+  it; an item's `stock_qty` is their running total. `GET /api/items/{id}/stock`
+  lists them. Items that had stock before the ledger get one Opening row on
+  upgrade.
+- **Stock counts** (`POST /api/items/{id}/adjust`, `inventory.stock.adjust`)
+  set stock to a counted quantity with a reason. Changing `stock_qty` on the
+  item form needs the same permission and is recorded the same way; new
+  items' stock is their opening balance.
+- **Delivery notes** (`POST /api/sales/orders/{id}/deliveries`, audited tool
+  `sales.create_delivery.v1`, needs `sales.delivery.write`) deliver some or
+  all of what's left on a confirmed order's goods lines, numbered
+  `DN/26-27/00001`. They take the goods out of stock — refused if that would
+  go below zero, unless Company & GST allows negative stock — and move the
+  order to Partly delivered or Delivered. Services are never delivered, only
+  invoiced.
+- The order row, then the item rows in id order, are locked for the whole
+  delivery, so two deliveries of the last few boxes can't both succeed.
+- **Cancelling a delivery** (`/api/sales/deliveries/{id}/cancel`, audited,
+  needs a reason) puts the stock back and reopens the order's quantities.
+
+### Tax invoices
+
+- `POST /api/sales/orders/{id}/invoices` makes a **draft** from a confirmed
+  order: by default what's been delivered and not yet invoiced (before any
+  delivery, everything not invoiced; services, everything not invoiced), or
+  the quantities you pass. A draft has no number and can be deleted.
+- **Issuing** (`/api/sales/invoices/{id}/issue`, audited tool
+  `sales.issue_invoice.v1`, needs `sales.invoice.write`) numbers it
+  `INV/26-27/00001` (at most 16 characters, restarting each financial
+  year), copies the seller's and buyer's details onto it as they are that
+  day, and locks it. It's refused until Company & GST has a legal name,
+  GSTIN, state and address; for a future date; for a date before the last
+  invoice issued this year (numbers must follow dates); and if another
+  invoice has meanwhile taken the quantities (two drafts can't bill the same
+  goods).
+- Every issued invoice carries `amount_in_words`, an `hsn_summary`, `balance`
+  (total − paid − credited) and a `payment_status`: Unpaid, Partly paid, Paid
+  or Overdue (past due with something owed). `GET /api/sales/invoices` filters
+  by `status` = Draft, Issued, unpaid, overdue or paid.
+- The web app prints invoices at `/print/invoice/{id}` and delivery challans
+  at `/print/delivery/{id}` (the browser's Print / Save as PDF). A4, black on
+  white whatever the theme.
+- Not included: e-invoicing (IRN and signed QR from the GST portal) and
+  e-way bills. Both need a GST Suvidha Provider account; add them as tools
+  that call the provider when a company is above the e-invoicing threshold.
+
+### Credit notes
+
+- `POST /api/sales/invoices/{id}/credit-notes` (audited tool
+  `sales.create_credit_note.v1`, needs `sales.credit_note.write`) takes back
+  part of an issued invoice, numbered `CN/26-27/00001` and issued at once:
+  - **Return**: quantities come back at the invoice line's own net price and
+    GST rate, and optionally go back into stock (a Return stock movement).
+  - **Price correction**: an amount of taxable value off a line, with its GST;
+    no stock moves.
+- A line can't be credited beyond what's left of its quantity or value, and
+  the last credit that clears an invoice matches its total exactly. The
+  invoice's `amount_credited` rises, so the customer owes less; an invoice
+  cleared by credit notes alone shows as Credited.
+- Credit notes are refused after 30 November following the end of the
+  invoice's financial year (the GST time limit), before the invoice date, or
+  against a draft. They print at `/print/credit-note/{id}`, citing the
+  original invoice's number and date.
+- `sales.credit_note.write` is granted on upgrade to roles that can both
+  approve discounts and write invoices.
+
+### Payments received
+
+- `POST /api/sales/payments` (audited tool `sales.record_payment.v1`, needs
+  `sales.payment.write`) records a receipt, numbered `RCT/26-27/00001`, and
+  applies it to the customer's issued invoices — oldest due first unless you
+  pass `allocations` (`[]` keeps it all as an advance). Whatever isn't
+  applied stays on the receipt as an **advance**;
+  `/api/sales/payments/{id}/allocate` applies it to later invoices.
+- Checks: an allocation can't exceed an invoice's balance or belong to
+  another customer; no future dates; cheque, UPI and bank transfers need a
+  reference; **cash of ₹2,00,000 or more is refused** (Income Tax Act,
+  section 269ST).
+- **Voiding** (`/void`, needs a reason — a bounced cheque) takes the receipt's
+  allocations back off its invoices, so they're owed again.
+- Invoices are locked in id order while allocations change, so two receipts
+  can't both pay the last rupee of an invoice.
+- The credit-limit check on confirming an order now counts unpaid invoices
+  (less advances) as well as what confirmed orders will still bill.
+- Receipts print at `/print/receipt/{id}`.
+
+### Receivables
+
+- `GET /api/sales/receivables` (needs `sales.invoice.read`): per customer,
+  what's owed split by days past the due date — not yet due, 1–30, 31–60,
+  61–90, 90+ — plus advances held and the net. Most overdue first; customers
+  owing nothing and holding no advance are left out. `as_of` ages at another
+  date.
+- `GET /api/sales/receivables/{customer_id}/statement?date_from&date_to`
+  (default: this financial year to date): the balance brought forward, then
+  invoices (debit), credit notes and payments (credit) with a running
+  balance. Voided payments are left out. Printable at
+  `/print/statement/{customer_id}?from=&to=`.
+- The customer page's overview adds an `account` block (owed, overdue,
+  advance, net, open invoices, oldest due) for people with
+  `sales.invoice.read`.
+
+### Sales reports
+
+- `GET /api/sales/reports/register?date_from&date_to` — issued invoices and
+  credit notes (as negatives) in the period, with totals.
+- `GET /api/sales/reports/gstr1?date_from&date_to` — GSTR-1 figures by
+  section: **b2b** (registered buyers, per invoice and rate), **b2cl**
+  (unregistered, other state, invoice over ₹1,00,000), **b2cs** (other
+  unregistered sales totalled by place of supply and rate, their credit notes
+  netted in), **cdnr** / **cdnur** (credit notes), **hsn** (split B2B/B2C,
+  with UQC unit codes) and **docs** (number ranges used).
+- `GET /api/sales/reports/{register|b2b|b2cl|b2cs|cdnr|cdnur|hsn|docs}.csv` —
+  the same as CSV in the GST portal's column order, with a BOM for Excel and
+  formula-injection protection. Every download goes through the audited
+  tool `sales.export_report.v1`. Needs `sales.reports.read`.
+- These are figures to file from, not a filing: an accountant should check
+  them (and the GST portal's own validation) before uploading.
+
+### Sales in Ask ERP, alerts and permissions
+
+- Ask ERP understands (still without an LLM):
+  - "Who owes us money?" / "overdue invoices" — receivables, most overdue
+    first (read tool `sales.receivables_summary.v1`).
+  - "How much does Rahman Traders owe?" — that customer's open invoices.
+  - "Received ₹25,000 from Rahman Traders by UPI, UTR 998877" — a payment
+    preview (amount, mode, reference, what it will pay) that records only on
+    Confirm. It asks for the mode, or the UTR / cheque number, when missing.
+    Amounts like "12k", "1.5 lakh" and "Rs. 1,25,000" are understood.
+  - "Invoice Malabar Hardware's order" — drafts an invoice for the one order
+    waiting to be invoiced (issuing stays on the invoice page).
+- **Overdue invoices** raise one notification each (the day after the due
+  date passes with money owed), to whoever issued the invoice and the owner
+  of the deal it came from. It runs in the same background worker as
+  follow-up alerts and is emailed the same way.
+- **Permissions** added by the sales cycle, each granted once on upgrade to
+  roles that already did the step before it:
+
+  | Permission | Allows |
+  |---|---|
+  | `sales.settings.write` | Company & GST details, invoice terms, defaults |
+  | `sales.order.read` / `sales.order.write` | See / make, confirm and cancel orders |
+  | `sales.credit.override` | Confirm an order past the credit limit |
+  | `sales.delivery.write` | Record and cancel deliveries |
+  | `inventory.stock.adjust` | Stock counts (with a reason) |
+  | `sales.invoice.read` / `sales.invoice.write` | See invoices and receivables / draft and issue invoices |
+  | `sales.credit_note.write` | Issue credit notes |
+  | `sales.payment.read` / `sales.payment.write` | See / record, apply and void payments |
+  | `sales.reports.read` | Sales register and GSTR-1 (downloads audited) |

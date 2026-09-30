@@ -1,0 +1,298 @@
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ApiError } from "../api/client";
+import {
+  deleteInvoice,
+  fetchCreditNotes,
+  fetchInvoice,
+  fetchInvoiceTimeline,
+  issueInvoice,
+  type CreditNote,
+  type Invoice,
+} from "../api/sales";
+import { Timeline } from "../crm/Timeline";
+import { ErrorNote } from "../crm/ui";
+import { useAppData } from "../data/AppDataProvider";
+import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format";
+import { CreditNoteModal } from "../sales/CreditNoteModal";
+import { PaymentModal } from "../sales/PaymentModal";
+import { DocTotals } from "../sales/DocTotals";
+
+export function InvoicePage() {
+  const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const { can } = useAppData();
+  const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [changes, setChanges] = useState(0);
+  const [issueDate, setIssueDate] = useState(todayIso());
+  const [notes, setNotes] = useState<CreditNote[]>([]);
+  const [crediting, setCrediting] = useState(false);
+  const [paying, setPaying] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [inv, cn] = await Promise.all([fetchInvoice(id), fetchCreditNotes({ invoice_id: id, limit: 100 })]);
+      setInvoice(inv);
+      setNotes(cn.rows);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't load this invoice.");
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load, changes]);
+
+  if (!invoice) {
+    return (
+      <section>
+        <Link to="/sales/invoices" className="back-link">
+          ← Invoices
+        </Link>
+        <ErrorNote message={error} />
+        {!error && <p className="card-note">Loading…</p>}
+      </section>
+    );
+  }
+
+  const canWrite = can("sales.invoice.write");
+  const draft = invoice.status === "Draft";
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      setChanges((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't do that.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <Link to="/sales/invoices" className="back-link">
+        ← Invoices
+      </Link>
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">Tax invoice</div>
+          <h1 className="page-title mono">{invoice.number ?? "Draft invoice"}</h1>
+          <p className="page-sub">
+            <span className={`badge ${docStatusClass(invoice.payment_status)}`}>{invoice.payment_status}</span>{" "}
+            <Link to={`/customers/${invoice.customer_id}`}>{invoice.customer_name}</Link> · order{" "}
+            <Link to={`/sales/orders/${invoice.order_id}`}>{invoice.order_number}</Link>
+            {!draft && ` · ${dayDate(invoice.invoice_date)} · due ${dayDate(invoice.due_date)}`}
+          </p>
+        </div>
+        <div className="head-actions">
+          {!draft && (
+            <a className="ghost-btn" href={`/print/invoice/${invoice.id}`} target="_blank" rel="noreferrer">
+              Print / PDF
+            </a>
+          )}
+          {!draft && can("sales.payment.write") && invoice.balance > 0 && (
+            <button className="primary-btn" onClick={() => setPaying(true)}>
+              Record payment
+            </button>
+          )}
+          {!draft && can("sales.credit_note.write") && invoice.amount_credited < invoice.grand_total && (
+            <button className="ghost-btn" onClick={() => setCrediting(true)}>
+              Credit note
+            </button>
+          )}
+          {draft && canWrite && (
+            <>
+              <button
+                className="ghost-btn"
+                disabled={busy}
+                onClick={() => window.confirm("Delete this draft invoice?") && act(async () => (await deleteInvoice(invoice.id), navigate(`/sales/orders/${invoice.order_id}`)))}
+              >
+                Delete draft
+              </button>
+              <label className="inline-date">
+                Invoice date
+                <input type="date" value={issueDate} max={todayIso()} onChange={(e) => setIssueDate(e.target.value)} />
+              </label>
+              <button className="primary-btn" disabled={busy} onClick={() => act(() => issueInvoice(invoice.id, issueDate))}>
+                {busy ? "Working…" : "Issue invoice"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <ErrorNote message={error} />
+      {draft && <div className="notice-banner">Draft — not numbered and not owed yet. Issuing numbers it and locks it; mistakes after that need a credit note.</div>}
+
+      <div className="doc-grid">
+        <div className="card">
+          <div className="table-wrap">
+            <table className="doc-lines">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>HSN/SAC</th>
+                  <th className="num">Qty</th>
+                  <th className="num">Rate</th>
+                  <th className="num">GST</th>
+                  <th className="num">Taxable</th>
+                  <th className="num">Tax</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.lines.map((l) => (
+                  <tr key={l.id}>
+                    <td>
+                      {l.description}
+                      {l.credited_qty > 0 && <small className="below-list">{l.credited_qty} credited back</small>}
+                    </td>
+                    <td className="mono">{l.hsn_code || "—"}</td>
+                    <td className="num">
+                      {l.qty} {l.uom}
+                    </td>
+                    <td className="num">{inr(l.unit_price)}</td>
+                    <td className="num">{l.gst_rate}%</td>
+                    <td className="num">{inr(l.taxable_value)}</td>
+                    <td className="num">{inr(l.cgst + l.sgst + l.igst)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <DocTotals doc={invoice} subtotal={invoice.subtotal} discountPct={invoice.discount_pct} />
+          <p className="card-note" style={{ textAlign: "right" }}>
+            {invoice.amount_in_words}
+          </p>
+          {!draft && (
+            <dl className="doc-totals">
+              <div>
+                <dt>Paid</dt>
+                <dd className="num">{inr(invoice.amount_paid)}</dd>
+              </div>
+              {invoice.amount_credited > 0 && (
+                <div>
+                  <dt>Credited</dt>
+                  <dd className="num">{inr(invoice.amount_credited)}</dd>
+                </div>
+              )}
+              <div className="grand">
+                <dt>Balance due</dt>
+                <dd className="num">{inr(invoice.balance)}</dd>
+              </div>
+            </dl>
+          )}
+        </div>
+        <div>
+          <div className="card doc-facts">
+            <div>
+              <span>Bill to</span>
+              <p>
+                {invoice.buyer_name}
+                {invoice.buyer_gstin ? <small className="mono">GSTIN {invoice.buyer_gstin}</small> : <small>Unregistered</small>}
+                {invoice.billing_address && <small>{invoice.billing_address}</small>}
+              </p>
+            </div>
+            <div>
+              <span>Place of supply</span>
+              <p>
+                {invoice.place_of_supply ? `${invoice.place_of_supply} · ${invoice.place_of_supply_name}` : "—"}
+              </p>
+            </div>
+            {invoice.customer_po && (
+              <div>
+                <span>Customer PO</span>
+                <p>{invoice.customer_po}</p>
+              </div>
+            )}
+            {invoice.issued_at && (
+              <div>
+                <span>Issued</span>
+                <p>
+                  {dateTime(invoice.issued_at)}
+                  {invoice.issued_by_name && ` by ${invoice.issued_by_name}`}
+                </p>
+              </div>
+            )}
+          </div>
+          {invoice.payments.length > 0 && (
+            <div className="card">
+              <div className="card-head">
+                <span className="card-title">Payments</span>
+              </div>
+              <div className="mini-docs">
+                {invoice.payments.map((p) => (
+                  <div className="row" key={p.receipt_id}>
+                    <div>
+                      <b className="mono">{p.number}</b> · {dayDate(p.receipt_date)}
+                      <small>
+                        {p.mode}
+                        {p.reference && ` ${p.reference}`}
+                      </small>
+                    </div>
+                    <span className="num">{inr(p.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {notes.length > 0 && (
+            <div className="card">
+              <div className="card-head">
+                <span className="card-title">Credit notes</span>
+              </div>
+              <div className="mini-docs">
+                {notes.map((n) => (
+                  <div className="row" key={n.id}>
+                    <div>
+                      <b className="mono">{n.number}</b> · {dayDate(n.note_date)} · {inr(n.grand_total)}
+                      <small>
+                        {n.kind}: {n.reason}
+                        {n.restocked && " · back in stock"}
+                      </small>
+                    </div>
+                    <a className="ghost-btn sm" href={`/print/credit-note/${n.id}`} target="_blank" rel="noreferrer">
+                      Print
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="card">
+            <div className="card-head">
+              <span className="card-title">History</span>
+            </div>
+            <Timeline load={() => fetchInvoiceTimeline(invoice.id)} version={changes} />
+          </div>
+        </div>
+      </div>
+      {paying && (
+        <PaymentModal
+          customer={{ id: invoice.customer_id, name: invoice.customer_name }}
+          invoice={invoice}
+          onClose={() => setPaying(false)}
+          onDone={() => {
+            setPaying(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
+      {crediting && (
+        <CreditNoteModal
+          invoice={invoice}
+          onClose={() => setCrediting(false)}
+          onDone={() => {
+            setCrediting(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
+    </section>
+  );
+}

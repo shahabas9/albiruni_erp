@@ -2,7 +2,7 @@
 
 notify() adds a row in the caller's transaction, so it's kept or dropped
 with the change it's about. A background worker (run_worker_cycle, started in
-main.py) raises "follow-up overdue" alerts and emails pending notifications
+main.py) raises "follow-up overdue" and "invoice overdue" alerts and emails pending notifications
 to people who gave an address — both claim rows with SKIP LOCKED, so several
 API processes can run it at once without doubling up.
 """
@@ -21,6 +21,7 @@ from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.domain import crm_service
 from app.models.crm import Activity, Lead, Notification, Opportunity
+from app.models.documents import Invoice, SalesOrder
 from app.models.identity import Role, User
 
 log = logging.getLogger(__name__)
@@ -115,6 +116,36 @@ def raise_overdue_alerts(db: Session) -> int:
     return len(due)
 
 
+def raise_overdue_invoice_alerts(db: Session) -> int:
+    """One alert per invoice the day after its due date passes with money still owed: to whoever
+    issued it and to the owner of the deal it came from."""
+
+    today = crm_service.now_utc().date()
+    left = Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited
+    due = db.execute(
+        select(Invoice)
+        .where(Invoice.status == "Issued", Invoice.due_date < today, left > 0, Invoice.overdue_notified_at.is_(None))
+        .order_by(Invoice.due_date)
+        .limit(500)
+        .with_for_update(skip_locked=True)
+    ).scalars().all()
+    now = crm_service.now_utc()
+    for inv in due:
+        inv.overdue_notified_at = now
+        people = {inv.issued_by}
+        order = db.get(SalesOrder, inv.order_id)
+        if order is not None and order.opportunity_id:
+            people.add(db.get(Opportunity, order.opportunity_id).owner_user_id)
+        context = RequestContext(user=None, tenant_id=inv.tenant_id, company_id=inv.company_id, permissions=[],
+                                 locale="en-IN")
+        owed = float(inv.grand_total) - float(inv.amount_paid) - float(inv.amount_credited)
+        for user_id in people - {None}:
+            notify(db, context, user_id, "invoice_overdue", f"Overdue: {inv.number} ({inv.buyer_name})",
+                   f"₹{owed:,.2f} was due on {inv.due_date:%d %b %Y}.", f"/sales/invoices/{inv.id}")
+    db.commit()
+    return len(due)
+
+
 def smtp_configured() -> bool:
     return bool(settings.smtp_host and settings.smtp_from)
 
@@ -168,6 +199,7 @@ def run_worker_cycle() -> None:
     with SessionLocal() as db:
         try:
             raise_overdue_alerts(db)
+            raise_overdue_invoice_alerts(db)
             send_pending_emails(db)
         except Exception:  # noqa: BLE001 — log and try again next cycle
             db.rollback()

@@ -55,6 +55,7 @@ const SUGGESTIONS: { key: string; icon: IconName; prompt: string }[] = [
   { key: "panel.chip.stale", icon: "target", prompt: "Which deals are going stale?" },
   { key: "panel.chip.pipeline", icon: "chart", prompt: "How's the pipeline?" },
   { key: "panel.chip.target", icon: "trend", prompt: "How am I doing against my target?" },
+  { key: "panel.chip.owed", icon: "wallet", prompt: "Who owes us money?" },
 ];
 
 export function AskErpPanel() {
@@ -481,6 +482,9 @@ function MessageView({
             <PreviewLine k="Discount requested" v={`${preview.discount_pct}%`} />
             <PreviewLine k="Subtotal" v={`₹${preview.subtotal.toLocaleString("en-IN")}`} />
             <PreviewLine k="Total after discount" v={`₹${preview.total.toLocaleString("en-IN")}`} />
+            {preview.igst > 0 && <PreviewLine k="IGST" v={`₹${preview.igst.toLocaleString("en-IN")}`} />}
+            {preview.cgst > 0 && <PreviewLine k="CGST + SGST" v={`₹${(preview.cgst + preview.sgst).toLocaleString("en-IN")}`} />}
+            <PreviewLine k="Total with GST" v={`₹${preview.grand_total.toLocaleString("en-IN")}`} />
             {preview.warnings.map((w, idx) => (
               <div className="preview-flag" key={idx}>
                 {w}

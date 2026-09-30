@@ -108,7 +108,9 @@ def _settings_row(db: Session, context: RequestContext, *, lock: bool = False) -
     stmt = select(CrmSettings).where(
         CrmSettings.company_id == context.company_id, CrmSettings.tenant_id == context.tenant_id
     )
-    return db.execute(stmt.with_for_update() if lock else stmt).scalar_one_or_none()
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return db.execute(stmt).scalar_one_or_none()
 
 
 def _rotation_pool(db: Session, context: RequestContext, user_ids: list[str]) -> list[User]:

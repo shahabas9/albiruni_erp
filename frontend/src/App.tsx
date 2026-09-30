@@ -15,6 +15,19 @@ import { Activities } from "./pages/Activities";
 import { CrmSettings } from "./pages/CrmSettings";
 import { Targets } from "./pages/Targets";
 import { CustomerPage } from "./pages/CustomerPage";
+import { SalesSettings } from "./pages/SalesSettings";
+import { Orders } from "./pages/Orders";
+import { OrderEditor } from "./pages/OrderEditor";
+import { OrderPage } from "./pages/OrderPage";
+import { Deliveries } from "./pages/Deliveries";
+import { Invoices } from "./pages/Invoices";
+import { InvoicePage } from "./pages/InvoicePage";
+import { PrintDocument } from "./pages/PrintDocument";
+import { CreditNotes } from "./pages/CreditNotes";
+import { Payments } from "./pages/Payments";
+import { Receivables } from "./pages/Receivables";
+import { StatementPage } from "./pages/StatementPage";
+import { SalesReports } from "./pages/SalesReports";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -54,6 +67,19 @@ export default function App() {
     return <Login />;
   }
 
+  // Printable documents open in their own tab, without the app around them.
+  if (pathname.startsWith("/print/")) {
+    return (
+      <Routes>
+        <Route path="/print/invoice/:id" element={<PrintDocument kind="invoice" />} />
+        <Route path="/print/delivery/:id" element={<PrintDocument kind="delivery" />} />
+        <Route path="/print/credit-note/:id" element={<PrintDocument kind="credit-note" />} />
+        <Route path="/print/receipt/:id" element={<PrintDocument kind="receipt" />} />
+        <Route path="/print/statement/:id" element={<PrintDocument kind="statement" />} />
+      </Routes>
+    );
+  }
+
   return (
     <div className={`app${isOpen ? " copilot-docked" : ""}`}>
       <Sidebar open={navOpen} onNavigate={() => setNavOpen(false)} />
@@ -66,6 +92,19 @@ export default function App() {
             <Route path="/sales" element={<div className="management-page"><Sales /></div>} />
             <Route path="/customers" element={<div className="management-page"><Customers /></div>} />
             <Route path="/customers/:id" element={<div className="management-page"><CustomerPage /></div>} />
+            <Route path="/sales/orders" element={<div className="management-page"><Orders /></div>} />
+            <Route path="/sales/orders/new" element={<div className="management-page"><OrderEditor /></div>} />
+            <Route path="/sales/orders/:id" element={<div className="management-page"><OrderPage /></div>} />
+            <Route path="/sales/orders/:id/edit" element={<div className="management-page"><OrderEditor /></div>} />
+            <Route path="/sales/deliveries" element={<div className="management-page"><Deliveries /></div>} />
+            <Route path="/sales/invoices" element={<div className="management-page"><Invoices /></div>} />
+            <Route path="/sales/invoices/:id" element={<div className="management-page"><InvoicePage /></div>} />
+            <Route path="/sales/credit-notes" element={<div className="management-page"><CreditNotes /></div>} />
+            <Route path="/sales/payments" element={<div className="management-page"><Payments /></div>} />
+            <Route path="/sales/receivables" element={<div className="management-page"><Receivables /></div>} />
+            <Route path="/sales/receivables/:customerId" element={<div className="management-page"><StatementPage /></div>} />
+            <Route path="/sales/reports" element={<div className="management-page"><SalesReports /></div>} />
+            <Route path="/sales/settings" element={<div className="management-page"><SalesSettings /></div>} />
             <Route path="/items" element={<div className="management-page"><Items /></div>} />
             <Route path="/leads" element={<div className="management-page"><Leads /></div>} />
             <Route path="/contacts" element={<div className="management-page"><Contacts /></div>} />

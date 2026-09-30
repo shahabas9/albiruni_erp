@@ -44,20 +44,20 @@ export interface Page<T> {
 
 export type Params = Record<string, string | number | boolean | null | undefined>;
 
-function query(params: Params): string {
+export function query(params: Params): string {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
   const s = q.toString();
   return s ? `?${s}` : "";
 }
 
-async function requestPage<T>(path: string, params: Params): Promise<Page<T>> {
+export async function requestPage<T>(path: string, params: Params): Promise<Page<T>> {
   const res = await send(`${path}${query(params)}`);
   const rows = (await res.json()) as T[];
   return { rows, total: Number(res.headers.get("X-Total-Count") ?? rows.length) };
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await send(path, options);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -152,9 +152,25 @@ export interface QuotationLine {
   qty: number;
   unit_price: number;
   line_total: number;
+  hsn_code?: string;
+  gst_rate?: number;
+  taxable_value?: number;
+  tax_amount?: number;
 }
 
-export interface Quotation {
+/** GST figures every sales document carries. */
+export interface TaxTotals {
+  /** After discount, before GST. */
+  total: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  round_off: number;
+  /** What the customer pays. */
+  grand_total: number;
+}
+
+export interface Quotation extends TaxTotals {
   id: string;
   number: string;
   customer_name: string;
@@ -162,8 +178,13 @@ export interface Quotation {
   opportunity_title: string | null;
   subtotal: number;
   discount_pct: number;
-  total: number;
-  status: "Draft" | "Pending approval" | "Sent";
+  place_of_supply: string;
+  status: "Draft" | "Pending approval" | "Sent" | "Accepted" | "Rejected";
+  status_note: string;
+  customer_id: string | null;
+  /** The order this quotation became (not cancelled), if any. */
+  order_id: string | null;
+  order_number: string | null;
   created_at: string;
   lines: QuotationLine[];
 }
@@ -193,7 +214,7 @@ export interface CreateQuotationResult {
 // --- Ask ERP ----------------------------------------------------------------
 
 export type AskResponse =
-  | { type: "preview"; preview_token: string; correlation_id: string; tool_name: string; risk_level: string; customer: string; lines: QuotationLine[]; subtotal: number; discount_pct: number; discount_amount: number; total: number; requires_approval: boolean; warnings: string[] }
+  | { type: "preview"; preview_token: string; correlation_id: string; tool_name: string; risk_level: string; customer: string; lines: QuotationLine[]; subtotal: number; discount_pct: number; discount_amount: number; total: number; cgst: number; sgst: number; igst: number; round_off: number; grand_total: number; requires_approval: boolean; warnings: string[] }
   | ActionPreview
   | AskAnswer
   | { type: "message" | "clarify" | "denied" | "error"; message: string; options?: string[] };
@@ -277,6 +298,12 @@ export interface Customer {
   tags: string[];
   /** Custom field values by field key. */
   custom: CustomValues;
+  billing_address: string;
+  shipping_address: string;
+  /** GST state code; follows the GSTIN when there is one. */
+  state_code: string;
+  /** null: the company's default terms. */
+  payment_terms_days: number | null;
 }
 
 export interface CustomerInput {
@@ -288,6 +315,10 @@ export interface CustomerInput {
   tags?: string[];
   /** On update only the keys sent change; null or "" clears one. */
   custom?: CustomValues;
+  billing_address?: string;
+  shipping_address?: string;
+  state_code?: string;
+  payment_terms_days?: number | null;
 }
 
 export interface CustomerQuery {
@@ -325,6 +356,10 @@ export interface Item {
   uom: string;
   unit_price: number;
   stock_qty: number;
+  kind: "goods" | "service";
+  hsn_code: string;
+  /** null until set; invoices refuse items without a rate. */
+  gst_rate: number | null;
 }
 
 export type ItemInput = Omit<Item, "id">;
@@ -404,6 +439,18 @@ export const KNOWN_PERMISSIONS = [
   "sales.quotation.approve",
   "sales.customer.read",
   "sales.customer.write",
+  "sales.settings.write",
+  "sales.order.read",
+  "sales.order.write",
+  "sales.credit.override",
+  "sales.delivery.write",
+  "sales.invoice.read",
+  "sales.invoice.write",
+  "sales.credit_note.write",
+  "sales.payment.read",
+  "sales.payment.write",
+  "sales.reports.read",
+  "inventory.stock.adjust",
   "inventory.item.read",
   "inventory.item.write",
   "crm.lead.read",
@@ -484,6 +531,10 @@ export interface LeadInput {
   tags?: string[];
   /** On update only the keys sent change; null or "" clears one. */
   custom?: CustomValues;
+  billing_address?: string;
+  shipping_address?: string;
+  state_code?: string;
+  payment_terms_days?: number | null;
 }
 
 /** owner: "me", "unassigned" or a user id. status: a status or "open". */
@@ -665,6 +716,10 @@ export interface OpportunityInput {
   tags?: string[];
   /** On update only the keys sent change; null or "" clears one. */
   custom?: CustomValues;
+  billing_address?: string;
+  shipping_address?: string;
+  state_code?: string;
+  payment_terms_days?: number | null;
 }
 
 /** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */
@@ -1117,6 +1172,17 @@ export interface CustomerOverview {
   /** null without sales.quotation.read */
   quotations: number | null;
   quoted_value: number | null;
+  /** null without sales.invoice.read */
+  account: {
+    owed: number;
+    overdue: number;
+    advance: number;
+    /** owed − advance; negative when the customer is in credit. */
+    net: number;
+    open_invoices: number;
+    oldest_due: string | null;
+    credit_limit: number;
+  } | null;
 }
 
 export function fetchCustomerOverview(id: string): Promise<CustomerOverview> {
@@ -1132,9 +1198,14 @@ export function fetchCustomerTimeline(id: string): Promise<TimelineEntry[]> {
 export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities";
 
 /** Downloads a list as CSV with the given filters (same as the list's query parameters). */
-export async function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
-  const res = await send(`/api/exports/${kind}.csv${query(filters)}`);
-  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? `${kind}.csv`;
+export function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
+  return downloadFile(`/api/exports/${kind}.csv${query(filters)}`, `${kind}.csv`);
+}
+
+/** Saves a file the API sends as an attachment; returns its X-Row-Count. */
+export async function downloadFile(path: string, fallbackName: string): Promise<number> {
+  const res = await send(path);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await res.blob());
   const a = Object.assign(document.createElement("a"), { href: url, download: name });
   document.body.appendChild(a);

@@ -1,4 +1,5 @@
 @import "./management.css";
+@import "./sales.css";
 
 * {
   box-sizing: border-box;
@@ -2706,6 +2707,8 @@ td .sub {
 .field .search-box {
   max-width: none;
   border-radius: 10px;
+  /* In a column the 220px basis would be a height. */
+  flex: none;
 }
 
 .field .search-box input {

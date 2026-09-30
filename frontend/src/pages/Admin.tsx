@@ -16,6 +16,18 @@ import { useAuth } from "../auth/AuthProvider";
 const PERMISSION_HINTS: Record<string, string> = {
   "crm.records.all": "See every lead, deal and follow-up. Without it, people see only the ones they own.",
   "crm.export": "Download CRM lists as CSV (every export is recorded in the audit trail).",
+  "sales.order.read": "See sales orders.",
+  "sales.order.write": "Create, edit, confirm and cancel sales orders. Big discounts still need sales.quotation.approve to confirm.",
+  "sales.invoice.read": "See tax invoices.",
+  "sales.invoice.write": "Make draft invoices from orders and issue them (issued invoices are numbered and locked).",
+  "sales.payment.read": "See payments received.",
+  "sales.payment.write": "Record payments, apply advances and void payments (e.g. bounced cheques).",
+  "sales.reports.read": "See the sales register and GSTR-1 figures and download them as CSV (downloads are audited).",
+  "sales.credit_note.write": "Issue credit notes against invoices (returns and price corrections). Given to roles that approve discounts.",
+  "sales.delivery.write": "Record and cancel deliveries (takes goods out of stock).",
+  "inventory.stock.adjust": "Correct stock after a count, with a reason. Every change is kept in the item's stock ledger.",
+  "sales.credit.override": "Confirm an order that takes a customer past their credit limit.",
+  "sales.settings.write": "Edit the company's GST details, invoice terms and sales defaults (Sales → Company & GST).",
   "crm.settings.write": "Change CRM settings: lead rotation, stale limits, custom fields, targets, web form.",
 };
 

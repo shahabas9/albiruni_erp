@@ -13,7 +13,10 @@ router = APIRouter(prefix="/api/items", tags=["items"])
 
 
 def _to_out(i) -> ItemOut:
-    return ItemOut(id=i.id, sku=i.sku, name=i.name, uom=i.uom, unit_price=float(i.unit_price), stock_qty=float(i.stock_qty))
+    return ItemOut(
+        id=i.id, sku=i.sku, name=i.name, uom=i.uom, unit_price=float(i.unit_price), stock_qty=float(i.stock_qty),
+        kind=i.kind, hsn_code=i.hsn_code or "", gst_rate=None if i.gst_rate is None else float(i.gst_rate),
+    )
 
 
 @router.get("", response_model=list[ItemOut])

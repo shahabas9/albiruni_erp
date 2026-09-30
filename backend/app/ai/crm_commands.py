@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.ai import crm_parser, crm_resolver
 from app.core.deps import RequestContext
+from app.domain import order_service, payment_service, receivables
 from app.models.crm import OPEN_STAGES, Opportunity
+from app.models.sales import Customer
 from app.toolgateway.registry import get_tool
 
 
@@ -51,6 +53,9 @@ EXAMPLES = [
     "Which deals are going stale?",
     "How am I doing against my target?",
     "Show VIP leads",
+    "Who owes us money?",
+    "Received ₹25,000 from Rahman Traders by UPI, UTR 998877",
+    "Invoice Coastal Traders' order",
 ]
 
 
@@ -122,6 +127,10 @@ def plan(db: Session, context: RequestContext, text: str, intent: str, timezone:
         kind = crm_parser.record_kind(text) or "lead"
         tool_name = {"lead": "crm.find_leads.v1", "opportunity": "crm.find_deals.v1", "customer": "crm.find_customers.v1"}[kind]
         return ReadPlan(tool_name, {"kind": kind, "text": text})
+
+    # --- Sales ---------------------------------------------------------------
+    if intent.startswith("sales."):
+        return _sales_plan(db, context, text, intent)
 
     # --- Writes ------------------------------------------------------------
     if intent == "crm.move_stage":
@@ -223,3 +232,82 @@ def tool_permission_reply(context: RequestContext, tool_name: str) -> Reply | No
     if tool is not None and not context.has_permission(tool.permission):
         return Reply("denied", f"You don't have permission ({tool.permission}) for that.")
     return None
+
+
+def _customer(db: Session, context: RequestContext, text: str, verb: str) -> tuple[Any, Reply | None]:
+    """The one customer the text names, or a question back."""
+
+    best = crm_resolver.top(crm_resolver.find(db, context, text, kinds=("customer",)))
+    ids = {m.customer_id for m in best}
+    if not ids:
+        return None, Reply("clarify", f"Which customer {verb}? I couldn't find one with that name.")
+    if len(ids) > 1:
+        labels = sorted({m.label for m in best})[:4]
+        return None, Reply("clarify", "Which customer do you mean?", options=[f"{text} ({label})" for label in labels])
+    return db.get(Customer, next(iter(ids))), None
+
+
+def _sales_plan(db: Session, context: RequestContext, text: str, intent: str) -> ActionPlan | ReadPlan | Reply:
+    if intent == "sales.receivables":
+        names_someone = bool(crm_resolver.top(crm_resolver.find(db, context, text, kinds=("customer",))))
+        if not names_someone:
+            return ReadPlan("sales.receivables_summary.v1", {})
+        customer, reply = _customer(db, context, text, "do you mean")
+        if reply:
+            return reply
+        return ReadPlan("sales.receivables_summary.v1", {"customer_id": str(customer.id), "customer_name": customer.name})
+
+    if intent == "sales.invoice_order":
+        customer, reply = _customer(db, context, text, "should I invoice")
+        if reply:
+            return reply
+        orders, _ = order_service.list_orders(db, context, customer_id=customer.id, to_invoice=True, limit=10)
+        if not orders:
+            return Reply("message", f"{customer.name} has no confirmed order waiting to be invoiced.")
+        if len(orders) > 1:
+            return Reply("clarify", f"{customer.name} has {len(orders)} orders to invoice — open one from Sales → Orders.",
+                         options=[])
+        order = orders[0]
+        lines = [{"label": "Order", "value": f"{order.number} ({order.status.lower()})"},
+                 {"label": "Customer", "value": customer.name}]
+        for l in order.lines:
+            if float(l.invoiced_qty) < float(l.qty):
+                lines.append({"label": l.description,
+                              "value": f"{float(l.delivered_qty):g} delivered, {float(l.invoiced_qty):g} invoiced of {float(l.qty):g}"})
+        return ActionPlan("sales.draft_invoice.v1", {"order_id": str(order.id)}, "Draft an invoice", lines,
+                          ["It's saved as a draft: check it, then issue it from the invoice page."])
+
+    if intent == "sales.record_payment":
+        customer, reply = _customer(db, context, text, "paid")
+        if reply:
+            return reply
+        amount = crm_parser.parse_amount(text)
+        mode = crm_parser.payment_mode(text)
+        reference = crm_parser.payment_reference(text)
+        if mode is None:
+            return Reply("clarify", "How was it paid?",
+                         options=[f"{text} by {m}" for m in ("UPI", "cash", "bank transfer", "cheque")])
+        if mode in ("UPI", "Bank transfer", "Cheque") and not reference:
+            what = "cheque number" if mode == "Cheque" else "UTR / transaction reference"
+            return Reply("clarify", f"What's the {what}? Add it like “{'cheque no' if mode == 'Cheque' else 'UTR'} 123456”.")
+        owed = receivables.invoices_owed(db, context, customer.id)
+        open_invoices = payment_service.open_invoices(db, context, customer.id)
+        applies = ", ".join(i.number for i in open_invoices[:4]) or "nothing yet — kept as an advance"
+        warnings = []
+        if amount > float(owed) > 0:
+            warnings.append(f"That's more than the ₹{float(owed):,.2f} owed — the rest is kept as an advance.")
+        if mode == "Cash" and amount >= 200000:
+            warnings.append("Cash of ₹2,00,000 or more isn't allowed (section 269ST) — this will be refused.")
+        return ActionPlan(
+            "sales.record_payment.v1",
+            {"customer_id": str(customer.id), "amount": amount, "mode": mode, "reference": reference,
+             "receipt_date": None, "notes": text[:500], "allocations": None},
+            "Record payment",
+            [{"label": "From", "value": customer.name}, {"label": "Amount", "value": f"₹{amount:,.2f}"},
+             {"label": "Mode", "value": mode + (f" · {reference}" if reference else "")},
+             {"label": "Owed now", "value": f"₹{float(owed):,.2f}"},
+             {"label": "Applies to", "value": f"Oldest first: {applies}"}],
+            warnings,
+        )
+
+    return Reply("message", "I can help with quotations, sales and your CRM. Try: " + " · ".join(f"“{e}”" for e in EXAMPLES))

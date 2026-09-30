@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
 from app.domain import crm_service, duplicates, fields, history
-from app.domain.errors import NotFoundError
+from app.domain.errors import ConflictError, NotFoundError
 from app.models.sales import Customer
 from app.schemas.customers import CustomerIn, CustomerUpdate
 
@@ -39,6 +39,16 @@ def get_customer(db: Session, context: RequestContext, customer_id: UUID) -> Cus
     return customer
 
 
+def state_for(gstin: str, state_code: str) -> str:
+    """A registered customer's state is the one in their GSTIN."""
+
+    if gstin:
+        if state_code and state_code != gstin[:2]:
+            raise ConflictError(f"The GSTIN is registered in state {gstin[:2]}, not {state_code}.")
+        return gstin[:2]
+    return state_code
+
+
 def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> Customer:
     if not body.allow_duplicate:
         matches = duplicates.customer_matches(db, context, name=body.name, gstin=body.gstin)
@@ -55,6 +65,10 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
         active=True,
         tags=fields.normalize_tags(body.tags),
         custom=fields.clean_custom(db, context, "customer", body.custom),
+        billing_address=body.billing_address.strip(),
+        shipping_address=body.shipping_address.strip(),
+        state_code=state_for(body.gstin, body.state_code),
+        payment_terms_days=body.payment_terms_days,
     )
     db.add(customer)
     db.flush()
@@ -67,9 +81,14 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
 def update_customer(db: Session, context: RequestContext, customer_id: UUID, body: CustomerUpdate) -> Customer:
     customer = get_customer(db, context, customer_id)
     data = body.model_dump(exclude_unset=True)
-    for key in ("tags", "custom"):
+    for key in ("tags", "custom", "billing_address", "shipping_address", "state_code"):
         if key in data and data[key] is None:
             data.pop(key)
+    if "gstin" in data or "state_code" in data:
+        gstin = data.get("gstin", customer.gstin) or ""
+        # A new GSTIN brings its own state; otherwise keep (or set) the one given.
+        wanted = data.get("state_code", "" if "gstin" in data and gstin else customer.state_code) or ""
+        data["state_code"] = state_for(gstin, wanted)
     changes = fields.apply_tags_and_custom(db, context, "customer", customer, data)
     changes = {**history.diff(customer, data), **changes}
     if changes:

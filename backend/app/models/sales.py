@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,12 @@ class Customer(Base):
     tags: Mapped[list[str]] = mapped_column(ARRAY(String(40)), default=list)
     # Values of the company's custom fields for this record type, by field key.
     custom: Mapped[dict] = mapped_column(JSONB, default=dict)
+    billing_address: Mapped[str] = mapped_column(Text, default="")
+    shipping_address: Mapped[str] = mapped_column(Text, default="")
+    # GST state code (place of supply). Taken from the GSTIN when there is one.
+    state_code: Mapped[str] = mapped_column(String(2), default="")
+    # Days to pay; None falls back to the company's default terms.
+    payment_terms_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Item(Base):
@@ -36,6 +42,11 @@ class Item(Base):
     uom: Mapped[str] = mapped_column(String(20), default="box")
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
     stock_qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # "goods" move stock when delivered; "service" never does.
+    kind: Mapped[str] = mapped_column(String(10), default="goods")
+    hsn_code: Mapped[str] = mapped_column(String(8), default="")
+    # None until someone sets it; invoices refuse items without a rate.
+    gst_rate: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
 
 
 class Quotation(Base):
@@ -54,10 +65,22 @@ class Quotation(Base):
     )
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2))
     discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    # Value after discount, before GST (what the CRM counts as the deal's worth).
     total: Mapped[float] = mapped_column(Numeric(14, 2))
+    place_of_supply: Mapped[str] = mapped_column(String(2), default="")
+    cgst: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    sgst: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    igst: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
+    # What the customer pays: total + GST, rounded to the rupee.
+    grand_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # Draft, Pending approval, Sent, Accepted, Rejected.
     status: Mapped[str] = mapped_column(String(24), default="Draft")
+    # Why it was rejected, or who approved the discount.
+    status_note: Mapped[str] = mapped_column(String(200), default="")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
     lines: Mapped[list["QuotationLine"]] = relationship(back_populates="quotation", cascade="all, delete-orphan")
     customer: Mapped["Customer"] = relationship()
@@ -73,6 +96,10 @@ class QuotationLine(Base):
     qty: Mapped[float] = mapped_column(Numeric(14, 2))
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
     line_total: Mapped[float] = mapped_column(Numeric(14, 2))
+    hsn_code: Mapped[str] = mapped_column(String(8), default="")
+    gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    taxable_value: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    tax_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
 
     quotation: Mapped["Quotation"] = relationship(back_populates="lines")
     item: Mapped["Item"] = relationship()
