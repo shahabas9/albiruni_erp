@@ -117,6 +117,12 @@ gateway (`toolgateway/tools_crm.py`), so it's permission-checked and audited.
 | "log a call with Rahman — no answer", "met Al Faisal about Q4" | `crm.log_activity.v1` | L2 Prepare |
 | "remind me to call Nisha tomorrow at 3pm", "follow up with Malabar on Friday" | `crm.schedule_followup.v1` | L2 Prepare |
 | "move Al Faisal to negotiation", "mark Malabar lost — price too high" | `crm.move_opportunity_stage.v1` | L2 Prepare |
+| "how am I doing against target", "is the team on track" | `crm.target_progress.v1` | L1 Read |
+| "show VIP leads in Kannur", "deals tagged export", "customers tagged distributor", "any deals in negotiation" | `crm.find_leads.v1` / `crm.find_deals.v1` / `crm.find_customers.v1` | L1 Read |
+
+"Show …" questions match the tags in use, the choices of dropdown custom
+fields (e.g. City = Kannur), and stage or status words; "my" limits to your
+own records. Answers follow record visibility like every other read.
 
 Names are resolved against the company's own leads, customers and deals
 (`app/ai/crm_resolver.py`) by distinctive words, not a sentence template;

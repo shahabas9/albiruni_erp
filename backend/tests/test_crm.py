@@ -960,6 +960,42 @@ class CrmTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             routes_leads.bulk_lead(crm.BulkIn(action="delete"), self.context, self.db)  # neither ids nor filters
 
+    # --- Ask ERP: targets and finding records --------------------------------------
+
+    def test_ask_answers_targets_and_finds_by_tag_and_field(self):
+        month = f"{crm_service.now_utc():%Y-%m}"
+        routes_crm.put_targets(crm.TargetsIn(month=month, targets=[
+            crm.TargetIn(user_id=self.context.user.id, amount=100000)]), self.context, self.db)
+        won = self.deal(name="Won for target", value=40000, owner_user_id=self.context.user.id)
+        opportunity_service.update_opportunity(self.db, self.context, won.id, crm.OpportunityUpdate(stage="Won"))
+
+        answer = self.ask("how am I doing against my target?")
+        self.assertEqual(answer["type"], "answer")
+        self.assertIn("You've won ₹40,000 of your ₹100,000 target", answer["message"])
+        self.assertIn("(40%)", answer["message"])
+        team = self.ask("is the team on track?")
+        self.assertIn("The team has won", team["message"])
+
+        city = self.field("lead", "City", "select", ["Kannur", "Kozhikode"])
+        self.lead(name="Vip Kannur", company_name="VK Co", tags=["vip"], custom={city.key: "Kannur"})
+        self.lead(name="Vip Kozhikode", company_name="VZ Co", tags=["vip"], custom={city.key: "Kozhikode"})
+        self.lead(name="Plain Kannur", company_name="PK Co", custom={city.key: "Kannur"})
+        found = self.ask("show vip leads in Kannur")
+        self.assertEqual(found["type"], "answer")
+        self.assertEqual([i["title"] for i in found["items"]], ["VK Co"])
+        self.assertEqual(found["message"], "1 lead tagged vip, City Kannur.")
+        self.assertEqual(found["link"]["to"], "/leads?tag=vip")
+        self.assertEqual(len(self.ask("show vip leads")["items"]), 2)
+        vague = self.ask("show me some leads")
+        self.assertIn("Tags in use: vip", vague["message"])
+
+        self.deal(name="Export deal", tags=["export"])
+        self.assertEqual([i["title"] for i in self.ask("deals tagged export")["items"]], ["Export deal"])
+
+        # Visibility applies: a rep sees only their own.
+        rep = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        self.assertEqual(self.ask("show vip leads", rep)["items"], [])
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

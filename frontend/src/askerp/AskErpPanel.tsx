@@ -54,6 +54,7 @@ const SUGGESTIONS: { key: string; icon: IconName; prompt: string }[] = [
   { key: "panel.chip.overdue", icon: "clock", prompt: "What's overdue today?" },
   { key: "panel.chip.stale", icon: "target", prompt: "Which deals are going stale?" },
   { key: "panel.chip.pipeline", icon: "chart", prompt: "How's the pipeline?" },
+  { key: "panel.chip.target", icon: "trend", prompt: "How am I doing against my target?" },
 ];
 
 export function AskErpPanel() {

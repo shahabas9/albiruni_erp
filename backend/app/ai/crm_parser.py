@@ -23,6 +23,8 @@ INTENTS = (
     "crm.move_stage",
     "crm.schedule_followup",
     "crm.log_activity",
+    "crm.targets",
+    "crm.find",
     "unknown",
 )
 
@@ -32,6 +34,11 @@ _OVERDUE = re.compile(
 )
 _STALE = re.compile(r"\b(stale|idle|going cold|gone cold|cold deals?|rotting|untouched|neglected|going quiet|no activity)\b")
 _PIPELINE = re.compile(r"\b(pipeline|forecast|win rate|how much .*deals?|deals? worth|open deals)\b")
+_TARGET = re.compile(r"\b(targets?|quotas?|on track|how am i doing|how are we doing|how'?s my month|my numbers)\b")
+_FIND = re.compile(
+    r"\b(show|list|find|which|any|get|give me|who are)\b.*\b(leads?|deals?|opportunit(y|ies)|customers?|clients?|accounts?)\b"
+    r"|\b(leads?|deals?|opportunit(y|ies)|customers?|clients?)\b\s+(tagged|with|in|from|marked)\b"
+)
 _STAGE_VERB = re.compile(r"\b(mark|move|set|change|update|put)\b|\bwe (won|lost)\b|\b(won|lost) the\b")
 _QUOTE_CREATE = re.compile(r"\b(create|make|prepare|draft|new|raise|generate)\b.*\b(quotation|quote)\b|\b(quotation|quote) for\b")
 _REMIND = re.compile(r"\b(remind|reminder|schedule|follow[- ]?up|set up a|book a)\b")
@@ -60,12 +67,16 @@ def classify_intent(text: str, now: datetime | None = None) -> str:
         return "sales.create_quotation"
     if _STALE.search(t):
         return "crm.stale"
+    if _TARGET.search(t):
+        return "crm.targets"
     if _PIPELINE.search(t) and (_QUESTION.search(t) or len(t.split()) <= 4):
         return "crm.pipeline"
     if _STAGE_WORD.search(t) and _STAGE_VERB.search(t) and not _QUESTION.search(t):
         return "crm.move_stage"
     if _OVERDUE.search(t) and (_QUESTION.search(t) or len(t.split()) <= 5):
         return "crm.overdue"
+    if _FIND.search(t) and not _LOG.search(t) and not _REMIND.search(t):
+        return "crm.find"
     has_when = parse_when(text, now or datetime.now())[0] is not None
     if _REMIND.search(t) or (has_when and _ACTION_VERB.search(t) and not _LOG.search(t)):
         return "crm.schedule_followup"
@@ -228,3 +239,20 @@ def parse_when(text: str, now: datetime) -> tuple[When | None, str]:
     if day is None:
         day = now.date() if datetime.combine(now.date(), at) > now else now.date() + timedelta(days=1)
     return When(datetime.combine(day, at or time(10, 0)), has_time=at is not None), ""
+
+
+def record_kind(text: str) -> str | None:
+    """Which list a "show me …" question is about."""
+
+    t = text.lower()
+    for kind, pattern in (("opportunity", r"\b(deals?|opportunit(y|ies))\b"), ("customer", r"\b(customers?|clients?|accounts?)\b"),
+                          ("lead", r"\bleads?\b")):
+        if re.search(pattern, t):
+            return kind
+    return None
+
+
+def mentions(text: str, phrase: str) -> bool:
+    """`phrase` appears in `text` as whole words, ignoring case."""
+
+    return bool(phrase) and re.search(r"(?<![\w])" + re.escape(phrase.lower()) + r"(?![\w])", text.lower()) is not None
