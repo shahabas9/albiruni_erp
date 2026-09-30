@@ -443,6 +443,8 @@ export const KNOWN_PERMISSIONS = [
   "sales.order.read",
   "sales.order.write",
   "sales.credit.override",
+  "sales.delivery.write",
+  "inventory.stock.adjust",
   "inventory.item.read",
   "inventory.item.write",
   "crm.lead.read",

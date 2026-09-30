@@ -58,6 +58,8 @@ export function quotationAction(id: string, action: QuotationAction, note = ""):
 export interface DocLine {
   id: string;
   item_id: string;
+  /** Only goods are delivered; services are just invoiced. */
+  item_kind: "goods" | "service";
   description: string;
   hsn_code: string;
   uom: string;
@@ -170,3 +172,68 @@ export function cancelOrder(id: string, reason: string): Promise<SalesOrder> {
   return request<SalesOrder>(`/api/sales/orders/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
+
+// --- Deliveries and stock ----------------------------------------------------------
+
+export interface DeliveryNote {
+  id: string;
+  number: string;
+  order_id: string;
+  order_number: string;
+  customer_id: string;
+  customer_name: string;
+  delivery_date: string;
+  status: "Delivered" | "Cancelled";
+  shipping_address: string;
+  vehicle_no: string;
+  transporter: string;
+  notes: string;
+  cancel_reason: string;
+  created_at: string;
+  lines: { order_line_id: string; item_id: string; description: string; uom: string; qty: number }[];
+}
+
+export interface DeliveryInput {
+  lines: { order_line_id: string; qty: number }[];
+  delivery_date?: string;
+  vehicle_no: string;
+  transporter: string;
+  notes: string;
+}
+
+export function fetchDeliveries(params: { order_id?: string; q?: string; limit?: number; offset?: number } = {}): Promise<Page<DeliveryNote>> {
+  return requestPage<DeliveryNote>("/api/sales/deliveries", { ...params });
+}
+
+export function fetchDelivery(id: string): Promise<DeliveryNote> {
+  return request<DeliveryNote>(`/api/sales/deliveries/${id}`);
+}
+
+export function createDelivery(orderId: string, body: DeliveryInput): Promise<DeliveryNote> {
+  return request<DeliveryNote>(`/api/sales/orders/${orderId}/deliveries`, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function cancelDelivery(id: string, reason: string): Promise<DeliveryNote> {
+  return request<DeliveryNote>(`/api/sales/deliveries/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason }) });
+}
+
+export interface StockMovement {
+  id: string;
+  kind: string;
+  qty: number;
+  balance_after: number;
+  ref_type: string;
+  ref_id: string | null;
+  ref_number: string;
+  note: string;
+  created_by_name: string | null;
+  created_at: string;
+}
+
+export function fetchStockLedger(itemId: string, limit = 50, offset = 0): Promise<Page<StockMovement>> {
+  return requestPage<StockMovement>(`/api/items/${itemId}/stock`, { limit, offset });
+}
+
+export function adjustStock(itemId: string, countedQty: number, reason: string): Promise<void> {
+  return request<void>(`/api/items/${itemId}/adjust`, { method: "POST", body: JSON.stringify({ counted_qty: countedQty, reason }) });
+}

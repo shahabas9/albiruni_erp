@@ -37,6 +37,8 @@ class ReasonIn(BaseModel):
 class DocLineOut(BaseModel):
     id: UUID
     item_id: UUID
+    # goods or service; only goods are delivered.
+    item_kind: str
     description: str
     hsn_code: str
     uom: str
@@ -88,3 +90,60 @@ class OrderOut(BaseModel):
     lines: list[DocLineOut]
     # Only on create/update responses: low stock and the like.
     warnings: list[str] = []
+
+
+class DeliveryLineIn(BaseModel):
+    order_line_id: UUID
+    qty: float = Field(ge=0, le=10_000_000)
+
+
+class DeliveryIn(BaseModel):
+    lines: list[DeliveryLineIn] = Field(min_length=1, max_length=200)
+    delivery_date: date | None = None
+    vehicle_no: str = Field(default="", max_length=20)
+    transporter: str = Field(default="", max_length=120)
+    notes: str = Field(default="", max_length=2000)
+
+
+class DeliveryLineOut(BaseModel):
+    order_line_id: UUID
+    item_id: UUID
+    description: str
+    uom: str
+    qty: float
+
+
+class DeliveryOut(BaseModel):
+    id: UUID
+    number: str
+    order_id: UUID
+    order_number: str
+    customer_id: UUID
+    customer_name: str
+    delivery_date: date
+    status: str
+    shipping_address: str
+    vehicle_no: str
+    transporter: str
+    notes: str
+    cancel_reason: str
+    created_at: datetime
+    lines: list[DeliveryLineOut]
+
+
+class StockMovementOut(BaseModel):
+    id: UUID
+    kind: str
+    qty: float
+    balance_after: float
+    ref_type: str
+    ref_id: UUID | None
+    ref_number: str
+    note: str
+    created_by_name: str | None
+    created_at: datetime
+
+
+class StockAdjustIn(BaseModel):
+    counted_qty: float = Field(ge=0, le=100_000_000)
+    reason: str = Field(min_length=1, max_length=200)

@@ -415,3 +415,26 @@ functions with their own unit tests).
 - Permissions: `sales.order.read`, `sales.order.write`,
   `sales.credit.override`. Roles that could create quotations get the order
   permissions once, on upgrade.
+
+### Deliveries and stock
+
+- **Stock is a ledger.** Every change is a `stock_movements` row (Opening,
+  Delivery, Delivery cancelled, Adjustment, Return) with the balance after
+  it; an item's `stock_qty` is their running total. `GET /api/items/{id}/stock`
+  lists them. Items that had stock before the ledger get one Opening row on
+  upgrade.
+- **Stock counts** (`POST /api/items/{id}/adjust`, `inventory.stock.adjust`)
+  set stock to a counted quantity with a reason. Changing `stock_qty` on the
+  item form needs the same permission and is recorded the same way; new
+  items' stock is their opening balance.
+- **Delivery notes** (`POST /api/sales/orders/{id}/deliveries`, audited tool
+  `sales.create_delivery.v1`, needs `sales.delivery.write`) deliver some or
+  all of what's left on a confirmed order's goods lines, numbered
+  `DN/26-27/00001`. They take the goods out of stock — refused if that would
+  go below zero, unless Company & GST allows negative stock — and move the
+  order to Partly delivered or Delivered. Services are never delivered, only
+  invoiced.
+- The order row, then the item rows in id order, are locked for the whole
+  delivery, so two deliveries of the last few boxes can't both succeed.
+- **Cancelling a delivery** (`/api/sales/deliveries/{id}/cancel`, audited,
+  needs a reason) puts the stock back and reopens the order's quantities.

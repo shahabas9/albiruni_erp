@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { cancelOrder, confirmOrder, deleteOrder, fetchOrder, fetchOrderTimeline, type SalesOrder } from "../api/sales";
+import {
+  cancelDelivery,
+  cancelOrder,
+  confirmOrder,
+  deleteOrder,
+  fetchDeliveries,
+  fetchOrder,
+  fetchOrderTimeline,
+  type DeliveryNote,
+  type SalesOrder,
+} from "../api/sales";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dateTime, dayDate, docStatusClass } from "../lib/format";
+import { DeliverModal } from "../sales/DeliverModal";
 import { DocLinesTable } from "../sales/DocLinesTable";
 import { DocTotals } from "../sales/DocTotals";
 import { ReasonModal } from "../sales/ReasonModal";
@@ -19,12 +30,17 @@ export function OrderPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [delivering, setDelivering] = useState(false);
+  const [deliveries, setDeliveries] = useState<DeliveryNote[]>([]);
+  const [undoing, setUndoing] = useState<DeliveryNote | null>(null);
   const [changes, setChanges] = useState(0);
   const warnings = ((location.state as { warnings?: string[] } | null)?.warnings ?? []).filter(Boolean);
 
   const load = useCallback(async () => {
     try {
-      setOrder(await fetchOrder(id));
+      const [o, d] = await Promise.all([fetchOrder(id), fetchDeliveries({ order_id: id, limit: 100 })]);
+      setOrder(o);
+      setDeliveries(d.rows);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load this order.");
@@ -49,6 +65,9 @@ export function OrderPage() {
 
   const canWrite = can("sales.order.write");
   const untouched = order.lines.every((l) => !l.delivered_qty && !l.invoiced_qty);
+  const goodsLineIds = new Set(order.lines.filter((l) => l.item_kind === "goods").map((l) => l.id));
+  const toDeliver = order.lines.some((l) => goodsLineIds.has(l.id) && l.qty > l.delivered_qty);
+  const canDeliver = can("sales.delivery.write") && ["Confirmed", "Partly delivered"].includes(order.status) && toDeliver;
 
   async function act(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -82,9 +101,14 @@ export function OrderPage() {
             {order.quotation_number && ` · from ${order.quotation_number}`}
           </p>
         </div>
-        {canWrite && (
+        {(canWrite || canDeliver) && (
           <div className="head-actions">
-            {order.status === "Draft" && (
+            {canDeliver && (
+              <button className="primary-btn" disabled={busy} onClick={() => setDelivering(true)}>
+                Deliver
+              </button>
+            )}
+            {canWrite && order.status === "Draft" && (
               <>
                 <button className="ghost-btn" disabled={busy} onClick={() => navigate(`/sales/orders/${order.id}/edit`)}>
                   Edit
@@ -101,7 +125,7 @@ export function OrderPage() {
                 </button>
               </>
             )}
-            {order.status !== "Draft" && order.status !== "Cancelled" && untouched && (
+            {canWrite && order.status !== "Draft" && order.status !== "Cancelled" && untouched && (
               <button className="danger-btn" disabled={busy} onClick={() => setCancelling(true)}>
                 Cancel order
               </button>
@@ -167,6 +191,31 @@ export function OrderPage() {
               </div>
             )}
           </div>
+          {order.status !== "Draft" && (
+            <div className="card">
+              <div className="card-head">
+                <span className="card-title">Deliveries</span>
+              </div>
+              {deliveries.length === 0 && <p className="card-note">Nothing delivered yet.</p>}
+              <div className="mini-docs">
+                {deliveries.map((d) => (
+                  <div className={`row${d.status === "Cancelled" ? " cancelled" : ""}`} key={d.id}>
+                    <div>
+                      <b className="mono">{d.number}</b> · {dayDate(d.delivery_date)}
+                      <small>{d.lines.map((l) => `${l.qty} ${l.uom} ${l.description}`).join(", ")}</small>
+                      {d.vehicle_no && <small>Vehicle {d.vehicle_no}</small>}
+                      {d.status === "Cancelled" && <small>Cancelled — {d.cancel_reason}</small>}
+                    </div>
+                    {d.status === "Delivered" && can("sales.delivery.write") && (
+                      <button className="ghost-btn sm" onClick={() => setUndoing(d)}>
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="card">
             <div className="card-head">
               <span className="card-title">History</span>
@@ -176,6 +225,30 @@ export function OrderPage() {
         </div>
       </div>
 
+      {delivering && (
+        <DeliverModal
+          order={order}
+          goodsLineIds={goodsLineIds}
+          onClose={() => setDelivering(false)}
+          onDone={() => {
+            setDelivering(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
+      {undoing && (
+        <ReasonModal
+          title={`Cancel delivery ${undoing.number}?`}
+          label="Why? The goods go back into stock."
+          action="Cancel delivery"
+          onClose={() => setUndoing(null)}
+          onConfirm={async (reason) => {
+            await cancelDelivery(undoing.id, reason);
+            setUndoing(null);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
       {cancelling && (
         <ReasonModal
           title={`Cancel ${order.number}?`}

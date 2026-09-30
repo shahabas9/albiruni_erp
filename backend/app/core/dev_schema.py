@@ -218,3 +218,22 @@ def ensure_dev_schema() -> None:
                 UPDATE roles SET permissions = permissions || ARRAY['sales.order.read', 'sales.order.write']::VARCHAR[]
                 WHERE 'sales.quotation.create' = ANY(permissions) AND NOT 'sales.order.write' = ANY(permissions)
             """))
+        if once("opening-stock-movements"):
+            # Stock from before the stock ledger becomes each item's opening balance.
+            conn.execute(text("""
+                INSERT INTO stock_movements (id, tenant_id, company_id, item_id, kind, qty, balance_after,
+                                             ref_type, ref_number, note, created_at)
+                SELECT gen_random_uuid(), tenant_id, company_id, id, 'Opening', stock_qty, stock_qty,
+                       '', '', 'Stock before the ledger started', now()
+                FROM items WHERE stock_qty <> 0 AND kind = 'goods'
+                  AND NOT EXISTS (SELECT 1 FROM stock_movements m WHERE m.item_id = items.id)
+            """))
+        if once("grant-stock-adjust"):
+            conn.execute(text("""
+                UPDATE roles SET permissions = array_append(permissions, 'inventory.stock.adjust')
+                WHERE 'inventory.item.write' = ANY(permissions) AND NOT 'inventory.stock.adjust' = ANY(permissions)
+            """))
+            conn.execute(text("""
+                UPDATE roles SET permissions = array_append(permissions, 'sales.delivery.write')
+                WHERE 'sales.order.write' = ANY(permissions) AND NOT 'sales.delivery.write' = ANY(permissions)
+            """))

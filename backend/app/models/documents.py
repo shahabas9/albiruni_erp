@@ -93,3 +93,67 @@ class SalesOrderLine(Base):
 
     order: Mapped["SalesOrder"] = relationship(back_populates="lines")
     item: Mapped["Item"] = relationship()  # noqa: F821 — app.models.sales
+
+
+class StockMovement(Base):
+    """One change to an item's stock. Stock is never edited in place: the
+    item's stock_qty is the running sum of these."""
+
+    __tablename__ = "stock_movements"
+
+    id: Mapped[uuid.UUID] = _id()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("items.id"), index=True)
+    # Opening, Adjustment, Delivery, Delivery cancelled, Return.
+    kind: Mapped[str] = mapped_column(String(24))
+    qty: Mapped[float] = mapped_column(Numeric(14, 2))  # + in, − out
+    balance_after: Mapped[float] = mapped_column(Numeric(14, 2))
+    ref_type: Mapped[str] = mapped_column(String(24), default="")
+    ref_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    ref_number: Mapped[str] = mapped_column(String(30), default="")
+    note: Mapped[str] = mapped_column(String(200), default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DeliveryNote(Base):
+    __tablename__ = "delivery_notes"
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_delivery_notes_tenant_number"),)
+
+    id: Mapped[uuid.UUID] = _id()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    number: Mapped[str] = mapped_column(String(30))
+    order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sales_orders.id"), index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"))
+    delivery_date: Mapped[date] = mapped_column(Date)
+    # Delivered or Cancelled.
+    status: Mapped[str] = mapped_column(String(16), default="Delivered")
+    shipping_address: Mapped[str] = mapped_column(Text, default="")
+    vehicle_no: Mapped[str] = mapped_column(String(20), default="")
+    transporter: Mapped[str] = mapped_column(String(120), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    cancel_reason: Mapped[str] = mapped_column(String(200), default="")
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    lines: Mapped[list["DeliveryNoteLine"]] = relationship(back_populates="delivery", cascade="all, delete-orphan")
+    order: Mapped["SalesOrder"] = relationship()
+    customer: Mapped["Customer"] = relationship()  # noqa: F821
+
+
+class DeliveryNoteLine(Base):
+    __tablename__ = "delivery_note_lines"
+
+    id: Mapped[uuid.UUID] = _id()
+    delivery_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("delivery_notes.id", ondelete="CASCADE")
+    )
+    order_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sales_order_lines.id"))
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("items.id"))
+    description: Mapped[str] = mapped_column(String(200))
+    uom: Mapped[str] = mapped_column(String(20), default="")
+    qty: Mapped[float] = mapped_column(Numeric(14, 2))
+
+    delivery: Mapped["DeliveryNote"] = relationship(back_populates="lines")

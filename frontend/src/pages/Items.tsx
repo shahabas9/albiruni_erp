@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ApiError, createItem, fetchItems, updateItem, type Item } from "../api/client";
 import { GST_RATES } from "../api/sales";
+import { useAppData } from "../data/AppDataProvider";
+import { StockDrawer } from "../sales/StockDrawer";
 
 export function Items() {
   const [items, setItems] = useState<Item[]>([]);
@@ -8,6 +10,8 @@ export function Items() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [stockFor, setStockFor] = useState<Item | null>(null);
+  const { can } = useAppData();
 
   async function refresh() {
     setLoading(true);
@@ -90,10 +94,15 @@ export function Items() {
                     </td>
                     <td className="mono">₹{i.unit_price.toLocaleString("en-IN")}</td>
                     <td className="mono">{i.kind === "service" ? "Service" : i.stock_qty}</td>
-                    <td>
+                    <td style={{ display: "flex", gap: 6 }}>
                       <button className="secondary-btn" onClick={() => setEditingId(i.id)}>
                         Edit
                       </button>
+                      {i.kind === "goods" && (
+                        <button className="secondary-btn" onClick={() => setStockFor(i)}>
+                          Stock
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ),
@@ -101,6 +110,14 @@ export function Items() {
             </tbody>
           </table>
         </div>
+      )}
+      {stockFor && (
+        <StockDrawer
+          item={items.find((i) => i.id === stockFor.id) ?? stockFor}
+          canAdjust={can("inventory.stock.adjust")}
+          onClose={() => setStockFor(null)}
+          onChanged={refresh}
+        />
       )}
     </section>
   );
@@ -126,14 +143,15 @@ function ItemForm({ item, onDone }: { item?: Item; onDone: () => void }) {
       name,
       uom,
       unit_price: Number(unitPrice),
-      stock_qty: Number(stockQty),
+      // Existing items change stock through a stock count (with a reason), not here.
+      ...(item ? {} : { stock_qty: Number(stockQty) }),
       kind,
       hsn_code: hsn.trim(),
       gst_rate: rate === "" ? null : Number(rate),
     };
     try {
       if (item) await updateItem(item.id, body);
-      else await createItem(body);
+      else await createItem({ ...body, stock_qty: Number(stockQty) });
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save.");
@@ -183,10 +201,12 @@ function ItemForm({ item, onDone }: { item?: Item; onDone: () => void }) {
             ))}
           </select>
         </label>
-        <label className="field">
-          <span>Stock quantity</span>
-          <input type="number" min={0} value={stockQty} onChange={(e) => setStockQty(e.target.value)} />
-        </label>
+        {!item && kind === "goods" && (
+          <label className="field">
+            <span>Opening stock</span>
+            <input type="number" min={0} value={stockQty} onChange={(e) => setStockQty(e.target.value)} />
+          </label>
+        )}
       </div>
       {error && <div className="error-banner">{error}</div>}
       <div className="form-actions">

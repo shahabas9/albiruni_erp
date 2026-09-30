@@ -13,11 +13,11 @@ from uuid import uuid4
 from fastapi import HTTPException, Response
 from sqlalchemy import select
 
-from app.api import routes_orders, routes_sales
+from app.api import routes_deliveries, routes_items, routes_orders, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import customer_service, order_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import customer_service, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.crm import Opportunity
@@ -25,7 +25,10 @@ from app.models.identity import Role, User
 from app.models.sales import Item
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
-from app.schemas.orders import DocLineIn, OrderIn, OrderUpdate, ReasonIn
+from app.schemas.items import ItemIn, ItemUpdate
+from app.schemas.orders import (
+    DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
+)
 from app.schemas.sales import CompanyProfileUpdate, QuotationActionIn
 from app.toolgateway import tools_crm, tools_documents, tools_sales  # noqa: F401 — registers the tools
 
@@ -102,8 +105,11 @@ class SalesTestCase(unittest.TestCase):
 
     def item(self, name="Product A", price=420, rate=18, stock=500, **fields):
         item = Item(tenant_id=self.context.tenant_id, company_id=self.context.company_id, sku=uuid4().hex[:8],
-                    name=name, uom="box", unit_price=price, stock_qty=stock, gst_rate=rate, hsn_code="6907", **fields)
+                    name=name, uom="box", unit_price=price, stock_qty=0, gst_rate=rate, hsn_code="6907", **fields)
         self.db.add(item)
+        self.db.flush()
+        if stock:
+            stock_service.move(self.db, self.context, item, stock, "Opening")
         self.db.commit()
         return item
 
@@ -314,6 +320,106 @@ class OrderTests(SalesTestCase):
         routes_orders.delete_order(draft.id, self.context, self.db)
         with self.assertRaises(HTTPException):
             routes_orders.get_order(draft.id, self.context, self.db)
+
+
+
+class DeliveryTests(SalesTestCase):
+    def confirmed_order(self, lines, customer=None):
+        customer = customer or self.customer(allow_duplicate=True)
+        order = self.order(customer, lines)
+        return self.confirm(order.id)
+
+    def deliver(self, order, quantities, context=None, **fields):
+        body = DeliveryIn(lines=[DeliveryLineIn(order_line_id=order.lines[i].id, qty=q)
+                                 for i, q in quantities.items()], **fields)
+        return routes_deliveries.create_delivery(order.id, body, context or self.context, self.db)
+
+    def test_partial_deliveries_take_stock_and_complete_the_order(self):
+        a, b = self.item("Tiles", stock=100), self.item("Grout", stock=10)
+        order = self.confirmed_order([{"item_id": a.id, "qty": 60}, {"item_id": b.id, "qty": 4}])
+
+        first = self.deliver(order, {0: 40}, vehicle_no="kl 11 ab 1234")
+        self.assertRegex(first.number, r"^DN/\d\d-\d\d/00001$")
+        self.assertEqual((first.vehicle_no, first.lines[0].qty), ("KL 11 AB 1234", 40))
+        order = routes_orders.get_order(order.id, self.context, self.db)
+        self.assertEqual((order.status, order.lines[0].delivered_qty), ("Partly delivered", 40))
+        self.db.refresh(a)
+        self.assertEqual(float(a.stock_qty), 60)
+
+        with self.assertRaises(HTTPException) as too_many:
+            self.deliver(order, {0: 21})
+        self.assertIn("Only 20", too_many.exception.detail)
+        self.deliver(order, {0: 20, 1: 4})
+        order = routes_orders.get_order(order.id, self.context, self.db)
+        self.assertEqual(order.status, "Delivered")
+
+        ledger = routes_deliveries.stock_ledger(a.id, Response(), 50, 0, self.context, self.db)
+        self.assertEqual([(m.kind, m.qty, m.balance_after) for m in ledger],
+                         [("Delivery", -20, 40), ("Delivery", -40, 60), ("Opening", 100, 100)])
+        self.assertEqual(ledger[0].ref_number[:3], "DN/")
+
+        with self.assertRaises(HTTPException):  # delivered goods: the order can't just be cancelled
+            routes_orders.cancel_order(order.id, ReasonIn(reason="x"), self.context, self.db)
+
+    def test_stock_cant_go_negative_unless_the_company_allows_it(self):
+        scarce = self.item("Scarce", stock=5)
+        order = self.confirmed_order([{"item_id": scarce.id, "qty": 8}])
+        with self.assertRaises(HTTPException) as short:
+            self.deliver(order, {0: 8})
+        self.assertIn("Only 5", short.exception.detail)
+        sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(allow_negative_stock=True))
+        self.deliver(order, {0: 8})
+        self.db.refresh(scarce)
+        self.assertEqual(float(scarce.stock_qty), -3)
+
+    def test_cancelling_a_delivery_puts_stock_back(self):
+        item = self.item(stock=50)
+        order = self.confirmed_order([{"item_id": item.id, "qty": 10}])
+        delivery = self.deliver(order, {0: 10})
+        with self.assertRaises(HTTPException):
+            routes_deliveries.cancel_delivery(delivery.id, ReasonIn(reason=" "), self.context, self.db)
+        cancelled = routes_deliveries.cancel_delivery(delivery.id, ReasonIn(reason="Truck never left"),
+                                                      self.context, self.db)
+        self.assertEqual((cancelled.status, cancelled.cancel_reason), ("Cancelled", "Truck never left"))
+        self.db.refresh(item)
+        self.assertEqual(float(item.stock_qty), 50)
+        order = routes_orders.get_order(order.id, self.context, self.db)
+        self.assertEqual((order.status, order.lines[0].delivered_qty), ("Confirmed", 0))
+        with self.assertRaises(HTTPException):
+            routes_deliveries.cancel_delivery(delivery.id, ReasonIn(reason="again"), self.context, self.db)
+
+    def test_services_are_not_delivered_and_drafts_cant_be(self):
+        service = self.item("Installation", price=1500, stock=0, kind="service")
+        goods = self.item(stock=10)
+        customer = self.customer()
+        draft = self.order(customer, [{"item_id": goods.id, "qty": 1}])
+        with self.assertRaises(HTTPException):
+            self.deliver(draft, {0: 1})
+        order = self.confirmed_order([{"item_id": goods.id, "qty": 2}, {"item_id": service.id, "qty": 1}], customer)
+        with self.assertRaises(HTTPException) as refused:
+            self.deliver(order, {1: 1})
+        self.assertIn("service", refused.exception.detail)
+        self.deliver(order, {0: 2})  # all goods delivered: done, the service is invoiced
+        self.assertEqual(routes_orders.get_order(order.id, self.context, self.db).status, "Delivered")
+
+    def test_stock_changes_by_hand_are_recorded_with_a_reason(self):
+        created = routes_items.create_item(ItemIn(sku="NEW-1", name="New item", unit_price=10, stock_qty=12,
+                                                  gst_rate=5), self.context, self.db)
+        clerk = self.make_context(["inventory.item.read", "inventory.item.write"], self.context.tenant_id,
+                                  self.context.company_id)
+        with self.assertRaises(HTTPException) as denied:
+            routes_items.update_item(created.id, ItemUpdate(stock_qty=3), clerk, self.db)
+        self.assertEqual(denied.exception.status_code, 409)
+        routes_items.update_item(created.id, ItemUpdate(name="Renamed"), clerk, self.db)  # other fields are fine
+
+        routes_deliveries.adjust_stock(created.id, StockAdjustIn(counted_qty=9, reason="Count 30 Sep"),
+                                       self.context, self.db)
+        ledger = routes_deliveries.stock_ledger(created.id, Response(), 50, 0, self.context, self.db)
+        self.assertEqual([(m.kind, m.qty, m.balance_after, m.note) for m in ledger],
+                         [("Adjustment", -3, 9, "Count 30 Sep"), ("Opening", 12, 12, "Opening stock")])
+        with self.assertRaises(HTTPException):
+            routes_deliveries.adjust_stock(created.id, StockAdjustIn(counted_qty=9, reason="again"),
+                                           self.context, self.db)
 
 
 if __name__ == "__main__":

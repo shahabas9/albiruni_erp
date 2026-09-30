@@ -3,13 +3,14 @@ and cancelling orders (and, later, deliveries, invoices and payments). The
 screens call these through execute_tool, so each one lands in the audit
 trail with who did it and what it said."""
 
+from datetime import date
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import order_service
+from app.domain import delivery_service, order_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -37,9 +38,33 @@ def cancel_order(db: Session, context: RequestContext, args: dict[str, Any]) -> 
             "result_summary": f"Cancelled order {order.number}: {order.cancel_reason}"}
 
 
-for name, purpose, handler in [
-    ("sales.confirm_order.v1", "Confirm a draft sales order after discount and credit-limit checks.", confirm_order),
-    ("sales.cancel_order.v1", "Cancel a sales order that has nothing delivered or invoiced.", cancel_order),
+@_guard
+def create_delivery(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    delivery = delivery_service.create_delivery(
+        db, context, UUID(str(args["order_id"])), args["lines"],
+        delivery_date=date.fromisoformat(args["delivery_date"]) if args.get("delivery_date") else None,
+        vehicle_no=args.get("vehicle_no", ""), transporter=args.get("transporter", ""), notes=args.get("notes", ""),
+    )
+    return {"delivery_id": str(delivery.id), "number": delivery.number,
+            "result_summary": f"Delivered {delivery.number} against order {delivery.order.number}"}
+
+
+@_guard
+def cancel_delivery(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    delivery = delivery_service.cancel_delivery(db, context, UUID(str(args["delivery_id"])), str(args.get("reason", "")))
+    return {"delivery_id": str(delivery.id), "number": delivery.number,
+            "result_summary": f"Cancelled delivery {delivery.number}; stock returned"}
+
+
+for name, purpose, permission, handler in [
+    ("sales.confirm_order.v1", "Confirm a draft sales order after discount and credit-limit checks.",
+     "sales.order.write", confirm_order),
+    ("sales.cancel_order.v1", "Cancel a sales order that has nothing delivered or invoiced.",
+     "sales.order.write", cancel_order),
+    ("sales.create_delivery.v1", "Deliver goods against a confirmed order, taking them out of stock.",
+     "sales.delivery.write", create_delivery),
+    ("sales.cancel_delivery.v1", "Cancel a delivery note and put its goods back in stock.",
+     "sales.delivery.write", cancel_delivery),
 ]:
-    register_tool(ToolDefinition(name=name, purpose=purpose, permission="sales.order.write",
-                                 risk_level="L3 Execute", handler=handler))
+    register_tool(ToolDefinition(name=name, purpose=purpose, permission=permission, risk_level="L3 Execute",
+                                 handler=handler))

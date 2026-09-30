@@ -55,7 +55,7 @@ def order_out(db: Session, order: SalesOrder) -> OrderOut:
 
 def line_out(l) -> DocLineOut:
     return DocLineOut(
-        id=l.id, item_id=l.item_id, description=l.description, hsn_code=l.hsn_code, uom=l.uom, qty=float(l.qty),
+        id=l.id, item_id=l.item_id, item_kind=l.item.kind, description=l.description, hsn_code=l.hsn_code, uom=l.uom, qty=float(l.qty),
         unit_price=float(l.unit_price), list_price=float(l.list_price), gst_rate=float(l.gst_rate),
         amount=float(l.amount), taxable_value=float(l.taxable_value), cgst=float(l.cgst), sgst=float(l.sgst),
         igst=float(l.igst), delivered_qty=float(l.delivered_qty), invoiced_qty=float(l.invoiced_qty),

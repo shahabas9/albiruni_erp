@@ -19,6 +19,7 @@ import { SalesSettings } from "./pages/SalesSettings";
 import { Orders } from "./pages/Orders";
 import { OrderEditor } from "./pages/OrderEditor";
 import { OrderPage } from "./pages/OrderPage";
+import { Deliveries } from "./pages/Deliveries";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="/sales/orders/new" element={<div className="management-page"><OrderEditor /></div>} />
             <Route path="/sales/orders/:id" element={<div className="management-page"><OrderPage /></div>} />
             <Route path="/sales/orders/:id/edit" element={<div className="management-page"><OrderEditor /></div>} />
+            <Route path="/sales/deliveries" element={<div className="management-page"><Deliveries /></div>} />
             <Route path="/sales/settings" element={<div className="management-page"><SalesSettings /></div>} />
             <Route path="/items" element={<div className="management-page"><Items /></div>} />
             <Route path="/leads" element={<div className="management-page"><Leads /></div>} />
