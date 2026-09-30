@@ -520,3 +520,20 @@ functions with their own unit tests).
 - The customer page's overview adds an `account` block (owed, overdue,
   advance, net, open invoices, oldest due) for people with
   `sales.invoice.read`.
+
+### Sales reports
+
+- `GET /api/sales/reports/register?date_from&date_to` — issued invoices and
+  credit notes (as negatives) in the period, with totals.
+- `GET /api/sales/reports/gstr1?date_from&date_to` — GSTR-1 figures by
+  section: **b2b** (registered buyers, per invoice and rate), **b2cl**
+  (unregistered, other state, invoice over ₹1,00,000), **b2cs** (other
+  unregistered sales totalled by place of supply and rate, their credit notes
+  netted in), **cdnr** / **cdnur** (credit notes), **hsn** (split B2B/B2C,
+  with UQC unit codes) and **docs** (number ranges used).
+- `GET /api/sales/reports/{register|b2b|b2cl|b2cs|cdnr|cdnur|hsn|docs}.csv` —
+  the same as CSV in the GST portal's column order, with a BOM for Excel and
+  formula-injection protection. Every download goes through the audited
+  tool `sales.export_report.v1`. Needs `sales.reports.read`.
+- These are figures to file from, not a filing: an accountant should check
+  them (and the GST portal's own validation) before uploading.

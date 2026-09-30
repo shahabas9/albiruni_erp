@@ -1,5 +1,5 @@
 /** Sales documents: company GST profile, orders, deliveries, invoices, payments. */
-import { request, requestPage, type Page, type Quotation, type TaxTotals, type TimelineEntry } from "./client";
+import { downloadFile, request, requestPage, type Page, type Quotation, type TaxTotals, type TimelineEntry } from "./client";
 
 export const GST_RATES = [0, 0.25, 3, 5, 12, 18, 28, 40];
 
@@ -527,4 +527,60 @@ export function fetchStatement(customerId: string, dateFrom?: string, dateTo?: s
   if (dateTo) params.set("date_to", dateTo);
   const qs = params.toString();
   return request<Statement>(`/api/sales/receivables/${customerId}/statement${qs ? `?${qs}` : ""}`);
+}
+
+// --- Reports ------------------------------------------------------------------------
+
+export interface RegisterRow {
+  date: string;
+  type: "Invoice" | "Credit note";
+  number: string;
+  customer: string;
+  gstin: string;
+  place_of_supply: string;
+  taxable_value: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  round_off: number;
+  total: number;
+  id: string;
+}
+
+export interface SalesRegister {
+  date_from: string;
+  date_to: string;
+  rows: RegisterRow[];
+  totals: Pick<RegisterRow, "taxable_value" | "cgst" | "sgst" | "igst" | "round_off" | "total">;
+  invoices: number;
+  credit_notes: number;
+}
+
+export const GSTR1_SECTIONS = [
+  { key: "b2b", label: "B2B", hint: "Invoices to registered buyers" },
+  { key: "b2cl", label: "B2CL", hint: "Unregistered, other state, over ₹1 lakh" },
+  { key: "b2cs", label: "B2CS", hint: "Other unregistered sales, by state and rate" },
+  { key: "cdnr", label: "CDNR", hint: "Credit notes to registered buyers" },
+  { key: "cdnur", label: "CDNUR", hint: "Credit notes against B2CL invoices" },
+  { key: "hsn", label: "HSN", hint: "Quantities and values per HSN code" },
+  { key: "docs", label: "Documents", hint: "Number ranges issued" },
+] as const;
+export type Gstr1Section = (typeof GSTR1_SECTIONS)[number]["key"];
+
+export interface Gstr1 {
+  date_from: string;
+  date_to: string;
+  summary: Record<Gstr1Section, { count: number; taxable_value: number; tax: number }>;
+}
+
+export function fetchSalesRegister(dateFrom: string, dateTo: string): Promise<SalesRegister> {
+  return request<SalesRegister>(`/api/sales/reports/register?date_from=${dateFrom}&date_to=${dateTo}`);
+}
+
+export function fetchGstr1(dateFrom: string, dateTo: string): Promise<Gstr1> {
+  return request<Gstr1>(`/api/sales/reports/gstr1?date_from=${dateFrom}&date_to=${dateTo}`);
+}
+
+export function downloadReport(kind: "register" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
+  return downloadFile(`/api/sales/reports/${kind}.csv?date_from=${dateFrom}&date_to=${dateTo}`, `${kind}.csv`);
 }

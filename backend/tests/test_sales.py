@@ -15,11 +15,11 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_customers, routes_deliveries, routes_receivables, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import credit_note_service, customer_service, receivables, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import credit_note_service, customer_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -159,6 +159,12 @@ class SalesTestCase(unittest.TestCase):
     def pay(self, customer, amount, mode="UPI", reference="UTR123", context=None, **fields):
         body = ReceiptIn(customer_id=customer.id, amount=amount, mode=mode, reference=reference, **fields)
         return routes_payments.record_payment(body, context or self.context, self.db)
+
+    def credit(self, invoice, kind, lines, context=None, **fields):
+        body = CreditNoteIn(kind=kind, reason=fields.pop("reason", "Damaged in transit"),
+                            lines=[CreditLineIn(invoice_line_id=invoice.lines[i].id, **v) for i, v in lines.items()],
+                            **fields)
+        return routes_invoices.create_credit_note(invoice.id, body, context or self.context, self.db)
 
 
 class GstTests(SalesTestCase):
@@ -536,12 +542,6 @@ class InvoiceTests(SalesTestCase):
 
 
 class CreditNoteTests(SalesTestCase):
-    def credit(self, invoice, kind, lines, context=None, **fields):
-        body = CreditNoteIn(kind=kind, reason=fields.pop("reason", "Damaged in transit"),
-                            lines=[CreditLineIn(invoice_line_id=invoice.lines[i].id, **v) for i, v in lines.items()],
-                            **fields)
-        return routes_invoices.create_credit_note(invoice.id, body, context or self.context, self.db)
-
     def issued(self, qty=4, stock=100, price=420):
         item = self.item(stock=stock, price=price)
         order = self.confirmed_order([{"item_id": item.id, "qty": qty}])
@@ -741,6 +741,66 @@ class ReceivablesTests(SalesTestCase):
         self.assertEqual(float(receivables.net_owed(self.db, self.context, customer.id)), 1187.0)
         with self.assertRaises(HTTPException):
             routes_receivables.statement(customer.id, date.today(), start, self.context, self.db)
+
+
+
+class ReportTests(SalesTestCase):
+    def test_gstr1_puts_each_sale_in_its_section(self):
+        item = self.item(stock=5000)
+        registered = self.customer("Registered Co", gstin=KERALA_CUSTOMER_GSTIN)
+        far_big = self.customer("Far Big Buyer", state_code="33")
+        far_small = self.customer("Far Small Buyer", state_code="33")
+        local = self.customer("Walk-in Local", state_code="32")
+
+        b2b = self.invoice_for(registered, 10, item)  # 4,200 + 756
+        b2cl = self.invoice_for(far_big, 300, item)  # 1,26,000 + IGST: over ₹1 lakh, other state
+        self.invoice_for(far_small, 10, item)  # other state but small: B2CS
+        b2cs_local = self.invoice_for(local, 5, item)
+        self.credit(b2b, "Return", {0: {"qty": 2}})  # 840 back from a registered buyer: CDNR
+        self.credit(b2cs_local, "Return", {0: {"qty": 1}})  # netted into B2CS
+
+        today = date.today()
+        report = routes_reports.gstr1(today, today, self.context, self.db)
+        self.assertEqual([(r["gstin"], r["invoice_number"], r["taxable_value"], r["cgst"]) for r in report["b2b"]],
+                         [(KERALA_CUSTOMER_GSTIN, b2b.number, 4200.0, 378.0)])
+        self.assertEqual([(r["invoice_number"], r["place_of_supply"], r["igst"]) for r in report["b2cl"]],
+                         [(b2cl.number, "33-Tamil Nadu", 22680.0)])
+        b2cs = {(r["place_of_supply"], r["rate"]): r for r in report["b2cs"]}
+        self.assertEqual(b2cs[("33-Tamil Nadu", 18.0)]["igst"], 756.0)
+        self.assertEqual(b2cs[("32-Kerala", 18.0)]["taxable_value"], 2100.0 - 420.0)
+        self.assertEqual([(r["gstin"], r["taxable_value"], r["invoice_number"]) for r in report["cdnr"]],
+                         [(KERALA_CUSTOMER_GSTIN, 840.0, b2b.number)])
+        self.assertEqual(report["cdnur"], [])
+        hsn = {(r["type"], r["uqc"]): r for r in report["hsn"]}
+        self.assertEqual((hsn[("B2B", "BOX")]["qty"], hsn[("B2B", "BOX")]["taxable_value"]), (8.0, 3360.0))
+        self.assertEqual(hsn[("B2C", "BOX")]["qty"], 300 + 10 + 5 - 1)
+        docs = {d["nature"]: d for d in report["docs"]}
+        self.assertEqual(docs["Invoices for outward supply"]["total"], 4)
+        self.assertTrue(docs["Credit notes"]["from"].startswith("CN/"))
+
+        register = routes_reports.sales_register(today, today, self.context, self.db)
+        self.assertEqual((register["invoices"], register["credit_notes"]), (4, 2))
+        self.assertEqual(register["totals"]["taxable_value"], 4200 + 126000 + 4200 + 2100 - 840 - 420)
+
+        response = routes_reports.report_csv("b2b", today, today, self.context, self.db)
+        body = response.body.decode()
+        self.assertTrue(body.startswith("\ufeffGSTIN/UIN of Recipient,Receiver Name"))
+        self.assertIn(b2b.number, body)
+        self.assertEqual(response.headers["X-Row-Count"], "1")
+        audit = self.db.execute(select(AuditEvent).where(
+            AuditEvent.tenant_id == self.context.tenant_id, AuditEvent.tool_name == "sales.export_report.v1",
+        )).scalars().all()
+        self.assertEqual(len(audit), 1)
+
+    def test_reports_need_the_permission_and_a_sane_period(self):
+        clerk = self.make_context(["sales.invoice.read"], self.context.tenant_id, self.context.company_id)
+        with self.assertRaises(HTTPException) as denied:
+            routes_reports.report_csv("b2b", date.today(), date.today(), clerk, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
+        with self.assertRaises(HTTPException):
+            routes_reports.gstr1(date.today(), date.today() - timedelta(days=1), self.context, self.db)
+        self.assertEqual(sales_reports.uqc("Boxes"), "BOX")
+        self.assertEqual(sales_reports.uqc("bundle"), "OTH")
 
 
 if __name__ == "__main__":

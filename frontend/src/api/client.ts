@@ -449,6 +449,7 @@ export const KNOWN_PERMISSIONS = [
   "sales.credit_note.write",
   "sales.payment.read",
   "sales.payment.write",
+  "sales.reports.read",
   "inventory.stock.adjust",
   "inventory.item.read",
   "inventory.item.write",
@@ -1197,9 +1198,14 @@ export function fetchCustomerTimeline(id: string): Promise<TimelineEntry[]> {
 export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities";
 
 /** Downloads a list as CSV with the given filters (same as the list's query parameters). */
-export async function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
-  const res = await send(`/api/exports/${kind}.csv${query(filters)}`);
-  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? `${kind}.csv`;
+export function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
+  return downloadFile(`/api/exports/${kind}.csv${query(filters)}`, `${kind}.csv`);
+}
+
+/** Saves a file the API sends as an attachment; returns its X-Row-Count. */
+export async function downloadFile(path: string, fallbackName: string): Promise<number> {
+  const res = await send(path);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await res.blob());
   const a = Object.assign(document.createElement("a"), { href: url, download: name });
   document.body.appendChild(a);

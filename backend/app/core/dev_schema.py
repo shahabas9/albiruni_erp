@@ -254,3 +254,8 @@ def ensure_dev_schema() -> None:
                 UPDATE roles SET permissions = permissions || ARRAY['sales.payment.read', 'sales.payment.write']::VARCHAR[]
                 WHERE 'sales.invoice.write' = ANY(permissions) AND NOT 'sales.payment.write' = ANY(permissions)
             """))
+        if once("grant-sales-reports"):
+            conn.execute(text("""
+                UPDATE roles SET permissions = array_append(permissions, 'sales.reports.read')
+                WHERE 'sales.invoice.write' = ANY(permissions) AND NOT 'sales.reports.read' = ANY(permissions)
+            """))

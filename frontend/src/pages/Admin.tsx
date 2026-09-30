@@ -22,6 +22,7 @@ const PERMISSION_HINTS: Record<string, string> = {
   "sales.invoice.write": "Make draft invoices from orders and issue them (issued invoices are numbered and locked).",
   "sales.payment.read": "See payments received.",
   "sales.payment.write": "Record payments, apply advances and void payments (e.g. bounced cheques).",
+  "sales.reports.read": "See the sales register and GSTR-1 figures and download them as CSV (downloads are audited).",
   "sales.credit_note.write": "Issue credit notes against invoices (returns and price corrections). Given to roles that approve discounts.",
   "sales.delivery.write": "Record and cancel deliveries (takes goods out of stock).",
   "inventory.stock.adjust": "Correct stock after a count, with a reason. Every change is kept in the item's stock ledger.",

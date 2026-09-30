@@ -27,6 +27,7 @@ import { CreditNotes } from "./pages/CreditNotes";
 import { Payments } from "./pages/Payments";
 import { Receivables } from "./pages/Receivables";
 import { StatementPage } from "./pages/StatementPage";
+import { SalesReports } from "./pages/SalesReports";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -102,6 +103,7 @@ export default function App() {
             <Route path="/sales/payments" element={<div className="management-page"><Payments /></div>} />
             <Route path="/sales/receivables" element={<div className="management-page"><Receivables /></div>} />
             <Route path="/sales/receivables/:customerId" element={<div className="management-page"><StatementPage /></div>} />
+            <Route path="/sales/reports" element={<div className="management-page"><SalesReports /></div>} />
             <Route path="/sales/settings" element={<div className="management-page"><SalesSettings /></div>} />
             <Route path="/items" element={<div className="management-page"><Items /></div>} />
             <Route path="/leads" element={<div className="management-page"><Leads /></div>} />

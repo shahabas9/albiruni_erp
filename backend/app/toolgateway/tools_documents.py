@@ -10,7 +10,9 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import credit_note_service, delivery_service, invoice_service, order_service, payment_service
+from app.domain import (
+    credit_note_service, delivery_service, invoice_service, order_service, payment_service, sales_reports,
+)
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -127,3 +129,23 @@ for name, purpose, permission, handler in [
 ]:
     register_tool(ToolDefinition(name=name, purpose=purpose, permission=permission, risk_level="L3 Execute",
                                  handler=handler))
+
+
+@_guard
+def export_report(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    kind = args["kind"]
+    start, end = date.fromisoformat(args["date_from"]), date.fromisoformat(args["date_to"])
+    if kind == "register":
+        rows = sales_reports.sales_register(db, context, start, end)["rows"]
+    elif kind in sales_reports.SECTIONS:
+        rows = sales_reports.gstr1(db, context, start, end)[kind]
+    else:
+        raise ConflictError(f"Unknown report '{kind}'.")
+    return {"csv": sales_reports.to_csv(kind, rows), "rows": len(rows),
+            "result_summary": f"Downloaded {kind} report for {start:%d %b %Y} – {end:%d %b %Y} ({len(rows)} rows)"}
+
+
+register_tool(ToolDefinition(
+    name="sales.export_report.v1", purpose="Download a sales register or GSTR-1 section as CSV.",
+    permission="sales.reports.read", risk_level="L1 Read", handler=export_report,
+))
