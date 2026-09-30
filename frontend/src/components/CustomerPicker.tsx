@@ -169,7 +169,10 @@ export function CustomerPicker({
                 setError(`${match.label} is inactive — reactivate it on the Customers page first.`);
                 return;
               }
-              show({ id, name: match?.label ?? "", gstin: "", credit_limit: 0, active: true, tags: [], custom: {} });
+              show({
+                id, name: match?.label ?? "", gstin: "", credit_limit: 0, active: true, tags: [], custom: {},
+                billing_address: "", shipping_address: "", state_code: "", payment_terms_days: null,
+              });
               close();
             }}
           />

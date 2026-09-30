@@ -16,6 +16,7 @@ import { useAuth } from "../auth/AuthProvider";
 const PERMISSION_HINTS: Record<string, string> = {
   "crm.records.all": "See every lead, deal and follow-up. Without it, people see only the ones they own.",
   "crm.export": "Download CRM lists as CSV (every export is recorded in the audit trail).",
+  "sales.settings.write": "Edit the company's GST details, invoice terms and sales defaults (Sales → Company & GST).",
   "crm.settings.write": "Change CRM settings: lead rotation, stale limits, custom fields, targets, web form.",
 };
 

@@ -481,6 +481,9 @@ function MessageView({
             <PreviewLine k="Discount requested" v={`${preview.discount_pct}%`} />
             <PreviewLine k="Subtotal" v={`₹${preview.subtotal.toLocaleString("en-IN")}`} />
             <PreviewLine k="Total after discount" v={`₹${preview.total.toLocaleString("en-IN")}`} />
+            {preview.igst > 0 && <PreviewLine k="IGST" v={`₹${preview.igst.toLocaleString("en-IN")}`} />}
+            {preview.cgst > 0 && <PreviewLine k="CGST + SGST" v={`₹${(preview.cgst + preview.sgst).toLocaleString("en-IN")}`} />}
+            <PreviewLine k="Total with GST" v={`₹${preview.grand_total.toLocaleString("en-IN")}`} />
             {preview.warnings.map((w, idx) => (
               <div className="preview-flag" key={idx}>
                 {w}

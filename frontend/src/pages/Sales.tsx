@@ -104,7 +104,7 @@ export function Sales() {
                   <td>
                     {q.lines.length} line{q.lines.length === 1 ? "" : "s"}
                   </td>
-                  <td className="mono">₹{q.total.toLocaleString("en-IN")}</td>
+                  <td className="mono">₹{(q.grand_total || q.total).toLocaleString("en-IN")}</td>
                   <td>
                     <span className={`badge ${statusClass(q.status)}`}>{q.status}</span>
                   </td>

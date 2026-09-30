@@ -10,6 +10,7 @@ import {
   mergeCustomers,
   updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
+import { StateSelect } from "../components/StateSelect";
 import { SavedViews } from "../components/SavedViews";
 import { recallFilters } from "../lib/filterMemory";
 import { ExportButton } from "../components/ExportButton";
@@ -274,6 +275,18 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
   const [creditLimit, setCreditLimit] = useState(String(customer?.credit_limit ?? 0));
   const [gstin, setGstin] = useState(customer?.gstin ?? "");
   const [tags, setTags] = useState<string[]>(customer?.tags ?? []);
+  const [billing, setBilling] = useState(customer?.billing_address ?? "");
+  const [shipping, setShipping] = useState(customer?.shipping_address ?? "");
+  const [state, setState] = useState(customer?.state_code ?? "");
+  const [terms, setTerms] = useState(customer?.payment_terms_days == null ? "" : String(customer.payment_terms_days));
+  // A registered customer's state is fixed by their GSTIN.
+  const gstinState = /^\d{2}/.test(gstin.trim()) && gstin.trim().length === 15 ? gstin.trim().slice(0, 2) : "";
+  const gstFields = {
+    billing_address: billing,
+    shipping_address: shipping,
+    state_code: gstinState || state,
+    payment_terms_days: terms === "" ? null : Number(terms),
+  };
   const customFields = useCustomFields("customer");
   const [custom, setCustom] = useState<CustomValues>(customer?.custom ?? {});
   const [error, setError] = useState<string | null>(null);
@@ -291,6 +304,7 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
           gstin,
           tags,
           custom: changedCustom(customer.custom, custom),
+          ...gstFields,
         });
       } else {
         await createCustomer({
@@ -300,6 +314,7 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
           tags,
           custom,
           allow_duplicate: allowDuplicate,
+          ...gstFields,
         });
       }
       onDone();
@@ -331,6 +346,22 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
             placeholder="e.g. 32ABCDE1234F1Z9"
             style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
           />
+        </label>
+        <label className="field">
+          <span>State (place of supply)</span>
+          <StateSelect value={gstinState || state} onChange={setState} disabled={Boolean(gstinState)} />
+        </label>
+        <label className="field">
+          <span>Payment terms (days)</span>
+          <input type="number" min={0} max={365} value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="Company default" />
+        </label>
+        <label className="field full">
+          <span>Billing address</span>
+          <textarea rows={2} value={billing} onChange={(e) => setBilling(e.target.value)} />
+        </label>
+        <label className="field full">
+          <span>Shipping address (if different)</span>
+          <textarea rows={2} value={shipping} onChange={(e) => setShipping(e.target.value)} />
         </label>
         <CustomFieldInputs fields={customFields} values={custom} onChange={setCustom} />
         <div className="field full">

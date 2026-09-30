@@ -8,6 +8,7 @@ neither can bypass pricing, stock or discount-policy rules.
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import Integer, cast, func, select
@@ -15,7 +16,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
+from app.domain import tax
 from app.models.sales import Customer, DocumentCounter, Item, Quotation, QuotationLine
+from app.models.tenant import Company
 
 DISCOUNT_AUTO_APPROVE_LIMIT_PCT = 2.0
 
@@ -30,7 +33,10 @@ class PricedLine:
     item: Item
     qty: float
     unit_price: float
-    line_total: float
+    line_total: float  # qty × price, before discount
+    gst_rate: float = 0
+    taxable_value: float = 0  # after discount
+    tax_amount: float = 0
 
 
 @dataclass
@@ -40,9 +46,52 @@ class QuotationPricing:
     subtotal: float
     discount_pct: float
     discount_amount: float
-    total: float
+    total: float  # after discount, before GST
     requires_approval: bool
     warnings: list[str]
+    place_of_supply: str = ""
+    interstate: bool = False
+    cgst: float = 0
+    sgst: float = 0
+    igst: float = 0
+    round_off: float = 0
+    grand_total: float = 0  # what the customer pays
+
+
+def company_of(db: Session, context: RequestContext) -> Company:
+    return db.get(Company, context.company_id)
+
+
+def item_rate(item: Item, warnings: list[str], *, required: bool) -> Decimal:
+    """The item's GST rate. Missing: an error on tax documents, a warning (and
+    no tax) on quotations."""
+
+    if item.gst_rate is not None:
+        return Decimal(str(item.gst_rate))
+    if required:
+        raise DomainValidationError(f"Set the GST rate for {item.name} (Inventory → Items) first.")
+    warnings.append(f"{item.name} has no GST rate yet, so no tax is added for it.")
+    return Decimal("0")
+
+
+def apply_tax(
+    company: Company, customer: Customer, lines: list[PricedLine], discount_pct: float, warnings: list[str],
+    *, rates_required: bool = False,
+) -> tuple[tax.DocumentTax, str, bool]:
+    """Works out GST for priced lines in place; returns the totals, place of supply and interstate flag."""
+
+    pos, interstate, notes = tax.place_of_supply(company.state_code or "", customer.state_code or "")
+    warnings.extend(notes)
+    rates = [item_rate(line.item, warnings, required=rates_required) for line in lines]
+    result = tax.compute(
+        [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), r) for l, r in zip(lines, rates)],
+        discount_pct, interstate,
+    )
+    for line, rate, worked in zip(lines, rates, result.lines):
+        line.gst_rate = float(rate)
+        line.taxable_value = float(worked.taxable)
+        line.tax_amount = float(worked.tax)
+    return result, pos, interstate
 
 
 def find_customer_by_name(db: Session, context: RequestContext, name: str) -> Customer:
@@ -93,14 +142,16 @@ def price_quotation(
         if float(item.stock_qty) < qty:
             warnings.append(f"{item.name}: only {item.stock_qty} {item.uom} in stock, {qty} requested.")
         unit_price = float(item.unit_price)
-        priced_lines.append(PricedLine(item=item, qty=qty, unit_price=unit_price, line_total=qty * unit_price))
+        priced_lines.append(PricedLine(item=item, qty=qty, unit_price=unit_price, line_total=float(tax.money(qty * unit_price))))
 
     if not priced_lines:
         raise DomainValidationError("A quotation needs at least one line item.")
 
-    subtotal = sum(line.line_total for line in priced_lines)
-    discount_amount = subtotal * (discount_pct / 100)
-    total = subtotal - discount_amount
+    worked, pos, interstate = apply_tax(company_of(db, context), customer, priced_lines, discount_pct, warnings)
+    subtotal = float(worked.subtotal)
+    discount_amount = float(worked.discount_amount)
+    total = float(worked.taxable)
+    grand_total = float(worked.grand_total)
 
     requires_approval = discount_pct > DISCOUNT_AUTO_APPROVE_LIMIT_PCT
     if requires_approval:
@@ -109,9 +160,9 @@ def price_quotation(
             "auto-approve limit — this will route to the Sales Manager for approval."
         )
 
-    if float(customer.credit_limit) and total > float(customer.credit_limit):
+    if float(customer.credit_limit) and grand_total > float(customer.credit_limit):
         warnings.append(
-            f"Total ₹{total:,.2f} exceeds {customer.name}'s credit limit of ₹{float(customer.credit_limit):,.2f}."
+            f"Total ₹{grand_total:,.2f} (with GST) exceeds {customer.name}'s credit limit of ₹{float(customer.credit_limit):,.2f}."
         )
 
     return QuotationPricing(
@@ -123,6 +174,13 @@ def price_quotation(
         total=total,
         requires_approval=requires_approval,
         warnings=warnings,
+        place_of_supply=pos,
+        interstate=interstate,
+        cgst=float(worked.cgst),
+        sgst=float(worked.sgst),
+        igst=float(worked.igst),
+        round_off=float(worked.round_off),
+        grand_total=grand_total,
     )
 
 
@@ -165,6 +223,12 @@ def persist_quotation(
         subtotal=pricing.subtotal,
         discount_pct=pricing.discount_pct,
         total=pricing.total,
+        place_of_supply=pricing.place_of_supply,
+        cgst=pricing.cgst,
+        sgst=pricing.sgst,
+        igst=pricing.igst,
+        round_off=pricing.round_off,
+        grand_total=pricing.grand_total,
         status="Pending approval" if pricing.requires_approval else "Draft",
         created_by=created_by,
     )
@@ -175,6 +239,10 @@ def persist_quotation(
                 qty=line.qty,
                 unit_price=line.unit_price,
                 line_total=line.line_total,
+                hsn_code=line.item.hsn_code or "",
+                gst_rate=line.gst_rate,
+                taxable_value=line.taxable_value,
+                tax_amount=line.tax_amount,
             )
         )
     db.add(quotation)

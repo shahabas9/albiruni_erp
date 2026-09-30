@@ -112,7 +112,10 @@ export function CustomerPage() {
           <p className="page-sub">
             <span className={`badge ${c.active ? "status-confirmed" : "status-draft"}`}>{c.active ? "Active" : "Inactive"}</span>{" "}
             {c.gstin ? <span className="mono">GSTIN {c.gstin}</span> : "Unregistered for GST"} · Credit limit {inr(c.credit_limit)}
+            {c.state_code ? ` · State ${c.state_code}` : ""}
+            {c.payment_terms_days != null ? ` · Pays in ${c.payment_terms_days} days` : ""}
           </p>
+          {c.billing_address && <p className="page-sub" style={{ whiteSpace: "pre-line" }}>{c.billing_address}</p>}
           <TagChips tags={c.tags} />
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

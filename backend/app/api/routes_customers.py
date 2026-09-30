@@ -20,7 +20,9 @@ router = APIRouter(prefix="/api/customers", tags=["customers"])
 def _to_out(c) -> CustomerOut:
     return CustomerOut(
         id=c.id, name=c.name, credit_limit=float(c.credit_limit), active=c.active, gstin=c.gstin,
-        tags=list(c.tags or []), custom=dict(c.custom or {}),
+        tags=list(c.tags or []), custom=dict(c.custom or {}), billing_address=c.billing_address or "",
+        shipping_address=c.shipping_address or "", state_code=c.state_code or "",
+        payment_terms_days=c.payment_terms_days,
     )
 
 

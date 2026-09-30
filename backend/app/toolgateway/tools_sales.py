@@ -33,7 +33,7 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
         raise ToolValidationError(str(exc)) from exc
 
     expected_total = args.get("expected_total")
-    if expected_total is not None and abs(float(expected_total) - pricing.total) > 0.01:
+    if expected_total is not None and abs(float(expected_total) - pricing.grand_total) > 0.01:
         raise ToolValidationError(
             "Figures changed since this was previewed (price or stock moved) — please ask again for a fresh preview."
         )
@@ -51,7 +51,7 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
         moved = f"; stage {stage_before} → {opportunity.stage}" if opportunity.stage != stage_before else ""
         history.record(
             db, context, "opportunity", opportunity.id, "quotation_created",
-            f"Quotation {quotation.number} raised (₹{pricing.total:,.0f}){moved}",
+            f"Quotation {quotation.number} raised (₹{pricing.total:,.0f} before GST){moved}",
             {"stage": [stage_before, opportunity.stage]} if moved else None,
         )
 
@@ -63,6 +63,7 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
         "subtotal": pricing.subtotal,
         "discount_pct": pricing.discount_pct,
         "total": pricing.total,
+        "grand_total": pricing.grand_total,
         "warnings": pricing.warnings,
         "requires_approval": pricing.requires_approval,
         "opportunity_id": str(opportunity.id) if opportunity is not None else None,

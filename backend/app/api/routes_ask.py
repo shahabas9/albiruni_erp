@@ -76,7 +76,7 @@ def ask(
         "customer_name": parsed.customer_name,
         "lines": parsed.lines,
         "discount_pct": parsed.discount_pct,
-        "expected_total": pricing.total,
+        "expected_total": pricing.grand_total,
     }
     preview = PendingPreview(
         user_id=context.user.id,
@@ -109,6 +109,11 @@ def ask(
         "discount_pct": pricing.discount_pct,
         "discount_amount": pricing.discount_amount,
         "total": pricing.total,
+        "cgst": pricing.cgst,
+        "sgst": pricing.sgst,
+        "igst": pricing.igst,
+        "round_off": pricing.round_off,
+        "grand_total": pricing.grand_total,
         "requires_approval": pricing.requires_approval,
         "warnings": pricing.warnings,
     }

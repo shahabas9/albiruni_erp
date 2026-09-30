@@ -358,3 +358,31 @@ To run the CRM integration tests, supply an empty disposable PostgreSQL
 CRM_TEST_DB=1 DATABASE_URL=postgresql+psycopg://USER:PASS@localhost/TEST_DB \
   .venv/bin/python -m unittest discover -s tests -v
 ```
+
+## Sales cycle
+
+Quotation → sales order → delivery → tax invoice → payment, with Indian GST
+worked out the same way on every document (`app/domain/tax.py`, pure
+functions with their own unit tests).
+
+### GST
+
+- **Prices exclude GST.** A document's discount comes off each line first,
+  then tax is added per line and rounded to the paisa; the grand total is
+  rounded to the rupee and the difference shown as round-off.
+- **CGST + SGST or IGST** depends on the place of supply: the customer's GST
+  state against the company's. A registered customer's state is the first two
+  digits of their GSTIN and can't be set to anything else; an unregistered
+  customer's state is picked by hand. A customer with no state is treated as
+  a sale within your own state (over the counter), with a warning.
+- **Company & GST** (`GET/PUT /api/sales/company`, needs `sales.settings.write`
+  to change): legal name, GSTIN, state, address, bank details, invoice terms,
+  default payment terms and whether deliveries may take stock below zero.
+  `GET /api/sales/states` lists GST state codes.
+- **Items** carry `kind` (goods move stock, services don't), an HSN/SAC code
+  (4, 6 or 8 digits) and `gst_rate` (0, 0.25, 3, 5, 12, 18, 28 or 40). A
+  quotation for an item with no rate warns and adds no tax for it.
+- Quotations keep `total` as the value after discount and before GST (what the
+  CRM counts as the deal's worth) and add `cgst`, `sgst`, `igst`, `round_off`
+  and `grand_total`. Quotations made before GST existed keep a grand total
+  equal to their old total.

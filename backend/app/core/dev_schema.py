@@ -58,7 +58,36 @@ def ensure_dev_schema() -> None:
                 # No default here: existing rows must be backfilled from created_at, not "now".
                 "stage_changed_at": "TIMESTAMPTZ",
             },
-            "customers": {"gstin": "VARCHAR(15) NOT NULL DEFAULT ''"},
+            "customers": {
+                "gstin": "VARCHAR(15) NOT NULL DEFAULT ''",
+                "billing_address": "TEXT NOT NULL DEFAULT ''",
+                "shipping_address": "TEXT NOT NULL DEFAULT ''",
+                "state_code": "VARCHAR(2) NOT NULL DEFAULT ''",
+                "payment_terms_days": "INTEGER",
+            },
+            "companies": {
+                "legal_name": "VARCHAR(160) NOT NULL DEFAULT ''",
+                "gstin": "VARCHAR(15) NOT NULL DEFAULT ''",
+                "state_code": "VARCHAR(2) NOT NULL DEFAULT ''",
+                "address": "TEXT NOT NULL DEFAULT ''",
+                "phone": "VARCHAR(40) NOT NULL DEFAULT ''",
+                "email": "VARCHAR(160) NOT NULL DEFAULT ''",
+                "bank_details": "TEXT NOT NULL DEFAULT ''",
+                "invoice_terms": "TEXT NOT NULL DEFAULT ''",
+                "payment_terms_days": "INTEGER NOT NULL DEFAULT 30",
+                "allow_negative_stock": "BOOLEAN NOT NULL DEFAULT FALSE",
+            },
+            "items": {
+                "kind": "VARCHAR(10) NOT NULL DEFAULT 'goods'",
+                "hsn_code": "VARCHAR(8) NOT NULL DEFAULT ''",
+                "gst_rate": "NUMERIC(5, 2)",
+            },
+            "quotation_lines": {
+                "hsn_code": "VARCHAR(8) NOT NULL DEFAULT ''",
+                "gst_rate": "NUMERIC(5, 2) NOT NULL DEFAULT 0",
+                "taxable_value": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
+                "tax_amount": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
+            },
             "activities": {
                 "notes": "TEXT NOT NULL DEFAULT ''",
                 "due_date": "DATE", "due_at": "TIMESTAMPTZ",
@@ -68,7 +97,15 @@ def ensure_dev_schema() -> None:
                 "owner_id": "UUID REFERENCES users(id)",
                 "overdue_notified_at": "TIMESTAMPTZ",
             },
-            "quotations": {"opportunity_id": "UUID REFERENCES opportunities(id)"},
+            "quotations": {
+                "opportunity_id": "UUID REFERENCES opportunities(id)",
+                "place_of_supply": "VARCHAR(2) NOT NULL DEFAULT ''",
+                "cgst": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
+                "sgst": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
+                "igst": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
+                "round_off": "NUMERIC(6, 2) NOT NULL DEFAULT 0",
+                "grand_total": "NUMERIC(14, 2) NOT NULL DEFAULT 0",
+            },
             "crm_settings": {
                 "lead_rotation": "JSONB NOT NULL DEFAULT '{}'::jsonb",
                 "web_form": "JSONB NOT NULL DEFAULT '{}'::jsonb",
@@ -164,3 +201,11 @@ def ensure_dev_schema() -> None:
                 WHERE ('crm.lead.read' = ANY(permissions) OR 'crm.opportunity.read' = ANY(permissions))
                   AND NOT 'crm.records.all' = ANY(permissions)
             """))
+
+        if once("quotations-without-gst"):
+            # Quotations from before GST was worked out carried no tax: what
+            # the customer was quoted is the pre-tax total.
+            conn.execute(text("UPDATE quotations SET grand_total = total WHERE grand_total = 0"))
+            conn.execute(text("UPDATE quotation_lines SET taxable_value = line_total WHERE taxable_value = 0"))
+        if once("customer-state-from-gstin"):
+            conn.execute(text("UPDATE customers SET state_code = left(gstin, 2) WHERE gstin <> '' AND state_code = ''"))

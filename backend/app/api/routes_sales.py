@@ -1,14 +1,19 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.orchestrator import new_correlation_id
+from app.api.routes_items import _to_out as item_out
 from app.core.database import get_db
-from app.core.deps import RequestContext, require_permission
+from app.core.deps import RequestContext, require_any_permission, require_permission
+from app.domain import sales_settings, tax
+from app.domain.errors import ConflictError
 from app.models.sales import Item, Quotation
-from app.schemas.sales import CreateQuotationIn, ItemOut, QuotationLineOut, QuotationOut
+from app.schemas.sales import (
+    CompanyProfile, CompanyProfileUpdate, CreateQuotationIn, ItemOut, QuotationLineOut, QuotationOut, StateOut,
+)
 from app.toolgateway.executor import execute_tool
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
@@ -24,6 +29,12 @@ def to_quotation_out(q: Quotation) -> QuotationOut:
         subtotal=float(q.subtotal),
         discount_pct=float(q.discount_pct),
         total=float(q.total),
+        place_of_supply=q.place_of_supply or "",
+        cgst=float(q.cgst),
+        sgst=float(q.sgst),
+        igst=float(q.igst),
+        round_off=float(q.round_off),
+        grand_total=float(q.grand_total),
         status=q.status,
         created_at=q.created_at,
         lines=[
@@ -32,6 +43,10 @@ def to_quotation_out(q: Quotation) -> QuotationOut:
                 qty=float(line.qty),
                 unit_price=float(line.unit_price),
                 line_total=float(line.line_total),
+                hsn_code=line.hsn_code or "",
+                gst_rate=float(line.gst_rate),
+                taxable_value=float(line.taxable_value),
+                tax_amount=float(line.tax_amount),
             )
             for line in q.lines
         ],
@@ -69,12 +84,7 @@ def list_items(
         .where(Item.tenant_id == context.tenant_id, Item.company_id == context.company_id)
         .order_by(Item.name)
     )
-    return [
-        ItemOut(
-            id=i.id, sku=i.sku, name=i.name, uom=i.uom, unit_price=float(i.unit_price), stock_qty=float(i.stock_qty)
-        )
-        for i in db.execute(stmt).scalars()
-    ]
+    return [item_out(i) for i in db.execute(stmt).scalars()]
 
 
 @router.post("/quotations")
@@ -104,3 +114,33 @@ def create_quotation(
         correlation_id=new_correlation_id(),
         confirmed=True,
     )
+
+
+# --- Company & GST ---------------------------------------------------------------
+
+
+@router.get("/states", response_model=list[StateOut])
+def list_states():
+    """GST state codes, for pickers."""
+
+    return [StateOut(code=code, name=name) for code, name in tax.STATES.items()]
+
+
+@router.get("/company", response_model=CompanyProfile)
+def get_company_profile(
+    context: RequestContext = Depends(require_any_permission("sales.quotation.read", "sales.settings.write")),
+    db: Session = Depends(get_db),
+):
+    return sales_settings.profile(db, context)
+
+
+@router.put("/company", response_model=CompanyProfile)
+def update_company_profile(
+    body: CompanyProfileUpdate,
+    context: RequestContext = Depends(require_permission("sales.settings.write")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return sales_settings.update_profile(db, context, body)
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

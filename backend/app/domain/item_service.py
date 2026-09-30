@@ -44,6 +44,9 @@ def create_item(db: Session, context: RequestContext, body: ItemIn) -> Item:
         uom=body.uom,
         unit_price=body.unit_price,
         stock_qty=body.stock_qty,
+        kind=body.kind,
+        hsn_code=body.hsn_code,
+        gst_rate=body.gst_rate,
     )
     db.add(item)
     db.commit()
