@@ -25,6 +25,8 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { ExportButton } from "../components/ExportButton";
 import { Attachments } from "../crm/Attachments";
 import { BulkBar, useSelection, type BulkActionDef } from "../crm/BulkBar";
@@ -76,10 +78,16 @@ export function Leads() {
       .then(setHistoryFor)
       .catch(() => setError("That lead isn't available — it may have been reassigned or removed."));
   }, [linkedLead]);
-  const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
-  const [status, setStatus] = useState(params.get("status") ?? "");
-  const [tag, setTag] = useState(params.get("tag") ?? "");
-  const [search, setSearch] = useState("");
+  // Filters from a link (dashboard, alert, Ask ERP) win; otherwise the page opens as you left it.
+  const [saved] = useState(() =>
+    ["owner", "status", "tag"].some((k) => params.has(k)) ? {} : recallFilters("leads"),
+  );
+  const [owner, setOwner] = useState<OwnerFilter>(
+    (params.get("owner") as OwnerFilter) || (saved.owner as OwnerFilter) || "all",
+  );
+  const [status, setStatus] = useState(params.get("status") ?? String(saved.status ?? ""));
+  const [tag, setTag] = useState(params.get("tag") ?? String(saved.tag ?? ""));
+  const [search, setSearch] = useState(String(saved.search ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
   const { version, assignees, refresh: reload, can } = useAppData();
@@ -145,6 +153,16 @@ export function Leads() {
             </option>
           ))}
         </select>
+        <SavedViews
+          page="leads"
+          filters={{ owner, status, tag, search }}
+          onApply={(f) => {
+            setOwner(((f.owner as OwnerFilter) || "all") as OwnerFilter);
+            setStatus(String(f.status ?? ""));
+            setTag(String(f.tag ?? ""));
+            setSearch(String(f.search ?? ""));
+          }}
+        />
         <TagFilter recordType="lead" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, company, phone, email" />
         <ExportButton

@@ -2,6 +2,8 @@ import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, createContact, deleteContact, fetchContacts, updateContact, type Contact } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { ExportButton } from "../components/ExportButton";
 import { ContactActions } from "../crm/ContactActions";
 import { Pager, SearchBox } from "../crm/ui";
@@ -13,7 +15,7 @@ export function Contacts() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => String(recallFilters("contacts").search ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const list = usePaged((limit, offset) => fetchContacts({ q: search, limit, offset }), search, version);
   const contacts = list.rows;
@@ -30,6 +32,7 @@ export function Contacts() {
       {(list.error ?? exportError) && <div className="error-banner">{list.error ?? exportError}</div>}
 
       <div className="toolbar">
+        <SavedViews page="contacts" filters={{ search }} onApply={(f) => setSearch(String(f.search ?? ""))} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, customer, phone, email" />
         <ExportButton kind="contacts" filters={{ q: search }} onError={setExportError} />
         <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>

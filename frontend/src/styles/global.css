@@ -3406,3 +3406,58 @@ tr.selected td {
   padding-left: 18px;
   font-weight: 500;
 }
+
+/* ================= Saved views ================= */
+
+.views-menu {
+  position: relative;
+}
+
+.views-pop {
+  right: auto;
+  left: 0;
+  width: min(300px, calc(100vw - 32px));
+}
+
+.view-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.view-row > button:first-child {
+  flex: 1;
+  display: grid;
+  text-align: left;
+}
+
+.view-row > button.on b {
+  color: var(--accent-text);
+}
+
+.view-row small {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
+.views-save {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+
+.views-save input:not([type="checkbox"]) {
+  font-size: 13.5px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.views-save .link-btn {
+  padding: 0;
+  text-align: left;
+}

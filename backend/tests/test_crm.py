@@ -996,6 +996,40 @@ class CrmTests(unittest.TestCase):
         rep = self.make_context(["crm.lead.read"], *self._tenant_and_company())
         self.assertEqual(self.ask("show vip leads", rep)["items"], [])
 
+    # --- Saved views ----------------------------------------------------------------
+
+    def test_saved_views_are_private_unless_shared(self):
+        from app.api import routes_views
+
+        me = self.context
+        colleague = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        mine = routes_views.create_view(routes_views.ViewIn(page="leads", name="My export leads",
+                                                            filters={"owner": "mine", "tag": "export"}), me, self.db)
+        shared = routes_views.create_view(routes_views.ViewIn(page="leads", name="Hot this week",
+                                                              filters={"tag": "hot"}, shared=True), me, self.db)
+        self.assertEqual([v.name for v in routes_views.list_views("leads", me, self.db)], ["Hot this week", "My export leads"])
+        theirs = routes_views.list_views("leads", colleague, self.db)
+        self.assertEqual([(v.name, v.mine) for v in theirs], [("Hot this week", False)])
+        self.assertEqual(routes_views.list_views("opportunities", me, self.db), [])
+
+        with self.assertRaises(HTTPException) as dup:
+            routes_views.create_view(routes_views.ViewIn(page="leads", name="my export LEADS"), me, self.db)
+        self.assertEqual(dup.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as not_owner:
+            routes_views.update_view(shared.id, routes_views.ViewUpdate(name="Mine now"), colleague, self.db)
+        self.assertEqual(not_owner.exception.status_code, 403)
+        with self.assertRaises(HTTPException):
+            routes_views.delete_view(shared.id, colleague, self.db)
+        with self.assertRaises(ValidationError):
+            routes_views.ViewIn(page="leads", name="Bad", filters={"q": {"nested": 1}})
+
+        routes_views.update_view(mine.id, routes_views.ViewUpdate(shared=True), me, self.db)
+        self.assertEqual(len(routes_views.list_views("leads", colleague, self.db)), 2)
+        routes_views.delete_view(mine.id, me, self.db)
+        other_company = self.make_context(["*"])
+        with self.assertRaises(HTTPException):
+            routes_views.delete_view(shared.id, other_company, self.db)
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

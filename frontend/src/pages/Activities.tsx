@@ -13,6 +13,8 @@ import {
   type ActivityType,
 } from "../api/client";
 import { ExportButton } from "../components/ExportButton";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { Pager, SearchBox } from "../crm/ui";
@@ -32,9 +34,16 @@ export function Activities() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [params, setParams] = useSearchParams();
+  const [saved] = useState(() => (params.has("show") ? {} : recallFilters("activities")));
   const show = (params.get("show") as Show) || "open";
   const setShow = (next: Show) => setParams(next === "open" ? {} : { show: next }, { replace: true });
-  const [mine, setMine] = useState(false);
+  const [mine, setMine] = useState(saved.mine === true);
+  // Arriving without a ?show=: reopen the tab you left, once.
+  useEffect(() => {
+    const remembered = saved.show as Show | undefined;
+    if (!params.has("show") && remembered && remembered !== "open") setShow(remembered);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Overdue status and ordering (overdue first, then soonest due) come from the API.
   const { crm, version, refresh: refreshShared, can } = useAppData();
   const openOpp = useOpenOpportunity();
@@ -87,6 +96,14 @@ export function Activities() {
             Mine
           </button>
         </div>
+        <SavedViews
+          page="activities"
+          filters={{ show, mine }}
+          onApply={(f) => {
+            setShow(((f.show as Show) || "open") as Show);
+            setMine(f.mine === true);
+          }}
+        />
         <ExportButton kind="activities" filters={{ show, owner: mine ? "me" : "" }} onError={setError} />
         {can("crm.activity.write") && (
           <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>

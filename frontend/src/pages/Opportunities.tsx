@@ -13,6 +13,8 @@ import {
   type OpportunityStage,
 } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { ExportButton } from "../components/ExportButton";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
@@ -31,14 +33,17 @@ export function Opportunities() {
   const [params] = useSearchParams();
   const [showForm, setShowForm] = useState(params.get("new") === "1");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [saved] = useState(() =>
+    ["stale", "stage", "tag"].some((k) => params.has(k)) ? {} : recallFilters("opportunities"),
+  );
   const [stageFilter, setStageFilter] = useState<"all" | "stale" | OpportunityStage>(() => {
     if (params.get("stale") === "1") return "stale";
-    const stage = params.get("stage") as OpportunityStage | null;
-    return stage && OPPORTUNITY_STAGES.includes(stage) ? stage : "all";
+    const stage = (params.get("stage") ?? saved.stage) as OpportunityStage | "stale" | null;
+    return stage === "stale" ? "stale" : stage && OPPORTUNITY_STAGES.includes(stage) ? stage : "all";
   });
-  const [owner, setOwner] = useState<OwnerFilter>("all");
-  const [search, setSearch] = useState("");
-  const [tag, setTag] = useState(params.get("tag") ?? "");
+  const [owner, setOwner] = useState<OwnerFilter>((saved.owner as OwnerFilter) || "all");
+  const [search, setSearch] = useState(String(saved.search ?? ""));
+  const [tag, setTag] = useState(params.get("tag") ?? String(saved.tag ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
   const { crm, version, assignees, refresh: reload, can } = useAppData();
@@ -133,6 +138,17 @@ export function Opportunities() {
             </button>
           ))}
         </div>
+        <SavedViews
+          page="opportunities"
+          filters={{ stage: stageFilter, owner, tag, search }}
+          onApply={(f) => {
+            const stage = String(f.stage ?? "all");
+            setStageFilter(stage === "stale" || OPPORTUNITY_STAGES.includes(stage as OpportunityStage) ? (stage as OpportunityStage) : "all");
+            setOwner(((f.owner as OwnerFilter) || "all") as OwnerFilter);
+            setTag(String(f.tag ?? ""));
+            setSearch(String(f.search ?? ""));
+          }}
+        />
         <TagFilter recordType="opportunity" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search deal or customer" />
         <ExportButton

@@ -226,6 +226,14 @@ goes through the same service call (rules, visibility, history); refused
 records are skipped and listed with the reason. A bulk reassignment sends
 the new owner one summary notification.
 
+**Saved views.** `GET /api/views?page=`, `POST /api/views`,
+`PATCH`/`DELETE /api/views/{id}` store named filter sets for the leads,
+opportunities, customers, contacts and activities lists — private, or shared
+with the company. Only the owner can change a view; the owner or a CRM admin
+(`crm.settings.write`) can delete it. Views hold filters only, so record
+visibility still applies to whoever opens one. The web app also remembers
+each list's last filters in the browser; filters in a link take precedence.
+
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return
 the total matching count in `X-Total-Count`: leads `q` (every word must

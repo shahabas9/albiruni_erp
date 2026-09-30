@@ -10,6 +10,8 @@ import {
   mergeCustomers,
   updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { ExportButton } from "../components/ExportButton";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { Attachments } from "../crm/Attachments";
@@ -27,10 +29,11 @@ export function Customers() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
+  const [saved] = useState(() => recallFilters("customers"));
+  const [search, setSearch] = useState(String(saved.search ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
-  const [active, setActive] = useState<ActiveFilter>("all");
-  const [tag, setTag] = useState("");
+  const [active, setActive] = useState<ActiveFilter>((saved.active as ActiveFilter) || "all");
+  const [tag, setTag] = useState(String(saved.tag ?? ""));
   const [filesFor, setFilesFor] = useState<Customer | null>(null);
   const [findingDupes, setFindingDupes] = useState(false);
 
@@ -89,6 +92,15 @@ export function Customers() {
             </button>
           ))}
         </div>
+        <SavedViews
+          page="customers"
+          filters={{ active, tag, search }}
+          onApply={(f) => {
+            setActive(((f.active as ActiveFilter) || "all") as ActiveFilter);
+            setTag(String(f.tag ?? ""));
+            setSearch(String(f.search ?? ""));
+          }}
+        />
         <TagFilter recordType="customer" value={tag} onChange={setTag} version={version + saves} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name or GSTIN" />
         <ExportButton

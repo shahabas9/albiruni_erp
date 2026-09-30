@@ -1159,3 +1159,36 @@ export function bulkAction(
 ): Promise<BulkResult> {
   return request<BulkResult>(`/api/${list}/bulk`, { method: "POST", body: JSON.stringify(body) });
 }
+
+// --- Saved views ------------------------------------------------------------------
+
+export type ViewPage = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+export type ViewFilters = Record<string, string | boolean | number | null>;
+
+export interface SavedView {
+  id: string;
+  page: ViewPage;
+  name: string;
+  filters: ViewFilters;
+  shared: boolean;
+  /** Saved by me (so I can change or delete it). */
+  mine: boolean;
+  owner_name: string | null;
+  created_at: string;
+}
+
+export function fetchViews(page: ViewPage): Promise<SavedView[]> {
+  return request<SavedView[]>(`/api/views${query({ page })}`);
+}
+
+export function createView(body: { page: ViewPage; name: string; filters: ViewFilters; shared: boolean }): Promise<SavedView> {
+  return request<SavedView>("/api/views", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateView(id: string, body: Partial<{ name: string; filters: ViewFilters; shared: boolean }>): Promise<SavedView> {
+  return request<SavedView>(`/api/views/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function deleteView(id: string): Promise<void> {
+  return request<void>(`/api/views/${id}`, { method: "DELETE" });
+}

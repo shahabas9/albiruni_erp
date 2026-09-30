@@ -29,6 +29,7 @@ from app.api import (
     routes_public,
     routes_sales,
     routes_setup,
+    routes_views,
 )
 
 # Import tool modules for their registration side effect (each module calls
@@ -88,6 +89,7 @@ app.include_router(routes_attachments.router)
 app.include_router(routes_public.router)
 app.include_router(routes_notifications.router)
 app.include_router(routes_exports.router)
+app.include_router(routes_views.router)
 
 
 @app.get("/api/health")

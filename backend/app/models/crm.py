@@ -265,3 +265,22 @@ class Notification(Base):
     email_status: Mapped[str] = mapped_column(String(12), default="pending")
     email_attempts: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SavedView(Base):
+    """A named set of list filters. Private to its owner unless shared with
+    the company. It only stores filters, so record visibility still applies
+    to whoever opens it."""
+
+    __tablename__ = "saved_views"
+    __table_args__ = (Index("ix_saved_views_page", "company_id", "page"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    page: Mapped[str] = mapped_column(String(20))  # leads | opportunities | customers | contacts | activities
+    name: Mapped[str] = mapped_column(String(60))
+    filters: Mapped[dict] = mapped_column(JSONB, default=dict)
+    shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
