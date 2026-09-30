@@ -446,6 +446,7 @@ export const KNOWN_PERMISSIONS = [
   "sales.delivery.write",
   "sales.invoice.read",
   "sales.invoice.write",
+  "sales.credit_note.write",
   "inventory.stock.adjust",
   "inventory.item.read",
   "inventory.item.write",

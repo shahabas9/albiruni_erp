@@ -256,6 +256,8 @@ export interface InvoiceLine {
   sgst: number;
   igst: number;
   credited_qty: number;
+  /** Taxable value already credited (returns and price corrections). */
+  credited_value: number;
 }
 
 export interface HsnRow {
@@ -268,7 +270,7 @@ export interface HsnRow {
   igst: number;
 }
 
-export type PaymentStatus = "Draft" | "Unpaid" | "Partly paid" | "Paid" | "Overdue";
+export type PaymentStatus = "Draft" | "Unpaid" | "Partly paid" | "Paid" | "Overdue" | "Credited";
 
 export interface Invoice extends TaxTotals {
   id: string;
@@ -345,4 +347,58 @@ export function deleteInvoice(id: string): Promise<void> {
 
 export function issueInvoice(id: string, invoiceDate?: string): Promise<Invoice> {
   return request<Invoice>(`/api/sales/invoices/${id}/issue`, { method: "POST", body: JSON.stringify({ invoice_date: invoiceDate ?? null }) });
+}
+
+// --- Credit notes ----------------------------------------------------------------
+
+export interface CreditNote {
+  id: string;
+  number: string;
+  invoice_id: string;
+  invoice_number: string;
+  invoice_date: string;
+  customer_id: string;
+  customer_name: string;
+  buyer_gstin: string;
+  billing_address: string;
+  place_of_supply: string;
+  place_of_supply_name: string;
+  seller_name: string;
+  seller_gstin: string;
+  seller_address: string;
+  note_date: string;
+  kind: "Return" | "Price correction";
+  reason: string;
+  restocked: boolean;
+  total: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  round_off: number;
+  grand_total: number;
+  amount_in_words: string;
+  created_by_name: string | null;
+  created_at: string;
+  lines: { invoice_line_id: string; item_id: string; description: string; hsn_code: string; uom: string; qty: number; gst_rate: number; taxable_value: number; cgst: number; sgst: number; igst: number }[];
+}
+
+export interface CreditNoteInput {
+  kind: CreditNote["kind"];
+  reason: string;
+  /** Returns: qty. Price corrections: amount (taxable value; GST added on top). */
+  lines: { invoice_line_id: string; qty?: number; amount?: number }[];
+  restock: boolean;
+  note_date?: string;
+}
+
+export function fetchCreditNotes(params: { invoice_id?: string; customer_id?: string; q?: string; limit?: number; offset?: number } = {}): Promise<Page<CreditNote>> {
+  return requestPage<CreditNote>("/api/sales/credit-notes", { ...params });
+}
+
+export function fetchCreditNote(id: string): Promise<CreditNote> {
+  return request<CreditNote>(`/api/sales/credit-notes/${id}`);
+}
+
+export function createCreditNote(invoiceId: string, body: CreditNoteInput): Promise<CreditNote> {
+  return request<CreditNote>(`/api/sales/invoices/${invoiceId}/credit-notes`, { method: "POST", body: JSON.stringify(body) });
 }

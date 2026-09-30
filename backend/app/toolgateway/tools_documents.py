@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import delivery_service, invoice_service, order_service
+from app.domain import credit_note_service, delivery_service, invoice_service, order_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -67,7 +67,21 @@ def issue_invoice(db: Session, context: RequestContext, args: dict[str, Any]) ->
                               f"(₹{float(invoice.grand_total):,.2f})"}
 
 
+@_guard
+def create_credit_note(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    note = credit_note_service.create_credit_note(
+        db, context, UUID(str(args["invoice_id"])), kind=args["kind"], reason=str(args.get("reason", "")),
+        lines=args["lines"], restock=bool(args.get("restock")),
+        note_date=date.fromisoformat(args["note_date"]) if args.get("note_date") else None,
+    )
+    return {"credit_note_id": str(note.id), "number": note.number,
+            "result_summary": f"Credit note {note.number} for ₹{float(note.grand_total):,.2f} "
+                              f"against {note.invoice.number} ({note.kind.lower()})"}
+
+
 for name, purpose, permission, handler in [
+    ("sales.create_credit_note.v1", "Credit part of an issued invoice: a return or a price correction.",
+     "sales.credit_note.write", create_credit_note),
     ("sales.issue_invoice.v1", "Issue a draft tax invoice: number it and lock it.", "sales.invoice.write",
      issue_invoice),
     ("sales.confirm_order.v1", "Confirm a draft sales order after discount and credit-limit checks.",

@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, history, invoice_service, tax
+from app.domain import credit_note_service, crm_service, history, invoice_service, tax
 from app.domain.errors import ConflictError, NotFoundError
-from app.models.documents import Invoice
+from app.models.documents import CreditNote, Invoice
 from app.models.identity import User
-from app.schemas.invoices import HsnRow, InvoiceDraftIn, InvoiceLineOut, InvoiceOut, IssueIn
+from app.schemas.invoices import (
+    CreditNoteIn, CreditNoteLineOut, CreditNoteOut, HsnRow, InvoiceDraftIn, InvoiceLineOut, InvoiceOut, IssueIn,
+)
 from app.toolgateway.executor import execute_tool
 
 router = APIRouter(prefix="/api/sales", tags=["invoices"])
@@ -52,6 +54,7 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
             hsn_code=l.hsn_code, uom=l.uom, qty=float(l.qty), unit_price=float(l.unit_price),
             gst_rate=float(l.gst_rate), amount=float(l.amount), taxable_value=float(l.taxable_value),
             cgst=float(l.cgst), sgst=float(l.sgst), igst=float(l.igst), credited_qty=float(l.credited_qty),
+            credited_value=float(l.credited_value),
         ) for l in inv.lines],
         hsn_summary=[HsnRow(**row) for row in invoice_service.hsn_summary(inv)],
     )
@@ -113,3 +116,66 @@ def issue_invoice(invoice_id: UUID, body: IssueIn, context: RequestContext = Dep
     execute_tool(db, context, "sales.issue_invoice.v1", args, request_text="[form] Issue invoice",
                  intent="issue_invoice", correlation_id=new_correlation_id(), confirmed=True)
     return invoice_out(db, _errors(lambda: invoice_service.get_invoice(db, context, invoice_id)))
+
+
+# --- Credit notes ----------------------------------------------------------------------
+
+
+def credit_note_out(db: Session, note: CreditNote) -> CreditNoteOut:
+    inv = note.invoice
+    by = db.get(User, note.created_by)
+    return CreditNoteOut(
+        id=note.id, number=note.number, invoice_id=inv.id, invoice_number=inv.number or "",
+        invoice_date=inv.invoice_date, customer_id=note.customer_id, customer_name=note.customer.name,
+        buyer_gstin=inv.buyer_gstin, billing_address=inv.billing_address, place_of_supply=inv.place_of_supply,
+        place_of_supply_name=tax.state_name(inv.place_of_supply), seller_name=inv.seller_name,
+        seller_gstin=inv.seller_gstin, seller_address=inv.seller_address, note_date=note.note_date, kind=note.kind,
+        reason=note.reason, restocked=note.restocked, total=float(note.total), cgst=float(note.cgst),
+        sgst=float(note.sgst), igst=float(note.igst), round_off=float(note.round_off),
+        grand_total=float(note.grand_total), amount_in_words=tax.amount_in_words(note.grand_total),
+        created_by_name=by.display_name if by else None, created_at=note.created_at,
+        lines=[CreditNoteLineOut(
+            invoice_line_id=l.invoice_line_id, item_id=l.item_id, description=l.description, hsn_code=l.hsn_code,
+            uom=l.uom, qty=float(l.qty), gst_rate=float(l.gst_rate), taxable_value=float(l.taxable_value),
+            cgst=float(l.cgst), sgst=float(l.sgst), igst=float(l.igst),
+        ) for l in note.lines],
+    )
+
+
+@router.get("/credit-notes", response_model=list[CreditNoteOut])
+def list_credit_notes(
+    response: Response,
+    invoice_id: UUID | None = None,
+    customer_id: UUID | None = None,
+    q: str = "",
+    limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
+    offset: int = Query(0, ge=0),
+    context: RequestContext = Depends(require_permission(READ)),
+    db: Session = Depends(get_db),
+):
+    rows, total = credit_note_service.list_credit_notes(db, context, invoice_id=invoice_id, customer_id=customer_id,
+                                                        q=q, limit=limit, offset=offset)
+    response.headers["X-Total-Count"] = str(total)
+    return [credit_note_out(db, n) for n in rows]
+
+
+@router.get("/credit-notes/{note_id}", response_model=CreditNoteOut)
+def get_credit_note(note_id: UUID, context: RequestContext = Depends(require_permission(READ)),
+                    db: Session = Depends(get_db)):
+    return credit_note_out(db, _errors(lambda: credit_note_service.get_credit_note(db, context, note_id)))
+
+
+@router.post("/invoices/{invoice_id}/credit-notes", response_model=CreditNoteOut)
+def create_credit_note(invoice_id: UUID, body: CreditNoteIn,
+                       context: RequestContext = Depends(require_permission("sales.credit_note.write")),
+                       db: Session = Depends(get_db)):
+    """Issued at once (CN/26-27/00001). Returns can put goods back in stock."""
+
+    args = {
+        "invoice_id": str(invoice_id), "kind": body.kind, "reason": body.reason, "restock": body.restock,
+        "note_date": body.note_date.isoformat() if body.note_date else None,
+        "lines": [{"invoice_line_id": str(l.invoice_line_id), "qty": l.qty, "amount": l.amount} for l in body.lines],
+    }
+    result = execute_tool(db, context, "sales.create_credit_note.v1", args, request_text="[form] Credit note",
+                          intent="create_credit_note", correlation_id=new_correlation_id(), confirmed=True)
+    return credit_note_out(db, credit_note_service.get_credit_note(db, context, UUID(result["credit_note_id"])))

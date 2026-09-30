@@ -56,7 +56,7 @@ export function quoteStatusClass(status: string): string {
 
 /** Badge class for any sales document status. */
 export function docStatusClass(status: string): string {
-  if (["Confirmed", "Delivered", "Issued", "Paid", "Accepted", "Sent", "Invoiced"].includes(status)) return "status-confirmed";
+  if (["Confirmed", "Delivered", "Issued", "Paid", "Accepted", "Sent", "Invoiced", "Credited"].includes(status)) return "status-confirmed";
   if (["Pending approval", "Partly delivered", "Partly paid", "Partly invoiced"].includes(status)) return "status-pending";
   if (["Cancelled", "Rejected", "Overdue", "Voided"].includes(status)) return "status-rejected";
   return "status-draft";

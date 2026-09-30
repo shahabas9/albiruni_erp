@@ -235,8 +235,64 @@ class InvoiceLine(Base):
     cgst: Mapped[float] = _money()
     sgst: Mapped[float] = _money()
     igst: Mapped[float] = _money()
-    # How much of this line credit notes have taken back.
+    # How much of this line credit notes have taken back: returned quantity,
+    # and taxable value (returns and price corrections together).
     credited_qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    credited_value: Mapped[float] = _money()
 
     invoice: Mapped["Invoice"] = relationship(back_populates="lines")
     item: Mapped["Item"] = relationship()  # noqa: F821
+
+
+class CreditNote(Base):
+    """Takes back part of an issued invoice: goods returned (optionally back
+    into stock) or a price corrected. Issued as soon as it's made."""
+
+    __tablename__ = "credit_notes"
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_credit_notes_tenant_number"),)
+
+    id: Mapped[uuid.UUID] = _id()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    number: Mapped[str] = mapped_column(String(16))
+    invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id"), index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
+    note_date: Mapped[date] = mapped_column(Date)
+    # Return or Price correction.
+    kind: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str] = mapped_column(String(200))
+    restocked: Mapped[bool] = mapped_column(default=False)
+    total: Mapped[float] = _money()  # taxable value
+    cgst: Mapped[float] = _money()
+    sgst: Mapped[float] = _money()
+    igst: Mapped[float] = _money()
+    round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
+    grand_total: Mapped[float] = _money()
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    lines: Mapped[list["CreditNoteLine"]] = relationship(back_populates="credit_note", cascade="all, delete-orphan")
+    invoice: Mapped["Invoice"] = relationship()
+    customer: Mapped["Customer"] = relationship()  # noqa: F821
+
+
+class CreditNoteLine(Base):
+    __tablename__ = "credit_note_lines"
+
+    id: Mapped[uuid.UUID] = _id()
+    credit_note_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("credit_notes.id", ondelete="CASCADE")
+    )
+    invoice_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("invoice_lines.id"))
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("items.id"))
+    description: Mapped[str] = mapped_column(String(200))
+    hsn_code: Mapped[str] = mapped_column(String(8), default="")
+    uom: Mapped[str] = mapped_column(String(20), default="")
+    qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # 0 for a price correction
+    gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    taxable_value: Mapped[float] = _money()
+    cgst: Mapped[float] = _money()
+    sgst: Mapped[float] = _money()
+    igst: Mapped[float] = _money()
+
+    credit_note: Mapped["CreditNote"] = relationship(back_populates="lines")

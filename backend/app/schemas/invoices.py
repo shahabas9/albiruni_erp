@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -36,6 +37,7 @@ class InvoiceLineOut(BaseModel):
     sgst: float
     igst: float
     credited_qty: float
+    credited_value: float
 
 
 class HsnRow(BaseModel):
@@ -93,3 +95,65 @@ class InvoiceOut(BaseModel):
     issued_by_name: str | None
     lines: list[InvoiceLineOut]
     hsn_summary: list[HsnRow]
+
+
+class CreditLineIn(BaseModel):
+    invoice_line_id: UUID
+    # Returns: the quantity coming back.
+    qty: float = Field(default=0, ge=0, le=10_000_000)
+    # Price corrections: taxable value to take off (GST is added on top).
+    amount: float = Field(default=0, ge=0, le=1_000_000_000)
+
+
+class CreditNoteIn(BaseModel):
+    kind: Literal["Return", "Price correction"]
+    reason: str = Field(min_length=1, max_length=200)
+    lines: list[CreditLineIn] = Field(min_length=1, max_length=200)
+    # Returns only: put the goods back into stock.
+    restock: bool = False
+    note_date: date | None = None
+
+
+class CreditNoteLineOut(BaseModel):
+    invoice_line_id: UUID
+    item_id: UUID
+    description: str
+    hsn_code: str
+    uom: str
+    qty: float
+    gst_rate: float
+    taxable_value: float
+    cgst: float
+    sgst: float
+    igst: float
+
+
+class CreditNoteOut(BaseModel):
+    id: UUID
+    number: str
+    invoice_id: UUID
+    invoice_number: str
+    invoice_date: date
+    customer_id: UUID
+    customer_name: str
+    buyer_gstin: str
+    billing_address: str
+    place_of_supply: str
+    place_of_supply_name: str
+    seller_name: str
+    seller_gstin: str
+    seller_address: str
+    note_date: date
+    kind: str
+    reason: str
+    restocked: bool
+    total: float
+    cgst: float
+    sgst: float
+    igst: float
+    round_off: float
+    grand_total: float
+    amount_in_words: str
+    created_by_name: str | None
+    created_at: datetime
+    lines: list[CreditNoteLineOut]

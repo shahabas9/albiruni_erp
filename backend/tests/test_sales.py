@@ -19,7 +19,7 @@ from app.api import routes_deliveries, routes_invoices, routes_items, routes_ord
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import customer_service, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import credit_note_service, customer_service, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -28,7 +28,7 @@ from app.models.identity import Role, User
 from app.models.sales import Item
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
-from app.schemas.invoices import InvoiceDraftIn, InvoiceLineIn, IssueIn
+from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
 from app.schemas.items import ItemIn, ItemUpdate
 from app.schemas.orders import (
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
@@ -141,6 +141,14 @@ class SalesTestCase(unittest.TestCase):
         body = DeliveryIn(lines=[DeliveryLineIn(order_line_id=order.lines[i].id, qty=q)
                                  for i, q in quantities.items()], **fields)
         return routes_deliveries.create_delivery(order.id, body, context or self.context, self.db)
+
+    def draft(self, order, quantities=None, context=None):
+        lines = None if quantities is None else [
+            InvoiceLineIn(order_line_id=order.lines[i].id, qty=q) for i, q in quantities.items()]
+        return routes_invoices.create_draft(order.id, InvoiceDraftIn(lines=lines), context or self.context, self.db)
+
+    def issue(self, invoice, day=None, context=None):
+        return routes_invoices.issue_invoice(invoice.id, IssueIn(invoice_date=day), context or self.context, self.db)
 
 
 class GstTests(SalesTestCase):
@@ -428,14 +436,6 @@ class DeliveryTests(SalesTestCase):
 
 
 class InvoiceTests(SalesTestCase):
-    def draft(self, order, quantities=None, context=None):
-        lines = None if quantities is None else [
-            InvoiceLineIn(order_line_id=order.lines[i].id, qty=q) for i, q in quantities.items()]
-        return routes_invoices.create_draft(order.id, InvoiceDraftIn(lines=lines), context or self.context, self.db)
-
-    def issue(self, invoice, day=None, context=None):
-        return routes_invoices.issue_invoice(invoice.id, IssueIn(invoice_date=day), context or self.context, self.db)
-
     def test_invoice_what_was_delivered_then_lock_it(self):
         item = self.item(stock=100)
         customer = self.customer(gstin=KARNATAKA_GSTIN, payment_terms_days=15)
@@ -522,6 +522,81 @@ class InvoiceTests(SalesTestCase):
         self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).payment_status, "Overdue")
         listed = routes_invoices.list_invoices(Response(), "overdue", None, None, "", None, 0, self.context, self.db)
         self.assertEqual([i.id for i in listed], [invoice.id])
+
+
+
+class CreditNoteTests(SalesTestCase):
+    def credit(self, invoice, kind, lines, context=None, **fields):
+        body = CreditNoteIn(kind=kind, reason=fields.pop("reason", "Damaged in transit"),
+                            lines=[CreditLineIn(invoice_line_id=invoice.lines[i].id, **v) for i, v in lines.items()],
+                            **fields)
+        return routes_invoices.create_credit_note(invoice.id, body, context or self.context, self.db)
+
+    def issued(self, qty=4, stock=100, price=420):
+        item = self.item(stock=stock, price=price)
+        order = self.confirmed_order([{"item_id": item.id, "qty": qty}])
+        self.deliver(order, {0: qty})
+        return item, self.issue(self.draft(order))
+
+    def test_returns_credit_the_invoice_and_can_restock(self):
+        item, invoice = self.issued()  # 4 × 420 = 1,680 + 302.40 GST = 1,982
+        note = self.credit(invoice, "Return", {0: {"qty": 1}}, restock=True)
+        self.assertRegex(note.number, r"^CN/\d\d-\d\d/00001$")
+        self.assertEqual((note.total, note.cgst, note.sgst, note.grand_total), (420.0, 37.8, 37.8, 496.0))
+        self.assertEqual((note.invoice_number, note.restocked), (invoice.number, True))
+        self.db.refresh(item)
+        self.assertEqual(float(item.stock_qty), 97)  # 100 − 4 delivered + 1 back
+        after = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((after.amount_credited, after.balance, after.lines[0].credited_qty), (496.0, 1486.0, 1))
+
+        # Without restock: no stock change.
+        self.credit(invoice, "Return", {0: {"qty": 1}}, restock=False)
+        self.db.refresh(item)
+        self.assertEqual(float(item.stock_qty), 97)
+        with self.assertRaises(HTTPException) as too_many:
+            self.credit(invoice, "Return", {0: {"qty": 3}})
+        self.assertIn("Only 2", too_many.exception.detail)
+
+        # Returning the rest clears the invoice exactly.
+        self.credit(invoice, "Return", {0: {"qty": 2}})
+        cleared = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((cleared.balance, cleared.payment_status), (0.0, "Credited"))
+        ledger = routes_deliveries.stock_ledger(item.id, Response(), 50, 0, self.context, self.db)
+        self.assertEqual((ledger[0].kind, ledger[0].qty, ledger[0].ref_number), ("Return", 1, note.number))
+
+    def test_price_corrections_are_capped_at_the_lines_value(self):
+        _, invoice = self.issued(qty=2)  # 840 taxable
+        note = self.credit(invoice, "Price correction", {0: {"amount": 100}}, reason="Agreed rate was lower")
+        self.assertEqual((note.lines[0].qty, note.total, note.grand_total), (0, 100.0, 118.0))
+        with self.assertRaises(HTTPException) as too_much:
+            self.credit(invoice, "Price correction", {0: {"amount": 741}})
+        self.assertIn("740", too_much.exception.detail)
+        # A return after a correction credits what's left of the value.
+        rest = self.credit(invoice, "Return", {0: {"qty": 2}})
+        self.assertEqual(rest.total, 740.0)
+        self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).balance, 0.0)
+
+    def test_credit_notes_need_an_issued_invoice_in_time_and_the_permission(self):
+        item = self.item()
+        order = self.confirmed_order([{"item_id": item.id, "qty": 2}])
+        draft = self.draft(order)
+        with self.assertRaises(HTTPException):
+            self.credit(draft, "Return", {0: {"qty": 1}})
+        invoice = self.issue(draft)
+        clerk = self.make_context(["sales.invoice.read", "sales.invoice.write"], self.context.tenant_id,
+                                  self.context.company_id)
+        with self.assertRaises(HTTPException) as denied:
+            self.credit(invoice, "Return", {0: {"qty": 1}}, clerk)
+        self.assertEqual(denied.exception.status_code, 403)
+
+        row = self.db.get(Invoice, invoice.id)
+        row.invoice_date = date(date.today().year - 3, 5, 1)
+        self.db.commit()
+        with self.assertRaises(HTTPException) as late:
+            self.credit(invoice, "Return", {0: {"qty": 1}})
+        self.assertIn("only until", late.exception.detail)
+        self.assertEqual(credit_note_service.deadline(date(2026, 5, 1)), date(2027, 11, 30))
+        self.assertEqual(credit_note_service.deadline(date(2027, 2, 1)), date(2027, 11, 30))
 
 
 if __name__ == "__main__":

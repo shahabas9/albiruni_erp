@@ -30,17 +30,16 @@ def balance(invoice: Invoice) -> Decimal:
 
 
 def payment_status(invoice: Invoice, today: date | None = None) -> str:
-    """Draft, Paid, Overdue, Partly paid or Unpaid."""
+    """Draft, Paid, Credited (cancelled by credit notes), Overdue, Partly paid or Unpaid."""
 
     if invoice.status != "Issued":
         return invoice.status
     left = balance(invoice)
     if left <= 0:
-        return "Paid"
+        return "Credited" if Decimal(str(invoice.amount_paid)) <= 0 else "Paid"
     if invoice.due_date < (today or date.today()):
         return "Overdue"
-    settled = Decimal(str(invoice.amount_paid)) + Decimal(str(invoice.amount_credited))
-    return "Partly paid" if settled > 0 else "Unpaid"
+    return "Partly paid" if Decimal(str(invoice.amount_paid)) > 0 else "Unpaid"
 
 
 def get_invoice(db: Session, context: RequestContext, invoice_id: UUID, *, lock: bool = False) -> Invoice:

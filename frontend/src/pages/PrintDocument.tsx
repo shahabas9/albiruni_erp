@@ -3,10 +3,12 @@ import { useParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import {
   fetchCompanyProfile,
+  fetchCreditNote,
   fetchDelivery,
   fetchInvoice,
   fetchOrder,
   type CompanyProfile,
+  type CreditNote,
   type DeliveryNote,
   type Invoice,
   type SalesOrder,
@@ -16,17 +18,20 @@ import { dayDate } from "../lib/format";
 const money = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Print-ready documents at /print/invoice/:id and /print/delivery/:id — no app chrome; use the browser's Print / Save as PDF. */
-export function PrintDocument({ kind }: { kind: "invoice" | "delivery" }) {
+export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" }) {
   const { id = "" } = useParams();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [delivery, setDelivery] = useState<{ note: DeliveryNote; order: SalesOrder; company: CompanyProfile } | null>(null);
+  const [credit, setCredit] = useState<CreditNote | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const load =
       kind === "invoice"
         ? fetchInvoice(id).then(setInvoice)
-        : fetchDelivery(id).then(async (note) => {
+        : kind === "credit-note"
+          ? fetchCreditNote(id).then(setCredit)
+          : fetchDelivery(id).then(async (note) => {
             const [order, company] = await Promise.all([fetchOrder(note.order_id), fetchCompanyProfile()]);
             setDelivery({ note, order, company });
           });
@@ -34,12 +39,12 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" }) {
   }, [id, kind]);
 
   useEffect(() => {
-    const title = invoice?.number ?? delivery?.note.number;
+    const title = invoice?.number ?? delivery?.note.number ?? credit?.number;
     if (title) document.title = title.replace(/\//g, "-");
-  }, [invoice, delivery]);
+  }, [invoice, delivery, credit]);
 
   if (error) return <p className="print-error">{error}</p>;
-  if (!invoice && !delivery) return <p className="print-error">Loading…</p>;
+  if (!invoice && !delivery && !credit) return <p className="print-error">Loading…</p>;
 
   return (
     <div className="print-shell">
@@ -51,7 +56,7 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" }) {
           Close
         </button>
       </div>
-      {invoice ? <InvoiceSheet inv={invoice} /> : <ChallanSheet {...delivery!} />}
+      {invoice ? <InvoiceSheet inv={invoice} /> : credit ? <CreditSheet note={credit} /> : <ChallanSheet {...delivery!} />}
     </div>
   );
 }
@@ -339,6 +344,140 @@ function ChallanSheet({ note, order, company }: { note: DeliveryNote; order: Sal
         </div>
         <div className="pd-sign">
           <p>For {company.legal_name || company.name}</p>
+          <p className="sig">Authorised signatory</p>
+        </div>
+      </footer>
+    </article>
+  );
+}
+
+function CreditSheet({ note }: { note: CreditNote }) {
+  const interstate = note.igst > 0;
+  return (
+    <article className="print-doc">
+      <header className="pd-head">
+        <div>
+          <h1>{note.seller_name}</h1>
+          <p className="pre">{note.seller_address}</p>
+          <p>
+            GSTIN <b className="mono">{note.seller_gstin}</b>
+          </p>
+        </div>
+        <div className="pd-title">
+          <h2>CREDIT NOTE</h2>
+          <small>{note.kind}</small>
+        </div>
+      </header>
+      <section className="pd-meta">
+        <div>
+          <h3>Issued to</h3>
+          <p>
+            <b>{note.customer_name}</b>
+          </p>
+          <p className="pre">{note.billing_address}</p>
+          <p>{note.buyer_gstin ? <>GSTIN <b className="mono">{note.buyer_gstin}</b></> : "Unregistered"}</p>
+        </div>
+        <dl>
+          <dt>Credit note no.</dt>
+          <dd className="mono">{note.number}</dd>
+          <dt>Date</dt>
+          <dd>{dayDate(note.note_date)}</dd>
+          <dt>Against invoice</dt>
+          <dd className="mono">{note.invoice_number}</dd>
+          <dt>Invoice date</dt>
+          <dd>{dayDate(note.invoice_date)}</dd>
+          <dt>Place of supply</dt>
+          <dd>
+            {note.place_of_supply} {note.place_of_supply_name}
+          </dd>
+        </dl>
+      </section>
+      <p>
+        <b>Reason:</b> {note.reason}
+      </p>
+      <table className="pd-lines">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Description</th>
+            <th>HSN/SAC</th>
+            <th className="num">Qty</th>
+            <th className="num">Taxable value</th>
+            {interstate ? (
+              <th className="num">IGST</th>
+            ) : (
+              <>
+                <th className="num">CGST</th>
+                <th className="num">SGST</th>
+              </>
+            )}
+            <th className="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {note.lines.map((l, i) => (
+            <tr key={l.invoice_line_id}>
+              <td>{i + 1}</td>
+              <td>{l.description}</td>
+              <td className="mono">{l.hsn_code}</td>
+              <td className="num">{l.qty ? `${l.qty} ${l.uom}` : "—"}</td>
+              <td className="num">{money(l.taxable_value)}</td>
+              {interstate ? (
+                <td className="num">
+                  {money(l.igst)}
+                  <small>{l.gst_rate}%</small>
+                </td>
+              ) : (
+                <>
+                  <td className="num">
+                    {money(l.cgst)}
+                    <small>{l.gst_rate / 2}%</small>
+                  </td>
+                  <td className="num">
+                    {money(l.sgst)}
+                    <small>{l.gst_rate / 2}%</small>
+                  </td>
+                </>
+              )}
+              <td className="num">{money(l.taxable_value + l.cgst + l.sgst + l.igst)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <section className="pd-sum">
+        <p>
+          <b>Amount in words:</b> {note.amount_in_words}
+        </p>
+        <dl>
+          <dt>Taxable value</dt>
+          <dd>{money(note.total)}</dd>
+          {interstate ? (
+            <>
+              <dt>IGST</dt>
+              <dd>{money(note.igst)}</dd>
+            </>
+          ) : (
+            <>
+              <dt>CGST</dt>
+              <dd>{money(note.cgst)}</dd>
+              <dt>SGST</dt>
+              <dd>{money(note.sgst)}</dd>
+            </>
+          )}
+          {note.round_off !== 0 && (
+            <>
+              <dt>Round off</dt>
+              <dd>{money(note.round_off)}</dd>
+            </>
+          )}
+          <dt className="grand">Credit</dt>
+          <dd className="grand">₹{money(note.grand_total)}</dd>
+        </dl>
+      </section>
+      <footer className="pd-foot">
+        <div />
+        <div className="pd-sign">
+          <p>For {note.seller_name}</p>
           <p className="sig">Authorised signatory</p>
         </div>
       </footer>

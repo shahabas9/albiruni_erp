@@ -82,6 +82,7 @@ def ensure_dev_schema() -> None:
                 "hsn_code": "VARCHAR(8) NOT NULL DEFAULT ''",
                 "gst_rate": "NUMERIC(5, 2)",
             },
+            "invoice_lines": {"credited_value": "NUMERIC(14, 2) NOT NULL DEFAULT 0"},
             "quotation_lines": {
                 "hsn_code": "VARCHAR(8) NOT NULL DEFAULT ''",
                 "gst_rate": "NUMERIC(5, 2) NOT NULL DEFAULT 0",
@@ -241,4 +242,10 @@ def ensure_dev_schema() -> None:
             conn.execute(text("""
                 UPDATE roles SET permissions = permissions || ARRAY['sales.invoice.read', 'sales.invoice.write']::VARCHAR[]
                 WHERE 'sales.order.write' = ANY(permissions) AND NOT 'sales.invoice.write' = ANY(permissions)
+            """))
+        if once("grant-credit-notes"):
+            conn.execute(text("""
+                UPDATE roles SET permissions = array_append(permissions, 'sales.credit_note.write')
+                WHERE 'sales.quotation.approve' = ANY(permissions) AND 'sales.invoice.write' = ANY(permissions)
+                  AND NOT 'sales.credit_note.write' = ANY(permissions)
             """))

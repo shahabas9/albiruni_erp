@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { deleteInvoice, fetchInvoice, fetchInvoiceTimeline, issueInvoice, type Invoice } from "../api/sales";
+import {
+  deleteInvoice,
+  fetchCreditNotes,
+  fetchInvoice,
+  fetchInvoiceTimeline,
+  issueInvoice,
+  type CreditNote,
+  type Invoice,
+} from "../api/sales";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format";
+import { CreditNoteModal } from "../sales/CreditNoteModal";
 import { DocTotals } from "../sales/DocTotals";
 
 export function InvoicePage() {
@@ -17,10 +26,14 @@ export function InvoicePage() {
   const [busy, setBusy] = useState(false);
   const [changes, setChanges] = useState(0);
   const [issueDate, setIssueDate] = useState(todayIso());
+  const [notes, setNotes] = useState<CreditNote[]>([]);
+  const [crediting, setCrediting] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      setInvoice(await fetchInvoice(id));
+      const [inv, cn] = await Promise.all([fetchInvoice(id), fetchCreditNotes({ invoice_id: id, limit: 100 })]);
+      setInvoice(inv);
+      setNotes(cn.rows);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load this invoice.");
@@ -80,6 +93,11 @@ export function InvoicePage() {
             <a className="ghost-btn" href={`/print/invoice/${invoice.id}`} target="_blank" rel="noreferrer">
               Print / PDF
             </a>
+          )}
+          {!draft && can("sales.credit_note.write") && invoice.amount_credited < invoice.grand_total && (
+            <button className="ghost-btn" onClick={() => setCrediting(true)}>
+              Credit note
+            </button>
           )}
           {draft && canWrite && (
             <>
@@ -195,6 +213,29 @@ export function InvoicePage() {
               </div>
             )}
           </div>
+          {notes.length > 0 && (
+            <div className="card">
+              <div className="card-head">
+                <span className="card-title">Credit notes</span>
+              </div>
+              <div className="mini-docs">
+                {notes.map((n) => (
+                  <div className="row" key={n.id}>
+                    <div>
+                      <b className="mono">{n.number}</b> · {dayDate(n.note_date)} · {inr(n.grand_total)}
+                      <small>
+                        {n.kind}: {n.reason}
+                        {n.restocked && " · back in stock"}
+                      </small>
+                    </div>
+                    <a className="ghost-btn sm" href={`/print/credit-note/${n.id}`} target="_blank" rel="noreferrer">
+                      Print
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="card">
             <div className="card-head">
               <span className="card-title">History</span>
@@ -203,6 +244,16 @@ export function InvoicePage() {
           </div>
         </div>
       </div>
+      {crediting && (
+        <CreditNoteModal
+          invoice={invoice}
+          onClose={() => setCrediting(false)}
+          onDone={() => {
+            setCrediting(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
     </section>
   );
 }

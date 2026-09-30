@@ -464,3 +464,23 @@ functions with their own unit tests).
 - Not included: e-invoicing (IRN and signed QR from the GST portal) and
   e-way bills. Both need a GST Suvidha Provider account; add them as tools
   that call the provider when a company is above the e-invoicing threshold.
+
+### Credit notes
+
+- `POST /api/sales/invoices/{id}/credit-notes` (audited tool
+  `sales.create_credit_note.v1`, needs `sales.credit_note.write`) takes back
+  part of an issued invoice, numbered `CN/26-27/00001` and issued at once:
+  - **Return**: quantities come back at the invoice line's own net price and
+    GST rate, and optionally go back into stock (a Return stock movement).
+  - **Price correction**: an amount of taxable value off a line, with its GST;
+    no stock moves.
+- A line can't be credited beyond what's left of its quantity or value, and
+  the last credit that clears an invoice matches its total exactly. The
+  invoice's `amount_credited` rises, so the customer owes less; an invoice
+  cleared by credit notes alone shows as Credited.
+- Credit notes are refused after 30 November following the end of the
+  invoice's financial year (the GST time limit), before the invoice date, or
+  against a draft. They print at `/print/credit-note/{id}`, citing the
+  original invoice's number and date.
+- `sales.credit_note.write` is granted on upgrade to roles that can both
+  approve discounts and write invoices.
