@@ -7,6 +7,7 @@ quotation tool. Handlers take resolved ids, never names, and re-check tenant
 scope through the domain services.
 """
 
+import re
 from datetime import datetime, time, timedelta
 from typing import Any
 from uuid import UUID
@@ -15,10 +16,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.ai import crm_parser
 from app.core.deps import RequestContext
-from app.domain import activity_service, crm_service, opportunity_service
+from app.domain import activity_service, crm_service, export_service, fields, opportunity_service, target_service
 from app.domain.errors import ConflictError, NotFoundError
-from app.models.crm import OPEN_STAGES, Activity, Opportunity
+from app.models.crm import OPEN_STAGES, Activity, Lead, Opportunity
+from app.models.sales import Customer
 from app.schemas.crm import ActivityIn, OpportunityUpdate
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -94,7 +97,8 @@ def _n(count: int, noun: str) -> str:
 
 
 def _mine(context: RequestContext, args: dict[str, Any]) -> bool:
-    return not args.get("everyone")
+    # Without "see all" there is no team view to ask for.
+    return not args.get("everyone") or not crm_service.sees_all(context)
 
 
 def list_due_followups(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -223,11 +227,138 @@ def pipeline_summary(db: Session, context: RequestContext, args: dict[str, Any])
     ]
     return {"message": message, "items": items, "link": {"label": "Open pipeline", "to": "/crm"}, "result_summary": message}
 
+def export_records(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        filename, text, count = export_service.build(db, context, args["kind"], args.get("filters", {}))
+    except (ConflictError, PermissionError, ValueError) as exc:
+        raise ToolValidationError(str(exc)) from exc
+    filters = ", ".join(f"{k}={v}" for k, v in sorted(args.get("filters", {}).items()) if v not in (None, "")) or "none"
+    return {"filename": filename, "csv": text, "rows": count,
+            "result_summary": f"Exported {count} {args['kind']} (filters: {filters})"}
+
+
+def _inr(value: float) -> str:
+    return f"₹{value:,.0f}"
+
+
+def target_progress(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    month = crm_service.now_utc().date().replace(day=1)
+    report = target_service.report(db, context, month)
+    label = f"{month:%B}"
+    link = {"label": "Open targets", "to": "/crm/targets"}
+    if _mine(context, args):
+        me = next((r for r in report["rows"] if r["user_id"] == context.user.id), None)
+        won, target, forecast = (me["won_value"], me["target"], me["forecast"]) if me else (0.0, 0.0, 0.0)
+        if target:
+            gap = max(target - won, 0)
+            message = (f"You've won {_inr(won)} of your {_inr(target)} target for {label} ({round(won / target * 100)}%)."
+                       + (f" {_inr(gap)} to go; deals expected to close this month add {_inr(forecast)} (weighted)."
+                          if gap else " Target reached. 🎉"))
+        else:
+            message = f"No target is set for you in {label}. You've won {_inr(won)} so far."
+        return {"message": message, "items": [], "link": link, "result_summary": message}
+    rows = sorted(report["rows"], key=lambda r: (r["pct"] is None, -(r["pct"] or 0)))
+    team = report["team_pct"]
+    message = (f"The team has won {_inr(report['team_won'])} of {_inr(report['team_target'])} for {label} ({team}%)."
+               if report["team_target"] else f"No targets set for {label}; the team has won {_inr(report['team_won'])}.")
+    items = [
+        {"title": r["name"], "subtitle": f"{_inr(r['won_value'])} of {_inr(r['target'])}" + (f" · {r['pct']}%" if r["pct"] is not None else " · no target"),
+         "tone": None if (r["pct"] or 0) >= 60 else "bad", "link": "/crm/targets"}
+        for r in rows[:12]
+    ]
+    return {"message": message, "items": items, "link": link, "result_summary": message}
+
+
+_MODELS = {"lead": Lead, "opportunity": Opportunity, "customer": Customer}
+_LIST_PAGE = {"lead": "/leads", "opportunity": "/opportunities", "customer": "/customers"}
+_NOUN = {"lead": "lead", "opportunity": "deal", "customer": "customer"}
+
+
+def find_records(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Records of one kind matching tags / dropdown values / stage or status named in the question."""
+
+    kind, text = args["kind"], args["text"]
+    model = _MODELS[kind]
+    stmt = select(model).where(model.tenant_id == context.tenant_id, model.company_id == context.company_id)
+    if kind != "customer":
+        stmt = crm_service.only_visible(stmt, model.owner_user_id, context)
+        if re.search(r"\b(my|mine)\b", text.lower()):
+            stmt = stmt.where(model.owner_user_id == context.user.id)
+    criteria = []
+
+    tags = [t["tag"] for t in fields.tag_counts(db, context, kind)]
+    for tag in sorted(tags, key=len, reverse=True):
+        if crm_parser.mentions(text, tag):
+            stmt = stmt.where(model.tags.contains([tag]))
+            criteria.append(f"tagged {tag}")
+    for field in fields.list_fields(db, context, kind):
+        if field.field_type != "select":
+            continue
+        for option in field.options:
+            if crm_parser.mentions(text, option):
+                stmt = stmt.where(model.custom[field.key].astext == option)
+                criteria.append(f"{field.label} {option}")
+                break
+    if kind == "opportunity":
+        stage = crm_parser.target_stage(text)
+        if stage:
+            stmt = stmt.where(Opportunity.stage == stage)
+            criteria.append(f"in {stage}")
+        elif re.search(r"\bopen\b", text.lower()):
+            stmt = stmt.where(Opportunity.stage.in_(OPEN_STAGES))
+            criteria.append("open")
+    if kind == "lead":
+        for status in ("New", "Contacted", "Qualified", "Lost"):
+            if crm_parser.mentions(text, status):
+                stmt = stmt.where(Lead.status == status)
+                criteria.append(status.lower())
+                break
+
+    noun = _NOUN[kind]
+    if not criteria:
+        hint = f" Tags in use: {', '.join(tags[:8])}." if tags else ""
+        message = (f"Which {noun}s? I can find them by tag, by a dropdown field (like City), "
+                   f"{'or by stage' if kind == 'opportunity' else 'or by status' if kind == 'lead' else ''}.{hint}")
+        return {"message": message, "items": [], "link": {"label": f"Open {noun}s", "to": _LIST_PAGE[kind]},
+                "result_summary": f"No criteria for {noun}s"}
+
+    rows = list(db.execute(stmt.order_by(model.created_at.desc() if kind != "customer" else model.name).limit(200)).scalars())
+    what = f"{noun}s " + ", ".join(criteria)
+    if not rows:
+        message = f"No {what}."
+    else:
+        message = f"{len(rows) if len(rows) < 200 else '200+'} {noun}{'s' if len(rows) != 1 else ''} " + ", ".join(criteria) + "."
+    items = []
+    for r in rows[:12]:
+        if kind == "lead":
+            items.append({"title": r.company_name or r.name, "subtitle": " · ".join(filter(None, [r.status, r.phone])),
+                          "tone": None, "link": f"/leads?lead={r.id}"})
+        elif kind == "opportunity":
+            items.append({"title": r.name, "subtitle": f"{r.stage} · {_inr(float(r.value))}", "tone": None,
+                          "link": f"/crm?opp={r.id}"})
+        else:
+            items.append({"title": r.name, "subtitle": ", ".join(r.tags or []) or "—", "tone": None,
+                          "link": f"/customers/{r.id}"})
+    first_tag = next((c[len("tagged "):] for c in criteria if c.startswith("tagged ")), "")
+    to = _LIST_PAGE[kind] + (f"?tag={first_tag}" if first_tag else "")
+    return {"message": message, "items": items, "link": {"label": f"Open {noun}s", "to": to}, "result_summary": message}
+
+
 for definition in (
     ToolDefinition("crm.log_activity.v1", "Log a call, WhatsApp, meeting or note that already happened.",
                    "crm.activity.write", "L2 Prepare", log_activity),
     ToolDefinition("crm.schedule_followup.v1", "Schedule a follow-up (call, meeting, task) at a date/time.",
                    "crm.activity.write", "L2 Prepare", schedule_followup),
+    ToolDefinition("crm.target_progress.v1", "How you (or the team) are doing against this month's sales target.",
+                   "crm.opportunity.read", "L1 Read", target_progress),
+    ToolDefinition("crm.find_leads.v1", "List leads by tag, dropdown field value or status.",
+                   "crm.lead.read", "L1 Read", find_records),
+    ToolDefinition("crm.find_deals.v1", "List deals by tag, dropdown field value or stage.",
+                   "crm.opportunity.read", "L1 Read", find_records),
+    ToolDefinition("crm.find_customers.v1", "List customers by tag or dropdown field value.",
+                   "sales.customer.read", "L1 Read", find_records),
+    ToolDefinition("crm.export_records.v1", "Download a CRM list as CSV (with the screen's filters).",
+                   "crm.export", "L1 Read", export_records),
     ToolDefinition("crm.move_opportunity_stage.v1", "Move a deal to another stage, or close it as Won/Lost.",
                    "crm.opportunity.write", "L2 Prepare", move_opportunity_stage),
     ToolDefinition("crm.list_due_followups.v1", "Follow-ups that are overdue or due today.",

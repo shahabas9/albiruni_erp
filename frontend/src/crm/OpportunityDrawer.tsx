@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   ApiError,
   assignOpportunity,
+  deleteOpportunity,
   fetchActivities,
   fetchContacts,
   fetchOpportunity,
@@ -101,7 +103,10 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
       title={opp.name}
       subtitle={
         <>
-          {opp.customer_name} · {inr(opp.value)} · {opp.probability_pct}% likely
+          <Link to={`/customers/${opp.customer_id}`} onClick={onClose}>
+            {opp.customer_name}
+          </Link>{" "}
+          · {inr(opp.value)} · {opp.probability_pct}% likely
           {opp.expected_close_date ? ` · closes ${new Date(opp.expected_close_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}
         </>
       }
@@ -308,6 +313,20 @@ export function OpportunityDrawer({ opportunityId, onClose }: { opportunityId: s
         </div>
         <Timeline load={() => fetchOpportunityTimeline(opp.id)} version={version} />
       </div>
+
+      {can("crm.opportunity.delete") && (
+        <div className="danger-zone">
+          <button
+            className="danger-btn"
+            onClick={async () => {
+              if (!window.confirm(`Delete “${opp.name}”? Its follow-ups and files go too. This can't be undone.`)) return;
+              if (await run(() => deleteOpportunity(opp.id))) onClose();
+            }}
+          >
+            Delete deal
+          </button>
+        </div>
+      )}
 
       {lostOpen && (
         <LostReasonModal

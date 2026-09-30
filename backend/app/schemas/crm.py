@@ -44,6 +44,12 @@ class LeadUpdate(BaseModel):
     custom: dict[str, Any] | None = None
 
 
+class MergeIn(BaseModel):
+    """Fold the record `remove_id` into the one in the URL."""
+
+    remove_id: UUID
+
+
 class OwnerIn(BaseModel):
     """owner_user_id=None unassigns."""
 
@@ -399,3 +405,21 @@ class WebFormOut(BaseModel):
     key: str | None
     source: str
     thank_you: str
+
+
+class BulkIn(BaseModel):
+    """A bulk action on explicit ids, or on everything matching `filters`
+    (the list's own filter parameters)."""
+
+    action: str
+    ids: list[UUID] | None = None
+    filters: dict[str, Any] | None = None
+    # assign: user id or null; status/stage: the new one; add_tag/remove_tag: the tag.
+    value: Any = None
+    lost_reason: str = Field(default="", max_length=200)
+
+
+class BulkOut(BaseModel):
+    matched: int
+    done: int
+    skipped: list[dict]

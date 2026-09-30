@@ -35,3 +35,6 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(200))
     locale: Mapped[str] = mapped_column(String(10), default="en-IN")
     active: Mapped[bool] = mapped_column(default=True)
+    # Where notifications are emailed ("" = in-app only), and whether to.
+    email: Mapped[str] = mapped_column(String(160), default="")
+    notify_email: Mapped[bool] = mapped_column(default=True)

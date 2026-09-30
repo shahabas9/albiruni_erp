@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
 from app.domain.errors import ConflictError
-from app.models.crm import OPEN_STAGES, Activity, CrmSettings, Opportunity
+from app.models.crm import OPEN_STAGES, Activity, CrmSettings, Lead, Opportunity
 from app.models.identity import User
 from app.models.sales import Customer, Quotation
 
@@ -31,6 +31,42 @@ def now_utc() -> datetime:
 
 def is_overdue(activity: Activity, at: datetime | None = None) -> bool:
     return not activity.done and activity.due_at is not None and activity.due_at < (at or now_utc())
+
+
+# --- Visibility -------------------------------------------------------------
+
+# Without this permission a person sees only the leads, deals and follow-ups
+# they own (plus follow-ups on their own leads/deals). Customers and contacts
+# stay shared: quotations and the whole team need them.
+SEE_ALL = "crm.records.all"
+
+
+def sees_all(context: RequestContext) -> bool:
+    # No user = the system itself (e.g. the public web form).
+    return context.user is None or context.has_permission(SEE_ALL)
+
+
+def only_visible(stmt: Select, owner_column, context: RequestContext) -> Select:
+    """Narrows a lead/opportunity query to what the caller may see."""
+
+    return stmt if sees_all(context) else stmt.where(owner_column == context.user.id)
+
+
+def can_see(owner_id: UUID | None, context: RequestContext) -> bool:
+    return sees_all(context) or owner_id == context.user.id
+
+
+def visible_activities(stmt: Select, context: RequestContext) -> Select:
+    """Follow-ups the caller owns, or that sit on a lead/deal they own."""
+
+    if sees_all(context):
+        return stmt
+    me = context.user.id
+    my_leads = select(Lead.id).where(Lead.owner_user_id == me)
+    my_deals = select(Opportunity.id).where(Opportunity.owner_user_id == me)
+    return stmt.where(or_(
+        Activity.owner_id == me, Activity.lead_id.in_(my_leads), Activity.opportunity_id.in_(my_deals)
+    ))
 
 
 # --- Ownership --------------------------------------------------------------

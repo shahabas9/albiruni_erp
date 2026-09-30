@@ -4,10 +4,15 @@ import {
   ApiError,
   LEAD_STATUSES,
   assignLead,
+  bulkAction,
   convertLead,
   createLead,
   fetchLeadCustomerMatches,
+  deleteLead,
+  fetchLead,
+  fetchLeadDuplicates,
   fetchLeadTimeline,
+  mergeLeads,
   fetchLeads,
   fetchRotation,
   updateLead,
@@ -20,7 +25,12 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
+import { ExportButton } from "../components/ExportButton";
 import { Attachments } from "../crm/Attachments";
+import { BulkBar, useSelection, type BulkActionDef } from "../crm/BulkBar";
+import { MergeDuplicates } from "../crm/MergeDuplicates";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
@@ -48,10 +58,36 @@ export function Leads() {
   const [importing, setImporting] = useState(false);
   const [historyFor, setHistoryFor] = useState<Lead | null>(null);
   const [fileChanges, setFileChanges] = useState(0);
-  const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
-  const [status, setStatus] = useState(params.get("status") ?? "");
-  const [tag, setTag] = useState(params.get("tag") ?? "");
-  const [search, setSearch] = useState("");
+  const [findingDupes, setFindingDupes] = useState(false);
+
+  async function removeLead(lead: Lead) {
+    if (!window.confirm(`Delete ${lead.company_name || lead.name}? Its follow-ups and files go too. This can't be undone.`)) return;
+    try {
+      await deleteLead(lead.id);
+      setHistoryFor(null);
+      await reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't delete.");
+    }
+  }
+  // Notification links point at /leads?lead=<id>: open that lead's drawer.
+  const linkedLead = params.get("lead");
+  useEffect(() => {
+    if (!linkedLead) return;
+    fetchLead(linkedLead)
+      .then(setHistoryFor)
+      .catch(() => setError("That lead isn't available — it may have been reassigned or removed."));
+  }, [linkedLead]);
+  // Filters from a link (dashboard, alert, Ask ERP) win; otherwise the page opens as you left it.
+  const [saved] = useState(() =>
+    ["owner", "status", "tag"].some((k) => params.has(k)) ? {} : recallFilters("leads"),
+  );
+  const [owner, setOwner] = useState<OwnerFilter>(
+    (params.get("owner") as OwnerFilter) || (saved.owner as OwnerFilter) || "all",
+  );
+  const [status, setStatus] = useState(params.get("status") ?? String(saved.status ?? ""));
+  const [tag, setTag] = useState(params.get("tag") ?? String(saved.tag ?? ""));
+  const [search, setSearch] = useState(String(saved.search ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
   const { version, assignees, refresh: reload, can } = useAppData();
@@ -65,6 +101,19 @@ export function Leads() {
     version,
   );
   const visible = list.rows;
+  const sel = useSelection(visible.map((l) => l.id), `${search}|${statusParam}|${owner}|${tag}|${list.page}`);
+  const bulkEnabled = can("crm.lead.write") || can("crm.lead.assign") || can("crm.lead.delete");
+  const bulkActions: BulkActionDef[] = [
+    ...(can("crm.lead.assign") ? [{ key: "assign", label: "Assign to", input: "owner" as const }] : []),
+    ...(can("crm.lead.write")
+      ? [
+          { key: "add_tag", label: "Add tag", input: "tag" as const },
+          { key: "remove_tag", label: "Remove tag", input: "tag" as const },
+          { key: "status", label: "Set status", input: "choice" as const, options: LEAD_STATUSES.filter((s) => s !== "Converted") },
+        ]
+      : []),
+    ...(can("crm.lead.delete") ? [{ key: "delete", label: "Delete", input: "none" as const, danger: true }] : []),
+  ];
   const filtered = Boolean(search || status || tag || owner !== "all");
 
   async function assign(lead: Lead, ownerId: string | null) {
@@ -104,13 +153,33 @@ export function Leads() {
             </option>
           ))}
         </select>
+        <SavedViews
+          page="leads"
+          filters={{ owner, status, tag, search }}
+          onApply={(f) => {
+            setOwner(((f.owner as OwnerFilter) || "all") as OwnerFilter);
+            setStatus(String(f.status ?? ""));
+            setTag(String(f.tag ?? ""));
+            setSearch(String(f.search ?? ""));
+          }}
+        />
         <TagFilter recordType="lead" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, company, phone, email" />
+        <ExportButton
+          kind="leads"
+          filters={{ q: search, status: statusParam, owner: ownerParam(owner), tag }}
+          onError={setError}
+        />
         {can("crm.lead.write") && (
           <div style={{ display: "flex", gap: 8 }}>
             <button className="ghost-btn" onClick={() => setImporting(true)}>
               Import CSV
             </button>
+            {can("crm.lead.delete") && (
+              <button className="ghost-btn" onClick={() => setFindingDupes(true)}>
+                Find duplicates
+              </button>
+            )}
             <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
               {showForm ? "Cancel" : "+ New lead"}
             </button>
@@ -120,6 +189,26 @@ export function Leads() {
       </div>
 
       {showForm && <LeadForm ownerId={user?.id ?? null} onDone={() => { setShowForm(false); reload(); }} />}
+
+      {bulkEnabled && (
+        <BulkBar
+          selection={sel}
+          total={list.total}
+          noun="lead"
+          actions={bulkActions}
+          assignees={assignees}
+          run={(action, value, _lost, target) =>
+            bulkAction("leads", {
+              action,
+              value,
+              ...(target.all
+                ? { filters: { q: search, status: statusParam, owner: ownerParam(owner), tag } }
+                : { ids: target.ids }),
+            })
+          }
+          onDone={() => void reload()}
+        />
+      )}
 
       {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
@@ -132,6 +221,11 @@ export function Leads() {
           <table>
             <thead>
               <tr>
+                {bulkEnabled && (
+                  <th className="check-col">
+                    <input type="checkbox" aria-label="Select all on this page" checked={sel.allOnPage} onChange={sel.togglePage} />
+                  </th>
+                )}
                 <th>Lead</th>
                 <th>Status</th>
                 <th>Owner</th>
@@ -143,12 +237,17 @@ export function Leads() {
               {visible.map((l) =>
                 editingId === l.id ? (
                   <tr key={l.id}>
-                    <td colSpan={5}>
+                    <td colSpan={bulkEnabled ? 6 : 5}>
                       <LeadForm lead={l} onDone={() => { setEditingId(null); reload(); }} />
                     </td>
                   </tr>
                 ) : (
-                  <tr key={l.id}>
+                  <tr key={l.id} className={sel.has(l.id) ? "selected" : undefined}>
+                    {bulkEnabled && (
+                      <td className="check-col">
+                        <input type="checkbox" aria-label={`Select ${l.company_name || l.name}`} checked={sel.has(l.id)} onChange={() => sel.toggle(l.id)} />
+                      </td>
+                    )}
                     <td>
                       <div className="cell-with-actions">
                         <div>
@@ -253,7 +352,36 @@ export function Leads() {
           />
           <h3 className="drawer-section">History</h3>
           <Timeline load={() => fetchLeadTimeline(historyFor.id)} version={version + fileChanges} />
+          {can("crm.lead.delete") && historyFor.status !== "Converted" && (
+            <div className="danger-zone">
+              <button className="danger-btn" onClick={() => removeLead(historyFor)}>
+                Delete lead
+              </button>
+            </div>
+          )}
         </Drawer>
+      )}
+
+      {findingDupes && (
+        <MergeDuplicates
+          noun="lead"
+          explain="Open leads that share a phone number or email. The one you keep gets the others' missing details, notes, tags, follow-ups, files and history."
+          load={async () =>
+            (await fetchLeadDuplicates()).map((g) => ({
+              reason: g.reason,
+              records: g.leads.map((l) => ({
+                id: l.id,
+                title: l.company_name ? `${l.company_name} (${l.name})` : l.name,
+                detail: [l.status, l.phone, l.email, l.owner_name ?? "Unassigned", `added ${new Date(l.created_at).toLocaleDateString("en-IN")}`]
+                  .filter(Boolean)
+                  .join(" · "),
+              })),
+            }))
+          }
+          merge={mergeLeads}
+          onMerged={() => void reload()}
+          onClose={() => setFindingDupes(false)}
+        />
       )}
 
       {followUpFor && (

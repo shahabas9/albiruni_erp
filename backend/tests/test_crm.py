@@ -23,8 +23,8 @@ from app.core.deps import RequestContext, require_any_permission, require_permis
 from app.core.dev_schema import ensure_dev_schema
 from app.domain import activity_service, crm_service, customer_service, lead_service, opportunity_service, sales_service
 from app.domain.duplicates import DuplicateError
-from app.domain.errors import ConflictError
-from app.models.crm import Activity, Contact, Lead, Opportunity
+from app.domain.errors import ConflictError, NotFoundError
+from app.models.crm import Activity, Contact, CrmEvent, Lead, Opportunity
 from app.models.identity import Role, User
 from app.models.sales import Customer, Item, Quotation
 from app.models.tenant import Company, Tenant
@@ -32,6 +32,7 @@ from app.schemas import crm
 from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.models.audit import AuditEvent
+from app.ai import crm_resolver
 from app.toolgateway import tools_crm, tools_sales  # noqa: F401 — registers the tools
 
 
@@ -174,7 +175,8 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(timeline[4]["summary"], "Owner: Unassigned → Fathima")
 
         # Someone who can read leads but not deals doesn't see the deal's history.
-        reader = self.make_context(["crm.lead.read"], tenant=self.db.get(Tenant, self.context.tenant_id),
+        reader = self.make_context(["crm.lead.read", "crm.records.all"],
+                                   tenant=self.db.get(Tenant, self.context.tenant_id),
                                    company=self.db.get(Company, self.context.company_id))
         lead_only = routes_leads.lead_timeline(lead.id, reader, self.db)
         self.assertEqual({e["record_type"] for e in lead_only}, {"lead"})
@@ -270,7 +272,8 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(out.unassigned, 2)  # the lead and the deal
         self.assertEqual(out.overdue_items[0].related_label, f"Opportunity: {deal.name}")
 
-        reader = self.make_context(["crm.activity.read"], tenant=self.db.get(Tenant, self.context.tenant_id),
+        reader = self.make_context(["crm.activity.read", "crm.records.all"],
+                                   tenant=self.db.get(Tenant, self.context.tenant_id),
                                    company=self.db.get(Company, self.context.company_id))
         limited = routes_crm.summary("", 90, reader, self.db)
         self.assertEqual((limited.open_deals, limited.unassigned, limited.overdue_followups), (0, 0, 1))
@@ -558,7 +561,7 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(len(leftovers), 1)
 
         # Read needs the record's read permission; upload/delete need write; other companies see nothing.
-        reader = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        reader = self.make_context(["crm.lead.read", "crm.records.all"], *self._tenant_and_company())
         self.assertEqual(len(routes_attachments.list_attachments("lead", lead.id, reader, self.db)), 1)
         with self.assertRaises(HTTPException) as denied:
             routes_attachments.delete_attachment(saved["id"], reader, self.db)
@@ -641,6 +644,391 @@ class CrmTests(unittest.TestCase):
             web_form.form_for_key(self.db, key)
         with self.assertRaises(HTTPException):
             require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+
+    # --- Record visibility --------------------------------------------------------
+
+    def test_without_see_all_people_only_see_their_own_records(self):
+        rep_perms = ["crm.lead.read", "crm.lead.write", "crm.opportunity.read", "crm.opportunity.write",
+                     "crm.activity.read", "crm.activity.write"]
+        rep = self.make_context(rep_perms, *self._tenant_and_company())
+        other = self.make_context(rep_perms, *self._tenant_and_company())
+        mine = self.lead(name="Rep lead", company_name="Rep Co", phone="9123400001", owner_user_id=rep.user.id)
+        theirs = self.lead(name="Other lead", company_name="Secret Co", phone="9123400002",
+                           owner_user_id=other.user.id)
+        my_deal = self.deal(name="Rep deal", owner_user_id=rep.user.id, value=100)
+        their_deal = self.deal(name="Secret deal", owner_user_id=other.user.id, value=900)
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Chase secret", opportunity_id=their_deal.id,
+            due_date=date.today() - timedelta(days=1)))
+        on_mine = activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Chase mine", opportunity_id=my_deal.id, owner_id=other.user.id))
+
+        self.assertEqual([l.name for l in self.leads_out(context=rep)], ["Rep lead"])
+        self.assertEqual([o.name for o in self.opps_out(context=rep)], ["Rep deal"])
+        with self.assertRaises(HTTPException) as hidden:
+            routes_leads.get_lead(theirs.id, rep, self.db)
+        self.assertEqual(hidden.exception.status_code, 404)
+        with self.assertRaises(NotFoundError):  # can't change it either
+            opportunity_service.update_opportunity(self.db, rep, their_deal.id, crm.OpportunityUpdate(value=1))
+        # Follow-ups: theirs hidden, but one someone else owns on MY deal is visible.
+        rows = routes_activities.list_activities(Response(), show="all", open_only=False, owner="", lead_id=None,
+                                                 customer_id=None, opportunity_id=None, limit=None, offset=0,
+                                                 context=rep, db=self.db)
+        self.assertEqual([a.subject for a in rows], ["Chase mine"])
+        self.assertEqual(activity_service.get_activity(self.db, rep, on_mine.id).id, on_mine.id)
+
+        summary = routes_crm.summary("", 90, rep, self.db)
+        self.assertEqual((summary.open_deals, summary.open_value, summary.overdue_followups, summary.unassigned),
+                         (1, 100, 0, 0))
+        self.assertEqual([r["name"] for r in routes_crm.get_targets("", rep, self.db)["rows"]], ["Test user"])
+
+        # A duplicate warning says a match exists without revealing whose.
+        with self.assertRaises(DuplicateError) as dup:
+            lead_service.create_lead(self.db, rep, crm.LeadIn(name="Copy", phone="9123400002"))
+        self.assertEqual(dup.exception.matches[0]["label"], "A lead owned by someone else")
+        self.assertEqual(dup.exception.matches[0]["id"], "")
+
+        # Ask ERP only finds your own records and has no team view.
+        self.assertEqual({m.label for m in crm_resolver.find(self.db, rep, "Secret Co deal", kinds=("lead", "opportunity"))}, set())
+        answer = routes_ask.ask(AskRequest(text="what's overdue for the team"), rep, self.db)
+        self.assertNotIn("Chase secret", str(answer))
+
+        # With the permission (or "*"), everything as before.
+        boss = self.make_context(rep_perms + ["crm.records.all"], *self._tenant_and_company())
+        self.assertEqual({l.name for l in self.leads_out(context=boss)} >= {"Rep lead", "Other lead"}, True)
+        self.assertEqual(len(self.opps_out(context=self.context)), 2)
+        self.assertEqual(mine.owner_user_id, rep.user.id)
+
+    # --- Notifications ------------------------------------------------------------
+
+    def test_notifications_reach_the_right_people(self):
+        from app.api import routes_notifications
+        from app.domain import notifications, web_form
+
+        asha = self.colleague("Asha")
+        asha_ctx = RequestContext(asha, self.context.tenant_id, self.context.company_id, ["*"], "en-IN")
+        inbox = lambda ctx=asha_ctx: routes_notifications.list_notifications(False, 30, ctx, self.db)  # noqa: E731
+
+        lead = self.lead(name="For Asha", owner_user_id=asha.id)
+        mine = self.lead(name="Mine")  # created and owned by me: nobody to tell
+        lead_service.assign_lead(self.db, self.context, mine.id, asha.id)
+        deal = self.deal(name="Asha deal", owner_user_id=asha.id)
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Ring them", lead_id=lead.id, owner_id=asha.id, due_date=date.today()))
+        titles = [n.title for n in inbox()["items"]]
+        self.assertEqual(titles, ["Follow-up for you: Call: Ring them", "New deal for you: Asha deal",
+                                  "Lead assigned to you: Customer Co", "New lead for you: Customer Co"])
+        self.assertEqual(inbox()["unread"], 4)
+        self.assertEqual(routes_notifications.list_notifications(False, 30, self.context, self.db)["unread"], 0)
+
+        # Overdue alerts: once, to the owner; again only after the due time changes.
+        late = activity_service.create_activity(self.db, asha_ctx, crm.ActivityIn(
+            type="Task", subject="Send price list", opportunity_id=deal.id, due_date=date.today() - timedelta(days=1)))
+        self.assertEqual(notifications.raise_overdue_alerts(self.db) >= 1, True)
+        notifications.raise_overdue_alerts(self.db)
+        overdue = [n for n in inbox()["items"] if n.kind == "followup_overdue"]
+        self.assertEqual([n.title for n in overdue], ["Overdue: Send price list"])
+        self.assertEqual(overdue[0].link, f"/crm?opp={deal.id}")
+        activity_service.update_activity(self.db, asha_ctx, late.id,
+                                         crm.ActivityUpdate(due_date=date.today() - timedelta(days=1)))
+        notifications.raise_overdue_alerts(self.db)
+        self.assertEqual(len([n for n in inbox()["items"] if n.kind == "followup_overdue"]), 2)
+
+        # Web enquiries with no owner go to people who can hand leads out.
+        web_form.reset_rate_limits()
+        key = routes_crm.put_web_form(crm.WebFormIn(enabled=True), self.context, self.db)["key"]
+        web_form.submit(self.db, key, {"name": "Visitor", "phone": "9444455555", "message": "Hi"}, "10.1.1.1")
+        me = routes_notifications.list_notifications(False, 30, self.context, self.db)["items"]
+        self.assertEqual(me[0].title, "New web enquiry: Visitor")
+
+        # Mark read; email goes to people with an address, skipped otherwise.
+        routes_notifications.mark_read(routes_notifications.ReadIn(ids=[inbox()["items"][0].id]), asha_ctx, self.db)
+        self.assertEqual(inbox()["unread"], 6)  # 4 + 2 overdue + the web enquiry (she can hand leads out) - 1 read
+        routes_notifications.mark_read(routes_notifications.ReadIn(), asha_ctx, self.db)
+        self.assertEqual(inbox()["unread"], 0)
+
+        from app.core.config import settings
+        self.addCleanup(setattr, settings, "smtp_host", settings.smtp_host)
+        self.addCleanup(setattr, settings, "smtp_from", settings.smtp_from)
+        settings.smtp_host, settings.smtp_from = "smtp.test", "crm@example.test"
+        routes_notifications.put_preferences(routes_notifications.PreferencesIn(email="asha@example.test"),
+                                             asha_ctx, self.db)
+        sent = []
+        outcome = notifications.send_pending_emails(self.db, send=lambda to, subject, text: sent.append((to, subject)))
+        self.assertTrue(all(to == "asha@example.test" for to, _ in sent) and len(sent) == 7)
+        self.assertGreaterEqual(outcome["skipped"], 1)  # my own notifications: no address
+        self.assertEqual(notifications.send_pending_emails(self.db, send=lambda *a: sent.append(a))["sent"], 0)
+        with self.assertRaises(ValidationError):
+            routes_notifications.PreferencesIn(email="not an email")
+
+    # --- Delete and merge ---------------------------------------------------------
+
+    def test_delete_refuses_history_others_depend_on(self):
+        from app.domain import record_admin
+
+        lead = self.lead(name="Throwaway")
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(type="Call", subject="x", lead_id=lead.id))
+        routes_leads.delete_lead(lead.id, self.context, self.db)
+        self.assertEqual(self.leads_out(q="Throwaway"), [])
+        self.assertEqual(self.db.execute(select(Activity).where(Activity.lead_id == lead.id)).first(), None)
+        events = self.db.execute(select(CrmEvent).where(CrmEvent.record_id == lead.id)).scalars().all()
+        self.assertIn("deleted", [e.action for e in events])  # the trail survives the record
+
+        converted = self.lead(name="Converted one")
+        _, customer, contact, opp = lead_service.convert_lead(self.db, self.context, converted.id, crm.ConvertLeadIn())
+        with self.assertRaises(HTTPException):
+            routes_leads.delete_lead(converted.id, self.context, self.db)
+        with self.assertRaises(ConflictError):  # has a deal (and a converted lead)
+            record_admin.delete_customer(self.db, self.context, customer.id)
+
+        quoted = self.deal(name="Quoted deal")
+        self.db.add(Quotation(tenant_id=self.context.tenant_id, company_id=self.context.company_id,
+                              number=f"QT-T-{uuid4().hex[:6]}", customer_id=quoted.customer_id, opportunity_id=quoted.id,
+                              subtotal=0, total=0, created_by=self.context.user.id))
+        self.db.commit()
+        with self.assertRaises(ConflictError):
+            record_admin.delete_opportunity(self.db, self.context, quoted.id)
+        record_admin.delete_opportunity(self.db, self.context, opp.id)  # no quotes: fine, lead link cleared
+        self.db.refresh(converted)
+        self.assertIsNone(converted.converted_opportunity_id)
+
+        routes_contacts.delete_contact(contact.id, self.context, self.db)
+        empty = crm_service.find_or_create_customer(self.db, self.context, "Empty Co")
+        self.db.commit()
+        record_admin.delete_customer(self.db, self.context, empty.id)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.lead.delete")(self.make_context(["crm.lead.write"]))
+
+    def test_merging_folds_everything_into_the_kept_record(self):
+        from app.domain import record_admin
+
+        keep = self.lead(name="Nisha", company_name="Kannur Tiles", phone="9447000001", tags=["vip"], notes="First")
+        dupe = lead_service.create_lead(self.db, self.context, crm.LeadIn(
+            name="Nisha R", company_name="", email="nisha@example.test", phone="09447000001", tags=["export"],
+            notes="Second", allow_duplicate=True))
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(type="Call", subject="On dupe", lead_id=dupe.id))
+        groups = routes_leads.lead_duplicates(self.context, self.db)
+        self.assertEqual([{l.id for l in g["leads"]} for g in groups], [{keep.id, dupe.id}])
+
+        merged = routes_leads.merge_lead(keep.id, crm.MergeIn(remove_id=dupe.id), self.context, self.db)
+        self.assertEqual((merged.email, merged.company_name, merged.tags), ("nisha@example.test", "Kannur Tiles", ["vip", "export"]))
+        self.assertEqual(lead_service.get_lead(self.db, self.context, keep.id).notes, "First\n\nSecond")
+        self.assertEqual([a.subject for a in self.activities_out(lead_id=keep.id)], ["On dupe"])
+        history_actions = [e["action"] for e in routes_leads.lead_timeline(keep.id, self.context, self.db)]
+        self.assertEqual(history_actions[0], "merged")
+        self.assertEqual(history_actions.count("created"), 2)  # dupe's history came along
+        with self.assertRaises(HTTPException):
+            routes_leads.get_lead(dupe.id, self.context, self.db)
+        self.assertEqual(routes_leads.lead_duplicates(self.context, self.db), [])
+
+        # Customers: contacts, deals, quotations and converted leads all move over.
+        a = customer_service.create_customer(self.db, self.context, CustomerIn(name="Rahman Traders"))
+        b = customer_service.create_customer(self.db, self.context, CustomerIn(name="rahman  traders", gstin="32ABCDE1234F1Z9",
+                                                                                allow_duplicate=True))
+        self.db.add(Contact(tenant_id=self.context.tenant_id, company_id=self.context.company_id, customer_id=b.id, name="Rafi"))
+        deal = opportunity_service.create_opportunity(self.db, self.context, crm.OpportunityIn(customer_id=b.id, name="B deal"))
+        groups = routes_customers.customer_duplicates(self.context, self.db)
+        self.assertEqual([{c.id for c in g["customers"]} for g in groups], [{a.id, b.id}])
+        kept = routes_customers.merge_customer(a.id, crm.MergeIn(remove_id=b.id), self.context, self.db)
+        self.assertEqual(kept.gstin, "32ABCDE1234F1Z9")
+        self.db.refresh(deal)
+        self.assertEqual(deal.customer_id, a.id)
+        self.assertEqual(self.db.execute(select(Contact).where(Contact.customer_id == a.id)).scalar_one().name, "Rafi")
+        self.assertIsNone(self.db.get(Customer, b.id))
+        with self.assertRaises(HTTPException):
+            routes_customers.merge_customer(a.id, crm.MergeIn(remove_id=a.id), self.context, self.db)
+
+    # --- Customer page ------------------------------------------------------------
+
+    def test_customer_page_brings_everything_together(self):
+        customer = customer_service.create_customer(self.db, self.context, CustomerIn(name="Page Co", credit_limit=5000))
+        customer_service.update_customer(self.db, self.context, customer.id, CustomerUpdate(credit_limit=8000, tags=["key account"]))
+        lead = self.lead(name="Page lead", company_name="Page Co")
+        lead_service.convert_lead(self.db, self.context, lead.id, crm.ConvertLeadIn(customer_id=customer.id, opportunity_value=300))
+        won = opportunity_service.create_opportunity(self.db, self.context, crm.OpportunityIn(customer_id=customer.id, name="Won one", value=1000))
+        opportunity_service.update_opportunity(self.db, self.context, won.id, crm.OpportunityUpdate(stage="Won"))
+        self.deal(name="Elsewhere")  # another customer's deal
+
+        overview = routes_customers.customer_overview(customer.id, self.context, self.db)
+        self.assertEqual((overview["open_deals"], overview["open_value"], overview["won_deals"], overview["won_value"],
+                          overview["contacts"], overview["quotations"]), (1, 300, 1, 1000, 1, 0))
+        deals = self.opps_out(customer_id=customer.id)
+        self.assertEqual({o.name for o in deals}, {"Won one", "Page Co — new opportunity"})
+
+        timeline = routes_customers.customer_timeline(customer.id, self.context, self.db)
+        summaries = [e["summary"] for e in timeline]
+        self.assertIn("Credit limit: ₹5,000 → ₹8,000; Tags: — → key account", summaries)
+        self.assertIn("Customer created: Page Co", summaries)
+        self.assertIn("Deal created: Won one (stage New)", summaries)
+        self.assertEqual({e["record_type"] for e in timeline}, {"customer", "opportunity", "lead"})
+
+        # Someone who can't see the deals doesn't get their numbers or history here.
+        rep = self.make_context(["sales.customer.read", "crm.opportunity.read"], *self._tenant_and_company())
+        self.assertEqual(routes_customers.customer_overview(customer.id, rep, self.db)["open_deals"], 0)
+        self.assertEqual({e["record_type"] for e in routes_customers.customer_timeline(customer.id, rep, self.db)}, {"customer"})
+
+    # --- Export -------------------------------------------------------------------
+
+    def test_exports_follow_filters_visibility_and_are_audited(self):
+        import csv as csvlib
+        from starlette.requests import Request
+        from app.api import routes_exports
+
+        def export(kind, context=None, **params):
+            query = "&".join(f"{k}={v}" for k, v in params.items()).encode()
+            request = Request({"type": "http", "method": "GET", "path": f"/api/exports/{kind}.csv",
+                               "query_string": query, "headers": []})
+            response = routes_exports.export_csv(kind, request, context or self.context, self.db)
+            text = response.body.decode("utf-8")
+            self.assertTrue(text.startswith("\ufeff"))
+            return list(csvlib.reader(text[1:].splitlines()))
+
+        budget = self.field("lead", "Budget", "number")
+        self.lead(name="Export me", company_name="=HYPERLINK(\"http://x\")", tags=["vip"], custom={budget.key: 5000})
+        self.lead(name="Not me", tags=["cold"])
+        rows = export("leads", tag="vip")
+        self.assertEqual(rows[0][:3] + rows[0][-1:], ["Name", "Company", "Phone", "Budget"])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual((rows[1][0], rows[1][1], rows[1][7], rows[1][-1]),
+                         ("Export me", "'=HYPERLINK(\"http://x\")", "vip", "5000"))
+
+        self.deal(name="Exported deal", value=1000, probability_pct=40)
+        deal_rows = export("opportunities")
+        self.assertEqual(deal_rows[1][:6], ["Exported deal", "Deal customer", "New", "1000.0", "40", "400.0"])
+
+        audit = self.db.execute(select(AuditEvent).where(AuditEvent.tool_name == "crm.export_records.v1")
+                                .order_by(AuditEvent.created_at.desc())).scalars().first()
+        self.assertEqual((audit.result_summary, audit.validation_result), ("Exported 1 opportunities (filters: none)", "PASS"))
+
+        rep = self.make_context(["crm.lead.read", "crm.export"], *self._tenant_and_company())
+        self.assertEqual(len(export("leads", rep)), 1)  # header only: owns none of them
+        with self.assertRaises(HTTPException) as no_export:
+            export("leads", self.make_context(["crm.lead.read", "crm.records.all"], *self._tenant_and_company()))
+        self.assertEqual(no_export.exception.status_code, 403)
+        with self.assertRaises(HTTPException) as no_read:
+            export("customers", rep)
+        self.assertEqual(no_read.exception.status_code, 403)
+
+    # --- Bulk actions -------------------------------------------------------------
+
+    def test_bulk_actions_apply_the_single_edit_rules(self):
+        from app.api import routes_notifications
+
+        asha = self.colleague("Asha")
+        asha_ctx = RequestContext(asha, self.context.tenant_id, self.context.company_id, ["*"], "en-IN")
+        leads = [self.lead(name=f"Bulk {i}", company_name=f"Bulk Co {i}") for i in range(3)]
+        converted = self.lead(name="Bulk converted", company_name="Bulk Co converted")
+        lead_service.convert_lead(self.db, self.context, converted.id, crm.ConvertLeadIn(create_opportunity=False))
+
+        out = routes_leads.bulk_lead(crm.BulkIn(action="assign", ids=[l.id for l in leads] + [converted.id],
+                                                value=str(asha.id)), self.context, self.db)
+        self.assertEqual((out["matched"], out["done"]), (4, 3))
+        self.assertIn("converted", out["skipped"][0]["reason"])
+        self.assertEqual({l.owner_user_id for l in self.leads_out(q="Bulk Co", status_="open")}, {asha.id})
+        inbox = routes_notifications.list_notifications(False, 30, asha_ctx, self.db)["items"]
+        self.assertEqual([n.title for n in inbox if "assigned" in n.title], ["3 leads assigned to you"])  # one alert, not three
+
+        # "All matching" uses the list filters; tags go through normal validation and history.
+        out = routes_leads.bulk_lead(crm.BulkIn(action="add_tag", filters={"q": "Bulk Co", "status": "open"}, value="Q4 Push"),
+                                     self.context, self.db)
+        self.assertEqual(out["done"], 3)
+        self.assertEqual([l.name for l in self.leads_out(tag="q4 push")], ["Bulk 2", "Bulk 1", "Bulk 0"])
+        self.assertEqual(routes_leads.lead_timeline(leads[0].id, self.context, self.db)[0]["summary"], "Tags: — → q4 push")
+        routes_leads.bulk_lead(crm.BulkIn(action="status", ids=[leads[0].id], value="Contacted"), self.context, self.db)
+        self.assertEqual(lead_service.get_lead(self.db, self.context, leads[0].id).status, "Contacted")
+
+        # Deals: moving to Lost needs a reason, like one at a time.
+        deals = [self.deal(name=f"Bulk deal {i}") for i in range(2)]
+        refused = routes_opportunities.bulk_opportunity(crm.BulkIn(action="stage", ids=[d.id for d in deals], value="Lost"),
+                                                        self.context, self.db)
+        self.assertEqual((refused["done"], len(refused["skipped"])), (0, 2))
+        lost = routes_opportunities.bulk_opportunity(
+            crm.BulkIn(action="stage", ids=[d.id for d in deals], value="Lost", lost_reason="Budget cut"), self.context, self.db)
+        self.assertEqual(lost["done"], 2)
+
+        customer = customer_service.create_customer(self.db, self.context, CustomerIn(name="Bulk customer"))
+        routes_customers.bulk_customer(crm.BulkIn(action="deactivate", ids=[customer.id]), self.context, self.db)
+        self.assertFalse(customer_service.get_customer(self.db, self.context, customer.id).active)
+
+        # Permissions per action; ids someone can't see are simply not targets.
+        writer = self.make_context(["crm.lead.read", "crm.lead.write"], *self._tenant_and_company())
+        with self.assertRaises(HTTPException) as denied:
+            routes_leads.bulk_lead(crm.BulkIn(action="assign", ids=[leads[1].id], value=None), writer, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
+        hidden = routes_leads.bulk_lead(crm.BulkIn(action="add_tag", ids=[leads[1].id], value="x"), writer, self.db)
+        self.assertEqual((hidden["matched"], hidden["done"]), (0, 0))
+        with self.assertRaises(HTTPException):
+            routes_leads.bulk_lead(crm.BulkIn(action="delete"), self.context, self.db)  # neither ids nor filters
+
+    # --- Ask ERP: targets and finding records --------------------------------------
+
+    def test_ask_answers_targets_and_finds_by_tag_and_field(self):
+        month = f"{crm_service.now_utc():%Y-%m}"
+        routes_crm.put_targets(crm.TargetsIn(month=month, targets=[
+            crm.TargetIn(user_id=self.context.user.id, amount=100000)]), self.context, self.db)
+        won = self.deal(name="Won for target", value=40000, owner_user_id=self.context.user.id)
+        opportunity_service.update_opportunity(self.db, self.context, won.id, crm.OpportunityUpdate(stage="Won"))
+
+        answer = self.ask("how am I doing against my target?")
+        self.assertEqual(answer["type"], "answer")
+        self.assertIn("You've won ₹40,000 of your ₹100,000 target", answer["message"])
+        self.assertIn("(40%)", answer["message"])
+        team = self.ask("is the team on track?")
+        self.assertIn("The team has won", team["message"])
+
+        city = self.field("lead", "City", "select", ["Kannur", "Kozhikode"])
+        self.lead(name="Vip Kannur", company_name="VK Co", tags=["vip"], custom={city.key: "Kannur"})
+        self.lead(name="Vip Kozhikode", company_name="VZ Co", tags=["vip"], custom={city.key: "Kozhikode"})
+        self.lead(name="Plain Kannur", company_name="PK Co", custom={city.key: "Kannur"})
+        found = self.ask("show vip leads in Kannur")
+        self.assertEqual(found["type"], "answer")
+        self.assertEqual([i["title"] for i in found["items"]], ["VK Co"])
+        self.assertEqual(found["message"], "1 lead tagged vip, City Kannur.")
+        self.assertEqual(found["link"]["to"], "/leads?tag=vip")
+        self.assertEqual(len(self.ask("show vip leads")["items"]), 2)
+        vague = self.ask("show me some leads")
+        self.assertIn("Tags in use: vip", vague["message"])
+
+        self.deal(name="Export deal", tags=["export"])
+        self.assertEqual([i["title"] for i in self.ask("deals tagged export")["items"]], ["Export deal"])
+
+        # Visibility applies: a rep sees only their own.
+        rep = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        self.assertEqual(self.ask("show vip leads", rep)["items"], [])
+
+    # --- Saved views ----------------------------------------------------------------
+
+    def test_saved_views_are_private_unless_shared(self):
+        from app.api import routes_views
+
+        me = self.context
+        colleague = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        mine = routes_views.create_view(routes_views.ViewIn(page="leads", name="My export leads",
+                                                            filters={"owner": "mine", "tag": "export"}), me, self.db)
+        shared = routes_views.create_view(routes_views.ViewIn(page="leads", name="Hot this week",
+                                                              filters={"tag": "hot"}, shared=True), me, self.db)
+        self.assertEqual([v.name for v in routes_views.list_views("leads", me, self.db)], ["Hot this week", "My export leads"])
+        theirs = routes_views.list_views("leads", colleague, self.db)
+        self.assertEqual([(v.name, v.mine) for v in theirs], [("Hot this week", False)])
+        self.assertEqual(routes_views.list_views("opportunities", me, self.db), [])
+
+        with self.assertRaises(HTTPException) as dup:
+            routes_views.create_view(routes_views.ViewIn(page="leads", name="my export LEADS"), me, self.db)
+        self.assertEqual(dup.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as not_owner:
+            routes_views.update_view(shared.id, routes_views.ViewUpdate(name="Mine now"), colleague, self.db)
+        self.assertEqual(not_owner.exception.status_code, 403)
+        with self.assertRaises(HTTPException):
+            routes_views.delete_view(shared.id, colleague, self.db)
+        with self.assertRaises(ValidationError):
+            routes_views.ViewIn(page="leads", name="Bad", filters={"q": {"nested": 1}})
+
+        routes_views.update_view(mine.id, routes_views.ViewUpdate(shared=True), me, self.db)
+        self.assertEqual(len(routes_views.list_views("leads", colleague, self.db)), 2)
+        routes_views.delete_view(mine.id, me, self.db)
+        other_company = self.make_context(["*"])
+        with self.assertRaises(HTTPException):
+            routes_views.delete_view(shared.id, other_company, self.db)
 
     # --- Quotation numbers ------------------------------------------------------
 
@@ -817,7 +1205,7 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(answer["items"][0]["title"], "Chase payment")
         self.assertEqual(answer["items"][0]["tone"], "bad")
 
-        viewer = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        viewer = self.make_context(["crm.lead.read", "crm.records.all"], *self._tenant_and_company())
         self.assertEqual(self.ask("what's overdue today", viewer)["type"], "denied")
         self.assertEqual(self.ask("log a call with Customer Co", viewer)["type"], "denied")
         other = self.make_context(["*"], *self._tenant_and_company())

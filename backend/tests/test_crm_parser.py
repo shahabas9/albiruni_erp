@@ -29,6 +29,26 @@ class IntentTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(p.classify_intent(text, NOW), intent)
 
+    def test_targets_and_finding_records(self):
+        cases = {
+            "how am I doing against target": "crm.targets",
+            "is the team on track this month?": "crm.targets",
+            "show vip leads in Kannur": "crm.find",
+            "leads tagged export": "crm.find",
+            "list customers tagged distributor": "crm.find",
+            "any deals in negotiation": "crm.find",
+            "which deals are going stale": "crm.stale",  # still the stale report
+            "how is the pipeline": "crm.pipeline",
+            "log a call with Rahman Traders": "crm.log_activity",
+        }
+        for text, intent in cases.items():
+            self.assertEqual(p.classify_intent(text), intent, text)
+        self.assertEqual(p.record_kind("show vip leads"), "lead")
+        self.assertEqual(p.record_kind("deals tagged export"), "opportunity")
+        self.assertEqual(p.record_kind("customers in Kannur"), "customer")
+        self.assertTrue(p.mentions("show VIP leads", "vip"))
+        self.assertFalse(p.mentions("show vipul's leads", "vip"))
+
     def test_team_scope(self):
         self.assertTrue(p.wants_everyone("what's overdue for the team"))
         self.assertFalse(p.wants_everyone("what's overdue today"))

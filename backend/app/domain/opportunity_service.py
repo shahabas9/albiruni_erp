@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, contains_eager
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, fields, history
+from app.domain import crm_service, fields, history, notifications
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, OPPORTUNITY_STAGES, Opportunity
@@ -23,6 +23,7 @@ def list_opportunities(
     closed_since: date | None = None,
     stale_only: bool = False,
     tag: str = "",
+    customer_id: UUID | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> tuple[list[Opportunity], int]:
@@ -38,6 +39,7 @@ def list_opportunities(
         .options(contains_eager(Opportunity.customer))
         .where(Opportunity.tenant_id == context.tenant_id, Opportunity.company_id == context.company_id)
     )
+    stmt = crm_service.only_visible(stmt, Opportunity.owner_user_id, context)
     if stage == "open" or stale_only:
         stmt = stmt.where(Opportunity.stage.in_(OPEN_STAGES))
     elif stage == "closed":
@@ -50,6 +52,8 @@ def list_opportunities(
     stmt = crm_service.filter_owner(stmt, Opportunity.owner_user_id, owner, context)
     if tag.strip():
         stmt = stmt.where(Opportunity.tags.contains([tag.strip().lower()]))
+    if customer_id is not None:
+        stmt = stmt.where(Opportunity.customer_id == customer_id)
     if q.strip():
         stmt = stmt.where(crm_service.search(q, Opportunity.name, Customer.name))
     if stale_only:
@@ -59,7 +63,8 @@ def list_opportunities(
 
 def get_opportunity(db: Session, context: RequestContext, opportunity_id: UUID) -> Opportunity:
     opp = db.get(Opportunity, opportunity_id)
-    if opp is None or opp.tenant_id != context.tenant_id or opp.company_id != context.company_id:
+    if (opp is None or opp.tenant_id != context.tenant_id or opp.company_id != context.company_id
+            or not crm_service.can_see(opp.owner_user_id, context)):
         raise NotFoundError(f"No opportunity with id {opportunity_id}")
     return opp
 
@@ -84,6 +89,8 @@ def create_opportunity(db: Session, context: RequestContext, body: OpportunityIn
     db.add(opp)
     db.flush()
     history.record(db, context, "opportunity", opp.id, "created", f"Deal created: {opp.name} (stage New)")
+    notifications.notify(db, context, opp.owner_user_id, "deal_assigned", f"New deal for you: {opp.name}", "",
+                         notifications.deal_link(opp.id))
     db.commit()
     db.refresh(opp)
     return opp
@@ -119,13 +126,16 @@ def update_opportunity(db: Session, context: RequestContext, opportunity_id: UUI
 
 
 def assign_opportunity(
-    db: Session, context: RequestContext, opportunity_id: UUID, owner_user_id: UUID | None
+    db: Session, context: RequestContext, opportunity_id: UUID, owner_user_id: UUID | None, *, notify: bool = True
 ) -> Opportunity:
     opp = get_opportunity(db, context, opportunity_id)
     new_owner = crm_service.resolve_owner(db, context, owner_user_id)
     if new_owner != opp.owner_user_id:
         summary, changes = history.owner_change(db, opp.owner_user_id, new_owner)
         history.record(db, context, "opportunity", opp.id, "owner_changed", summary, changes)
+        if notify:
+            notifications.notify(db, context, new_owner, "deal_assigned", f"Deal assigned to you: {opp.name}", "",
+                                 notifications.deal_link(opp.id))
     opp.owner_user_id = new_owner
     db.commit()
     db.refresh(opp)

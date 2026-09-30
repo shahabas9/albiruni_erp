@@ -117,6 +117,12 @@ gateway (`toolgateway/tools_crm.py`), so it's permission-checked and audited.
 | "log a call with Rahman — no answer", "met Al Faisal about Q4" | `crm.log_activity.v1` | L2 Prepare |
 | "remind me to call Nisha tomorrow at 3pm", "follow up with Malabar on Friday" | `crm.schedule_followup.v1` | L2 Prepare |
 | "move Al Faisal to negotiation", "mark Malabar lost — price too high" | `crm.move_opportunity_stage.v1` | L2 Prepare |
+| "how am I doing against target", "is the team on track" | `crm.target_progress.v1` | L1 Read |
+| "show VIP leads in Kannur", "deals tagged export", "customers tagged distributor", "any deals in negotiation" | `crm.find_leads.v1` / `crm.find_deals.v1` / `crm.find_customers.v1` | L1 Read |
+
+"Show …" questions match the tags in use, the choices of dropdown custom
+fields (e.g. City = Kannur), and stage or status words; "my" limits to your
+own records. Answers follow record visibility like every other read.
 
 Names are resolved against the company's own leads, customers and deals
 (`app/ai/crm_resolver.py`) by distinctive words, not a sentence template;
@@ -151,6 +157,82 @@ One API, one permission set. Each record type has its own routes and
 | `/api/contacts` | `crm.contact.read`, `crm.contact.write` |
 | `/api/assignees`, `GET /api/crm/summary` | any of `crm.lead.read`, `crm.opportunity.read`, `crm.activity.read` |
 | `GET /api/crm/settings` / `PUT` | `crm.opportunity.read` / `crm.settings.write` |
+
+**Record visibility.** People whose role lacks `crm.records.all` see only
+the leads and deals they own, and follow-ups they own or that sit on their
+leads and deals — in every list, detail, history, file, summary, target
+report, tag count and Ask ERP answer (others' records are a 404). A
+duplicate warning still says a matching lead exists, without saying whose.
+Customers and contacts stay shared. On upgrade, every existing role that
+could read leads or deals is granted `crm.records.all` once (tracked in
+`dev_upgrades`), so nothing changes until an admin takes it away.
+
+**Notifications.** People are told (bell in the app, `GET /api/notifications`,
+`POST /api/notifications/read`) when a lead, deal or follow-up is given to
+them by someone else (including the rotation and conversions), when CSV
+import gives them leads (one alert per import), when a web enquiry arrives
+(its owner, or everyone who can assign leads when it's unassigned), and when
+one of their follow-ups goes overdue (once per due time). Each user sets an
+email and on/off at `/api/notifications/preferences`; with `SMTP_HOST`,
+`SMTP_FROM` (and optionally `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
+`SMTP_STARTTLS`, `APP_URL` for links) notifications are emailed too, retried
+up to 3 times. A background loop in the API (`NOTIFICATION_WORKER`,
+`NOTIFICATION_INTERVAL_SECONDS`, default 60) raises overdue alerts and sends
+email; it claims rows with `SKIP LOCKED`, so several processes can run it.
+WhatsApp alerts need a WhatsApp Business provider and aren't built in.
+
+**Delete and merge.** `DELETE /api/leads/{id}` (`crm.lead.delete`),
+`/api/opportunities/{id}` (`crm.opportunity.delete`), `/api/contacts/{id}`
+(`crm.contact.write`) and `/api/customers/{id}` (`sales.customer.delete`)
+remove a record with its follow-ups and files — but never history others
+depend on: converted leads, deals with quotations, and customers with deals,
+quotations or converted leads are refused with what to do instead (mark
+Lost, or merge). `POST /api/leads/{id}/merge` and
+`POST /api/customers/{id}/merge` with `{"remove_id": …}` fold the second
+record into the first: blank details filled, notes/tags/custom values
+combined, and follow-ups, files, history (and for customers contacts, deals,
+quotations and converted leads) moved over. `GET /api/leads/duplicates` and
+`/api/customers/duplicates` list groups sharing a phone/email or a
+name/GSTIN. Deletes and merges are recorded in history.
+
+**Customer page.** `GET /api/customers/{id}/overview` (open pipeline, won,
+lost, contacts, quotations) and `GET /api/customers/{id}/timeline` (the
+customer's history plus its deals' and source leads') back the web app's
+customer page at `/customers/:id`, which also lists the customer's deals
+(`/api/opportunities?customer_id=`), quotations
+(`/api/sales/quotations?customer_id=`), contacts, account follow-ups and
+files. Deal figures and history only include deals the caller may see.
+Customer create/edit (including tags and custom fields) is now recorded in
+history.
+
+**Export.** `GET /api/exports/{leads|opportunities|customers|contacts|activities}.csv`
+takes the same filters as the lists and applies the same record visibility;
+it needs `crm.export` (seeded for Sales Manager, not granted to existing
+roles) plus read permission on that list. Every export runs as the audited
+tool `crm.export_records.v1`, so the AI audit trail records who exported
+what, with which filters and how many rows. Files are UTF-8 with a BOM for
+Excel, include tags and one column per custom field, and cells that a
+spreadsheet would run as a formula are prefixed with `'`. At most 50,000
+rows per export.
+
+**Bulk actions.** `POST /api/leads/bulk`, `/api/opportunities/bulk` and
+`/api/customers/bulk` take an `action`, a `value`, and either `ids` (up to
+500) or `filters` (everything matching the list's filters, up to 2,000).
+Leads: `assign`, `add_tag`, `remove_tag`, `status`, `delete`; deals:
+`assign`, `add_tag`, `remove_tag`, `stage` (Lost needs `lost_reason`),
+`delete`; customers: `add_tag`, `remove_tag`, `activate`, `deactivate`,
+`delete`. Each needs the permission its single edit needs, and each record
+goes through the same service call (rules, visibility, history); refused
+records are skipped and listed with the reason. A bulk reassignment sends
+the new owner one summary notification.
+
+**Saved views.** `GET /api/views?page=`, `POST /api/views`,
+`PATCH`/`DELETE /api/views/{id}` store named filter sets for the leads,
+opportunities, customers, contacts and activities lists — private, or shared
+with the company. Only the owner can change a view; the owner or a CRM admin
+(`crm.settings.write`) can delete it. Views hold filters only, so record
+visibility still applies to whoever opens one. The web app also remembers
+each list's last filters in the browser; filters in a link take precedence.
 
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return

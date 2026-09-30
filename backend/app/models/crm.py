@@ -140,6 +140,8 @@ class Activity(Base):
 
     kind = synonym("type")
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the owner was told this follow-up became overdue (once per due time).
+    overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     owner_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     owner: Mapped["User | None"] = relationship(foreign_keys=[owner_id])  # noqa: F821
@@ -237,4 +239,48 @@ class Attachment(Base):
     content_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column()
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Notification(Base):
+    """Something a person should know about: in the app's bell, and emailed
+    when they've given an address and SMTP is configured."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user", "user_id", "created_at"),
+        Index("ix_notifications_email_pending", "email_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    kind: Mapped[str] = mapped_column(String(40))  # lead_assigned, deal_assigned, followup_assigned, followup_overdue, web_enquiry, import
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(String(500), default="")
+    link: Mapped[str] = mapped_column(String(300), default="")  # a path in the web app
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # pending → sent | skipped (no address / opted out / no SMTP) | failed (after retries)
+    email_status: Mapped[str] = mapped_column(String(12), default="pending")
+    email_attempts: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SavedView(Base):
+    """A named set of list filters. Private to its owner unless shared with
+    the company. It only stores filters, so record visibility still applies
+    to whoever opens it."""
+
+    __tablename__ = "saved_views"
+    __table_args__ = (Index("ix_saved_views_page", "company_id", "page"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    page: Mapped[str] = mapped_column(String(20))  # leads | opportunities | customers | contacts | activities
+    name: Mapped[str] = mapped_column(String(60))
+    filters: Mapped[dict] = mapped_column(JSONB, default=dict)
+    shared: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

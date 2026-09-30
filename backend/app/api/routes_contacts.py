@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import contact_service, crm_service
+from app.domain import contact_service, crm_service, record_admin
 from app.domain.errors import NotFoundError
 from app.models.crm import Contact
 from app.schemas.crm import ContactIn, ContactOut, ContactUpdate
@@ -60,5 +60,17 @@ def update_contact(
 ):
     try:
         return _to_out(contact_service.update_contact(db, context, contact_id, body))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_contact(
+    contact_id: UUID,
+    context: RequestContext = Depends(require_permission("crm.contact.write")),
+    db: Session = Depends(get_db),
+):
+    try:
+        record_admin.delete_contact(db, context, contact_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -5,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.dev_schema import ensure_dev_schema
+from app.domain import notifications
 from app.core.public_cors import PublicCORSMiddleware
 
 # Import routers
@@ -18,13 +20,16 @@ from app.api import (
     routes_auth,
     routes_contacts,
     routes_customers,
+    routes_exports,
     routes_imports,
     routes_items,
     routes_leads,
+    routes_notifications,
     routes_opportunities,
     routes_public,
     routes_sales,
     routes_setup,
+    routes_views,
 )
 
 # Import tool modules for their registration side effect (each module calls
@@ -38,7 +43,18 @@ async def lifespan(app: FastAPI):
     # Dev convenience only — a real deployment manages schema via Alembic
     # migrations (see backend/alembic), never create_all().
     ensure_dev_schema()
+    worker = asyncio.create_task(_notification_worker()) if settings.notification_worker else None
     yield
+    if worker:
+        worker.cancel()
+
+
+async def _notification_worker():
+    """Overdue follow-up alerts and notification emails, every minute or so."""
+
+    while True:
+        await asyncio.sleep(settings.notification_interval_seconds)
+        await asyncio.to_thread(notifications.run_worker_cycle)
 
 
 app = FastAPI(title="Albiruni ERP API", version="0.1.0", lifespan=lifespan)
@@ -49,7 +65,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Total-Count"],  # list totals for paging
+    expose_headers=["X-Total-Count", "X-Row-Count", "Content-Disposition"],  # paging totals, export downloads
 )
 # Added last, so it runs first: /api/public/* (the web enquiry form) is open to any origin.
 app.add_middleware(PublicCORSMiddleware)
@@ -71,6 +87,9 @@ app.include_router(routes_activities.assignees_router)
 app.include_router(routes_crm.router)
 app.include_router(routes_attachments.router)
 app.include_router(routes_public.router)
+app.include_router(routes_notifications.router)
+app.include_router(routes_exports.router)
+app.include_router(routes_views.router)
 
 
 @app.get("/api/health")

@@ -1,6 +1,10 @@
 import { useCallback, useState } from "react";
-import { ApiError, createContact, fetchContacts, updateContact, type Contact } from "../api/client";
+import { Link } from "react-router-dom";
+import { ApiError, createContact, deleteContact, fetchContacts, updateContact, type Contact } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
+import { ExportButton } from "../components/ExportButton";
 import { ContactActions } from "../crm/ContactActions";
 import { Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -8,9 +12,10 @@ import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
 export function Contacts() {
   const { version } = useAppData();
+  const [exportError, setExportError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => String(recallFilters("contacts").search ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const list = usePaged((limit, offset) => fetchContacts({ q: search, limit, offset }), search, version);
   const contacts = list.rows;
@@ -24,10 +29,12 @@ export function Contacts() {
         <p className="page-sub">People at your customers — who you actually talk to, distinct from the account itself.</p>
       </div>
 
-      {list.error && <div className="error-banner">{list.error}</div>}
+      {(list.error ?? exportError) && <div className="error-banner">{list.error ?? exportError}</div>}
 
       <div className="toolbar">
+        <SavedViews page="contacts" filters={{ search }} onApply={(f) => setSearch(String(f.search ?? ""))} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, customer, phone, email" />
+        <ExportButton kind="contacts" filters={{ q: search }} onError={setExportError} />
         <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "Cancel" : "+ New contact"}
         </button>
@@ -78,7 +85,9 @@ export function Contacts() {
                 ) : (
                   <tr key={c.id}>
                     <td>{c.name}</td>
-                    <td>{c.customer_name}</td>
+                    <td>
+                      <Link to={`/customers/${c.customer_id}`}>{c.customer_name}</Link>
+                    </td>
                     <td>{c.title || "—"}</td>
                     <td>{c.email || "—"}</td>
                     <td>
@@ -90,6 +99,16 @@ export function Contacts() {
                     <td>
                       <button className="secondary-btn" onClick={() => setEditingId(c.id)}>
                         Edit
+                      </button>{" "}
+                      <button
+                        className="danger-btn sm"
+                        onClick={async () => {
+                          if (!window.confirm(`Delete ${c.name}?`)) return;
+                          await deleteContact(c.id);
+                          await refresh();
+                        }}
+                      >
+                        Delete
                       </button>
                     </td>
                   </tr>

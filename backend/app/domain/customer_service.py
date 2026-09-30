@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, duplicates, fields
+from app.domain import crm_service, duplicates, fields, history
 from app.domain.errors import NotFoundError
 from app.models.sales import Customer
 from app.schemas.customers import CustomerIn, CustomerUpdate
@@ -57,6 +57,8 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
         custom=fields.clean_custom(db, context, "customer", body.custom),
     )
     db.add(customer)
+    db.flush()
+    history.record(db, context, "customer", customer.id, "created", f"Customer created: {customer.name}")
     db.commit()
     db.refresh(customer)
     return customer
@@ -65,12 +67,14 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
 def update_customer(db: Session, context: RequestContext, customer_id: UUID, body: CustomerUpdate) -> Customer:
     customer = get_customer(db, context, customer_id)
     data = body.model_dump(exclude_unset=True)
-    if data.get("tags") is not None:
-        customer.tags = fields.normalize_tags(data["tags"])
-    if data.get("custom") is not None:
-        customer.custom = fields.clean_custom(db, context, "customer", data["custom"], dict(customer.custom or {}))
-    data.pop("tags", None)
-    data.pop("custom", None)
+    for key in ("tags", "custom"):
+        if key in data and data[key] is None:
+            data.pop(key)
+    changes = fields.apply_tags_and_custom(db, context, "customer", customer, data)
+    changes = {**history.diff(customer, data), **changes}
+    if changes:
+        action = "status_changed" if list(changes) == ["active"] else "updated"
+        history.record(db, context, "customer", customer.id, action, history.describe(changes), changes)
     for field, value in data.items():
         setattr(customer, field, value)
     db.commit()

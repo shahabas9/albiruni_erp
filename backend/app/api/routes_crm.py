@@ -212,6 +212,7 @@ def summary(
     if context.has_permission("crm.opportunity.read"):
         def deals(*columns):
             stmt = select(*columns).select_from(Opportunity).where(*scope(Opportunity))
+            stmt = crm_service.only_visible(stmt, Opportunity.owner_user_id, context)
             try:
                 return crm_service.filter_owner(stmt, Opportunity.owner_user_id, owner, context)
             except ConflictError as exc:
@@ -270,17 +271,18 @@ def summary(
                 deals(func.count()).where(Opportunity.stage.in_(OPEN_STAGES), Opportunity.owner_user_id.is_(None))
             ).scalar_one()
 
-    if context.has_permission("crm.lead.read") and not owner:
+    if context.has_permission("crm.lead.read") and not owner and crm_service.sees_all(context):
         out.unassigned += db.execute(
             select(func.count()).select_from(Lead)
             .where(*scope(Lead), Lead.owner_user_id.is_(None), Lead.status.notin_(("Converted", "Lost")))
         ).scalar_one()
 
     if context.has_permission("crm.activity.read"):
-        open_count, overdue_count = db.execute(
+        open_count, overdue_count = db.execute(crm_service.visible_activities(
             select(func.count(), func.count(case((Activity.due_at < now, 1))))
-            .where(*scope(Activity), Activity.done.is_(False))
-        ).one()
+            .where(*scope(Activity), Activity.done.is_(False)),
+            context,
+        )).one()
         out.open_followups, out.overdue_followups = open_count, overdue_count
         overdue, _ = activity_service.list_activities(db, context, show="overdue", limit=5)
         out.overdue_items = activities_out(db, context, overdue)

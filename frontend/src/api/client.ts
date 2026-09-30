@@ -42,7 +42,7 @@ export interface Page<T> {
   total: number;
 }
 
-type Params = Record<string, string | number | boolean | null | undefined>;
+export type Params = Record<string, string | number | boolean | null | undefined>;
 
 function query(params: Params): string {
   const q = new URLSearchParams();
@@ -168,8 +168,8 @@ export interface Quotation {
   lines: QuotationLine[];
 }
 
-export function fetchQuotations(): Promise<Quotation[]> {
-  return request<Quotation[]>("/api/sales/quotations");
+export function fetchQuotations(customerId?: string): Promise<Quotation[]> {
+  return request<Quotation[]>(`/api/sales/quotations${query({ customer_id: customerId })}`);
 }
 
 export function fetchSalesItems(): Promise<Item[]> {
@@ -369,6 +369,8 @@ export interface AdminUser {
   role_name: string | null;
   locale: string;
   active: boolean;
+  /** Where their notifications are emailed; "" for in-app only. */
+  email: string;
 }
 
 export function fetchAdminUsers(): Promise<AdminUser[]> {
@@ -380,13 +382,14 @@ export function createAdminUser(body: {
   display_name: string;
   password: string;
   role_id: string;
+  email?: string;
 }): Promise<AdminUser> {
   return request<AdminUser>("/api/admin/users", { method: "POST", body: JSON.stringify(body) });
 }
 
 export function updateAdminUser(
   id: string,
-  body: Partial<{ display_name: string; role_id: string; password: string; active: boolean }>,
+  body: Partial<{ display_name: string; role_id: string; password: string; active: boolean; email: string }>,
 ): Promise<AdminUser> {
   return request<AdminUser>(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
@@ -415,6 +418,11 @@ export const KNOWN_PERMISSIONS = [
   "crm.activity.read",
   "crm.activity.write",
   "crm.settings.write",
+  "crm.records.all",
+  "crm.lead.delete",
+  "crm.opportunity.delete",
+  "sales.customer.delete",
+  "crm.export",
   "admin.users.read",
   "admin.users.write",
   "audit.read",
@@ -661,6 +669,7 @@ export interface OpportunityInput {
 
 /** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */
 export interface OpportunityQuery {
+  customer_id?: string;
   /** Only records carrying this tag. */
   tag?: string;
   q?: string;
@@ -1020,4 +1029,166 @@ export function saveWebForm(body: Partial<{ enabled: boolean; source: string; th
 
 export function newWebFormKey(): Promise<WebForm> {
   return request<WebForm>("/api/crm/web-form/new-key", { method: "POST" });
+}
+
+// --- Notifications ----------------------------------------------------------------
+
+export interface AppNotification {
+  id: string;
+  kind: "lead_assigned" | "deal_assigned" | "followup_assigned" | "followup_overdue" | "web_enquiry" | "import" | string;
+  title: string;
+  body: string;
+  /** A path in this app, e.g. /crm?opp=… */
+  link: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export function fetchNotifications(): Promise<{ unread: number; items: AppNotification[] }> {
+  return request<{ unread: number; items: AppNotification[] }>("/api/notifications");
+}
+
+/** Omit ids to mark everything read. */
+export function markNotificationsRead(ids?: string[]): Promise<{ marked: number }> {
+  return request<{ marked: number }>("/api/notifications/read", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+export interface NotificationPreferences {
+  email: string;
+  notify_email: boolean;
+  /** Whether the server can send email at all. */
+  email_enabled: boolean;
+}
+
+export function fetchNotificationPreferences(): Promise<NotificationPreferences> {
+  return request<NotificationPreferences>("/api/notifications/preferences");
+}
+
+export function saveNotificationPreferences(body: { email?: string; notify_email?: boolean }): Promise<NotificationPreferences> {
+  return request<NotificationPreferences>("/api/notifications/preferences", { method: "PUT", body: JSON.stringify(body) });
+}
+
+// --- Delete and merge -------------------------------------------------------------
+
+export function deleteLead(id: string): Promise<void> {
+  return request<void>(`/api/leads/${id}`, { method: "DELETE" });
+}
+
+/** Folds lead `removeId` into `keepId`, then removes it. */
+export function mergeLeads(keepId: string, removeId: string): Promise<Lead> {
+  return request<Lead>(`/api/leads/${keepId}/merge`, { method: "POST", body: JSON.stringify({ remove_id: removeId }) });
+}
+
+export function fetchLeadDuplicates(): Promise<{ reason: string; leads: Lead[] }[]> {
+  return request<{ reason: string; leads: Lead[] }[]>("/api/leads/duplicates");
+}
+
+export function deleteOpportunity(id: string): Promise<void> {
+  return request<void>(`/api/opportunities/${id}`, { method: "DELETE" });
+}
+
+export function deleteContact(id: string): Promise<void> {
+  return request<void>(`/api/contacts/${id}`, { method: "DELETE" });
+}
+
+export function deleteCustomer(id: string): Promise<void> {
+  return request<void>(`/api/customers/${id}`, { method: "DELETE" });
+}
+
+/** Moves everything of customer `removeId` onto `keepId`, then removes it. */
+export function mergeCustomers(keepId: string, removeId: string): Promise<Customer> {
+  return request<Customer>(`/api/customers/${keepId}/merge`, { method: "POST", body: JSON.stringify({ remove_id: removeId }) });
+}
+
+export function fetchCustomerDuplicates(): Promise<{ reason: string; customers: Customer[] }[]> {
+  return request<{ reason: string; customers: Customer[] }[]>("/api/customers/duplicates");
+}
+
+// --- Customer page -----------------------------------------------------------------
+
+export interface CustomerOverview {
+  customer: Customer;
+  open_deals: number;
+  open_value: number;
+  won_deals: number;
+  won_value: number;
+  lost_deals: number;
+  contacts: number;
+  /** null without sales.quotation.read */
+  quotations: number | null;
+  quoted_value: number | null;
+}
+
+export function fetchCustomerOverview(id: string): Promise<CustomerOverview> {
+  return request<CustomerOverview>(`/api/customers/${id}/overview`);
+}
+
+export function fetchCustomerTimeline(id: string): Promise<TimelineEntry[]> {
+  return request<TimelineEntry[]>(`/api/customers/${id}/timeline`);
+}
+
+// --- Export ----------------------------------------------------------------------
+
+export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+
+/** Downloads a list as CSV with the given filters (same as the list's query parameters). */
+export async function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
+  const res = await send(`/api/exports/${kind}.csv${query(filters)}`);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? `${kind}.csv`;
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return Number(res.headers.get("X-Row-Count") ?? 0);
+}
+
+// --- Bulk actions ------------------------------------------------------------------
+
+export interface BulkResult {
+  matched: number;
+  done: number;
+  skipped: { id: string; label: string; reason: string }[];
+}
+
+/** ids, or filters for "everything matching" (the list's own filter params). */
+export function bulkAction(
+  list: "leads" | "opportunities" | "customers",
+  body: { action: string; ids?: string[]; filters?: Params; value?: string | null; lost_reason?: string },
+): Promise<BulkResult> {
+  return request<BulkResult>(`/api/${list}/bulk`, { method: "POST", body: JSON.stringify(body) });
+}
+
+// --- Saved views ------------------------------------------------------------------
+
+export type ViewPage = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+export type ViewFilters = Record<string, string | boolean | number | null>;
+
+export interface SavedView {
+  id: string;
+  page: ViewPage;
+  name: string;
+  filters: ViewFilters;
+  shared: boolean;
+  /** Saved by me (so I can change or delete it). */
+  mine: boolean;
+  owner_name: string | null;
+  created_at: string;
+}
+
+export function fetchViews(page: ViewPage): Promise<SavedView[]> {
+  return request<SavedView[]>(`/api/views${query({ page })}`);
+}
+
+export function createView(body: { page: ViewPage; name: string; filters: ViewFilters; shared: boolean }): Promise<SavedView> {
+  return request<SavedView>("/api/views", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateView(id: string, body: Partial<{ name: string; filters: ViewFilters; shared: boolean }>): Promise<SavedView> {
+  return request<SavedView>(`/api/views/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function deleteView(id: string): Promise<void> {
+  return request<void>(`/api/views/${id}`, { method: "DELETE" });
 }

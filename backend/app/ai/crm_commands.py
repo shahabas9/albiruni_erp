@@ -49,6 +49,8 @@ EXAMPLES = [
     "Remind me to call Nisha tomorrow at 3pm",
     "Move the Al Faisal deal to negotiation",
     "Which deals are going stale?",
+    "How am I doing against my target?",
+    "Show VIP leads",
 ]
 
 
@@ -112,6 +114,14 @@ def plan(db: Session, context: RequestContext, text: str, intent: str, timezone:
         if intent != "crm.overdue" and not everyone and not _owns_open_deals(db, context):
             everyone = True  # nothing of your own to report — show the team's
         return ReadPlan(tool_name, {"everyone": everyone, "timezone": timezone})
+
+    if intent == "crm.targets":
+        return ReadPlan("crm.target_progress.v1", {"everyone": crm_parser.wants_everyone(text)})
+
+    if intent == "crm.find":
+        kind = crm_parser.record_kind(text) or "lead"
+        tool_name = {"lead": "crm.find_leads.v1", "opportunity": "crm.find_deals.v1", "customer": "crm.find_customers.v1"}[kind]
+        return ReadPlan(tool_name, {"kind": kind, "text": text})
 
     # --- Writes ------------------------------------------------------------
     if intent == "crm.move_stage":

@@ -61,15 +61,23 @@ def customer_matches(
     return list(db.execute(stmt.limit(5)).scalars())
 
 
-def describe_leads(leads: list[Lead]) -> list[dict]:
-    return [
-        {
+def describe_leads(leads: list[Lead], context: RequestContext | None = None) -> list[dict]:
+    """Matches the caller can see are described; others only say they exist,
+    so a duplicate warning never reveals someone else's lead."""
+
+    from app.domain.crm_service import can_see
+
+    out = []
+    for lead in leads:
+        if context is not None and not can_see(lead.owner_user_id, context):
+            out.append({"id": "", "label": "A lead owned by someone else", "detail": "Same phone or email"})
+            continue
+        out.append({
             "id": str(lead.id),
             "label": f"{lead.company_name} ({lead.name})" if lead.company_name else lead.name,
             "detail": " · ".join(filter(None, [lead.status, lead.phone, lead.email])),
-        }
-        for lead in leads
-    ]
+        })
+    return out
 
 
 def describe_customers(customers: list[Customer]) -> list[dict]:

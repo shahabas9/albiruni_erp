@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, fields, history
+from app.domain import crm_service, fields, history, notifications
 from app.domain.duplicates import phone_key
 from app.domain.errors import ConflictError
 from app.domain.gstin import normalize_gstin
@@ -226,6 +226,7 @@ def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> 
 
     context = replace(context, channel="import")
     created = 0
+    per_owner: dict = {}
     for row in rows:
         if row.status != "ok":
             continue
@@ -244,6 +245,7 @@ def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> 
             db.flush()
             by = f" — assigned by rotation to {rotated.display_name}" if rotated else ""
             history.record(db, context, "lead", lead.id, "created", f"Lead imported from CSV (line {row.line}){by}")
+            per_owner[owner] = per_owner.get(owner, 0) + 1
         else:
             db.add(Customer(
                 tenant_id=context.tenant_id, company_id=context.company_id,
@@ -251,6 +253,9 @@ def commit(db: Session, context: RequestContext, kind: str, rows: list[Row]) -> 
                 tags=_tag_list(v),
             ))
         created += 1
+    for owner, count in per_owner.items():  # one alert per person, not one per row
+        notifications.notify(db, context, owner, "import", f"{count} new lead{'s' if count != 1 else ''} for you",
+                             "From a CSV import.", "/leads?owner=mine")
     db.commit()
     return created
 

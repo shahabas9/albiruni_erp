@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,14 +40,19 @@ def to_quotation_out(q: Quotation) -> QuotationOut:
 
 @router.get("/quotations", response_model=list[QuotationOut])
 def list_quotations(
+    customer_id: UUID | None = None,
     context: RequestContext = Depends(require_permission("sales.quotation.read")),
     db: Session = Depends(get_db),
 ):
+    """Newest first; `customer_id` for one customer's quotations."""
+
     stmt = (
         select(Quotation)
         .where(Quotation.tenant_id == context.tenant_id, Quotation.company_id == context.company_id)
         .order_by(Quotation.created_at.desc())
     )
+    if customer_id is not None:
+        stmt = stmt.where(Quotation.customer_id == customer_id)
     quotations = db.execute(stmt).scalars().all()
     return [to_quotation_out(q) for q in quotations]
 

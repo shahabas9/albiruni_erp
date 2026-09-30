@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, history
+from app.domain import crm_service, history, notifications
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.lead_service import get_lead
@@ -31,6 +31,7 @@ def list_activities(
     soonest-due first (overdue on top); the rest newest first."""
 
     stmt = select(Activity).where(Activity.tenant_id == context.tenant_id, Activity.company_id == context.company_id)
+    stmt = crm_service.visible_activities(stmt, context)
     if show in ("open", "overdue"):
         stmt = stmt.where(Activity.done.is_(False))
     if show == "overdue":
@@ -53,6 +54,10 @@ def get_activity(db: Session, context: RequestContext, activity_id: UUID) -> Act
     activity = db.get(Activity, activity_id)
     if activity is None or activity.tenant_id != context.tenant_id or activity.company_id != context.company_id:
         raise NotFoundError(f"No activity with id {activity_id}")
+    if not crm_service.sees_all(context):
+        visible = crm_service.visible_activities(select(Activity.id).where(Activity.id == activity.id), context)
+        if db.execute(visible).first() is None:
+            raise NotFoundError(f"No activity with id {activity_id}")
     return activity
 
 
@@ -155,6 +160,10 @@ def create_activity(db: Session, context: RequestContext, body: ActivityIn) -> A
     else:
         when = f" for {activity.due_date.strftime('%d %b %Y')}" if activity.due_date else ""
         _record_on_parent(db, context, activity, "followup_scheduled", f"Follow-up scheduled{when} — {what}")
+    link = notifications.deal_link(activity.opportunity_id) if activity.opportunity_id else "/activities"
+    notifications.notify(db, context, activity.owner_id, "followup_assigned",
+                         f"{'Logged for you' if activity.done else 'Follow-up for you'}: {what}",
+                         f"Due {activity.due_date:%d %b %Y}" if activity.due_date and not activity.done else "", link)
     db.commit()
     db.refresh(activity)
     return activity
@@ -165,6 +174,7 @@ def update_activity(db: Session, context: RequestContext, activity_id: UUID, bod
     changes = body.model_dump(exclude_unset=True)
     if "due_date" in changes:
         activity.due_at = _due_at(changes["due_date"])
+        activity.overdue_notified_at = None  # a new due time can go overdue (and be alerted) again
     if "done" in changes and changes["done"] != activity.done:
         what = f"{activity.type}: {activity.subject}" if activity.subject else activity.type
         if changes["done"]:

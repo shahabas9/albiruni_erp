@@ -13,6 +13,18 @@ class Settings(BaseSettings):
     # are relative to the directory the API is started from.
     attachments_dir: str = "var/attachments"
     attachment_max_mb: int = 10
+    # Notification emails. Without SMTP_HOST they stay in-app only.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+    # Links in emails point here (the web app).
+    app_url: str = "http://localhost:5173"
+    # Background worker: overdue follow-up alerts and email sending.
+    notification_worker: bool = True
+    notification_interval_seconds: int = 60
 
     @property
     def cors_origin_list(self) -> list[str]:

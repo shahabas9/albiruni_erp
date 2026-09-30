@@ -9,11 +9,13 @@ from app.ai.orchestrator import new_correlation_id
 from app.api.routes_leads import http_error
 from app.api.routes_sales import to_quotation_out
 from app.core.database import get_db
-from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, history, opportunity_service
+from app.core.deps import RequestContext, get_current_context, require_permission
+from app.domain import bulk_service, crm_service, history, opportunity_service, record_admin
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Opportunity
 from app.schemas.crm import (
+    BulkIn,
+    BulkOut,
     OpportunityIn,
     OpportunityOut,
     OpportunityQuotationIn,
@@ -65,6 +67,7 @@ def list_opportunities(
     closed_since: date | None = Query(None, description="Open deals plus those won/lost since this date"),
     stale: bool = False,
     tag: str = "",
+    customer_id: UUID | None = None,
     limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
     offset: int = Query(0, ge=0),
     context: RequestContext = Depends(require_permission("crm.opportunity.read")),
@@ -74,7 +77,7 @@ def list_opportunities(
 
     try:
         opps, total = opportunity_service.list_opportunities(
-            db, context, q=q, stage=stage, owner=owner, closed_since=closed_since, stale_only=stale, tag=tag,
+            db, context, q=q, stage=stage, owner=owner, closed_since=closed_since, stale_only=stale, tag=tag, customer_id=customer_id,
             limit=limit, offset=offset,
         )
     except ConflictError as exc:
@@ -141,6 +144,21 @@ def update_opportunity(
         raise http_error(exc) from exc
 
 
+@router.delete("/{opportunity_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_opportunity(
+    opportunity_id: UUID,
+    context: RequestContext = Depends(require_permission("crm.opportunity.delete")),
+    db: Session = Depends(get_db),
+):
+    """Removes a deal with its follow-ups and files — unless it has quotations
+    (mark it Lost instead)."""
+
+    try:
+        record_admin.delete_opportunity(db, context, opportunity_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise http_error(exc) from exc
+
+
 @router.patch("/{opportunity_id}/owner", response_model=OpportunityOut)
 def assign_opportunity(
     opportunity_id: UUID,
@@ -187,3 +205,20 @@ def quote_opportunity(
         correlation_id=new_correlation_id(),
         confirmed=True,
     )
+
+@router.post("/bulk", response_model=BulkOut)
+def bulk_opportunity(
+    body: BulkIn,
+    context: RequestContext = Depends(get_current_context),
+    db: Session = Depends(get_db),
+):
+    """Assign, add_tag, remove_tag, stage (lost needs lost_reason) or delete — each record checked like a single edit; refused ones are skipped with the reason."""
+
+    try:
+        return bulk_service.run(db, context, "opportunity", body.action, ids=body.ids, filters=body.filters,
+                                value=body.value, lost_reason=body.lost_reason)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+

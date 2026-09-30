@@ -4,7 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, duplicates, fields, history
+from app.domain import crm_service, duplicates, fields, history, notifications
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import LEAD_STATUSES, Activity, Contact, Lead, Opportunity
@@ -33,6 +33,7 @@ def list_leads(
     "unassigned" or a user id. q: name, company, phone or email."""
 
     stmt = select(Lead).where(Lead.tenant_id == context.tenant_id, Lead.company_id == context.company_id)
+    stmt = crm_service.only_visible(stmt, Lead.owner_user_id, context)
     if status == "open":
         stmt = stmt.where(Lead.status.notin_(("Converted", "Lost")))
     elif status:
@@ -47,7 +48,8 @@ def list_leads(
 
 def get_lead(db: Session, context: RequestContext, lead_id: UUID) -> Lead:
     lead = db.get(Lead, lead_id)
-    if lead is None or lead.tenant_id != context.tenant_id or lead.company_id != context.company_id:
+    if (lead is None or lead.tenant_id != context.tenant_id or lead.company_id != context.company_id
+            or not crm_service.can_see(lead.owner_user_id, context)):
         raise NotFoundError(f"No lead with id {lead_id}")
     return lead
 
@@ -57,7 +59,7 @@ def create_lead(db: Session, context: RequestContext, body: LeadIn) -> Lead:
         matches = duplicates.lead_matches(db, context, phone=body.phone, email=body.email)
         if matches:
             raise duplicates.DuplicateError(
-                "A lead with this phone or email already exists.", duplicates.describe_leads(matches)
+                "A lead with this phone or email already exists.", duplicates.describe_leads(matches, context)
             )
     lead = Lead(
         tenant_id=context.tenant_id,
@@ -78,6 +80,8 @@ def create_lead(db: Session, context: RequestContext, body: LeadIn) -> Lead:
     db.flush()
     by = f" — assigned by rotation to {rotated.display_name}" if rotated else ""
     history.record(db, context, "lead", lead.id, "created", f"Lead created: {_label(lead)}{by}")
+    notifications.notify(db, context, lead.owner_user_id, "lead_assigned", f"New lead for you: {_label(lead)}",
+                         "Given to you by the lead rotation." if rotated else "", notifications.lead_link(lead.id))
     db.commit()
     db.refresh(lead)
     return lead
@@ -105,7 +109,9 @@ def update_lead(db: Session, context: RequestContext, lead_id: UUID, body: LeadU
     return lead
 
 
-def assign_lead(db: Session, context: RequestContext, lead_id: UUID, owner_user_id: UUID | None) -> Lead:
+def assign_lead(
+    db: Session, context: RequestContext, lead_id: UUID, owner_user_id: UUID | None, *, notify: bool = True
+) -> Lead:
     lead = get_lead(db, context, lead_id)
     if lead.status == "Converted":
         raise ConflictError("This lead has already been converted — reassign its opportunity instead.")
@@ -113,6 +119,9 @@ def assign_lead(db: Session, context: RequestContext, lead_id: UUID, owner_user_
     if new_owner != lead.owner_user_id:
         summary, changes = history.owner_change(db, lead.owner_user_id, new_owner)
         history.record(db, context, "lead", lead.id, "owner_changed", summary, changes)
+        if notify:
+            notifications.notify(db, context, new_owner, "lead_assigned", f"Lead assigned to you: {_label(lead)}",
+                                 "", notifications.lead_link(lead.id))
     lead.owner_user_id = new_owner
     db.commit()
     db.refresh(lead)
@@ -178,6 +187,9 @@ def convert_lead(
             db, context, "opportunity", opportunity.id, "created",
             f"Deal created from lead {_label(lead)} (stage Qualified)",
         )
+        notifications.notify(db, context, opportunity.owner_user_id, "deal_assigned",
+                             f"Your lead became a deal: {opportunity.name}", "",
+                             notifications.deal_link(opportunity.id))
         open_followups = select(Activity).where(Activity.lead_id == lead.id, Activity.done.is_(False))
         for activity in db.execute(open_followups).scalars():
             activity.opportunity_id = opportunity.id

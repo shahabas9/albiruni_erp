@@ -3236,3 +3236,228 @@ button.tag-chip:hover {
   font-size: 12.5px;
   color: var(--ink-dim);
 }
+
+/* ================= Notifications ================= */
+
+.bell-count {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bad);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.notif-list {
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.notif-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px 8px;
+  font-size: 14px;
+}
+
+.notif-head .link-btn {
+  padding: 0;
+  font-size: 12.5px;
+}
+
+.notif-list button.unread b {
+  color: var(--ink);
+}
+
+.notif-list button.unread {
+  background: var(--accent-soft);
+}
+
+.notif-list button.read b {
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+
+.notif-time {
+  color: var(--ink-faint);
+}
+
+.dup-group {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.danger-zone {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.danger-btn {
+  background: none;
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  border-radius: 10px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.danger-btn:hover {
+  background: var(--bad-soft);
+}
+
+.danger-btn.sm {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+/* ================= Customer page ================= */
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.customer-page .page-sub .badge {
+  vertical-align: middle;
+}
+
+.customer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+.customer-grid > div {
+  display: grid;
+  gap: 18px;
+}
+
+@media (max-width: 1100px) {
+  .customer-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ================= Bulk actions ================= */
+
+.check-col {
+  width: 34px;
+  padding-right: 0 !important;
+}
+
+tr.selected td {
+  background: var(--accent-soft);
+}
+
+.bulk-bar {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  margin-bottom: 12px;
+}
+
+.bulk-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+}
+
+.bulk-row select,
+.bulk-row input {
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.bulk-row .link-btn {
+  padding: 0;
+}
+
+.bulk-bar .notice ul {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-weight: 500;
+}
+
+/* ================= Saved views ================= */
+
+.views-menu {
+  position: relative;
+}
+
+.views-pop {
+  right: auto;
+  left: 0;
+  width: min(300px, calc(100vw - 32px));
+}
+
+.view-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.view-row > button:first-child {
+  flex: 1;
+  display: grid;
+  text-align: left;
+}
+
+.view-row > button.on b {
+  color: var(--accent-text);
+}
+
+.view-row small {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
+.views-save {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+
+.views-save input:not([type="checkbox"]) {
+  font-size: 13.5px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.views-save .link-btn {
+  padding: 0;
+  text-align: left;
+}

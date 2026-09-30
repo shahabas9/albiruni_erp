@@ -13,6 +13,12 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 
+const PERMISSION_HINTS: Record<string, string> = {
+  "crm.records.all": "See every lead, deal and follow-up. Without it, people see only the ones they own.",
+  "crm.export": "Download CRM lists as CSV (every export is recorded in the audit trail).",
+  "crm.settings.write": "Change CRM settings: lead rotation, stale limits, custom fields, targets, web form.",
+};
+
 export function Admin() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -243,7 +249,7 @@ function RoleForm({ role, onDone }: { role?: Role; onDone: () => void }) {
         ) : (
           <div className="perm-grid">
             {KNOWN_PERMISSIONS.map((p) => (
-              <label key={p} className={`perm-chip${permissions.has(p) ? " on" : ""}`}>
+              <label key={p} className={`perm-chip${permissions.has(p) ? " on" : ""}`} title={PERMISSION_HINTS[p]}>
                 <input type="checkbox" checked={permissions.has(p)} onChange={() => toggle(p)} />
                 {p}
               </label>
@@ -268,6 +274,7 @@ function UserForm({ roles, user, onDone }: { roles: Role[]; user?: AdminUser; on
   const [displayName, setDisplayName] = useState(user?.display_name ?? "");
   const [username, setUsername] = useState(user?.username ?? "");
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(user?.email ?? "");
   const [roleId, setRoleId] = useState(user?.role_id ?? roles[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -280,10 +287,11 @@ function UserForm({ roles, user, onDone }: { roles: Role[]; user?: AdminUser; on
         await updateAdminUser(user.id, {
           display_name: displayName,
           role_id: roleId,
+          email: email.trim(),
           ...(password ? { password } : {}),
         });
       } else {
-        await createAdminUser({ username, display_name: displayName, password, role_id: roleId });
+        await createAdminUser({ username, display_name: displayName, password, role_id: roleId, email: email.trim() });
       }
       onDone();
     } catch (err) {
@@ -308,6 +316,10 @@ function UserForm({ roles, user, onDone }: { roles: Role[]; user?: AdminUser; on
             <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
           </label>
         )}
+        <label className="field">
+          <span>Email (for notifications)</span>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
+        </label>
         <label className="field">
           <span>{user ? "New password (optional)" : "Password"}</span>
           <input

@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   OPPORTUNITY_STAGES,
   assignOpportunity,
+  bulkAction,
   createOpportunity,
   fetchOpportunities,
   updateOpportunity,
@@ -12,8 +13,12 @@ import {
   type OpportunityStage,
 } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
+import { ExportButton } from "../components/ExportButton";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
+import { BulkBar, useSelection, type BulkActionDef } from "../crm/BulkBar";
 import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { FollowUpBadge, IdleBadge, OwnerPicker, Pager, SearchBox, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -28,14 +33,17 @@ export function Opportunities() {
   const [params] = useSearchParams();
   const [showForm, setShowForm] = useState(params.get("new") === "1");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [saved] = useState(() =>
+    ["stale", "stage", "tag"].some((k) => params.has(k)) ? {} : recallFilters("opportunities"),
+  );
   const [stageFilter, setStageFilter] = useState<"all" | "stale" | OpportunityStage>(() => {
     if (params.get("stale") === "1") return "stale";
-    const stage = params.get("stage") as OpportunityStage | null;
-    return stage && OPPORTUNITY_STAGES.includes(stage) ? stage : "all";
+    const stage = (params.get("stage") ?? saved.stage) as OpportunityStage | "stale" | null;
+    return stage === "stale" ? "stale" : stage && OPPORTUNITY_STAGES.includes(stage) ? stage : "all";
   });
-  const [owner, setOwner] = useState<OwnerFilter>("all");
-  const [search, setSearch] = useState("");
-  const [tag, setTag] = useState(params.get("tag") ?? "");
+  const [owner, setOwner] = useState<OwnerFilter>((saved.owner as OwnerFilter) || "all");
+  const [search, setSearch] = useState(String(saved.search ?? ""));
+  const [tag, setTag] = useState(params.get("tag") ?? String(saved.tag ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
   const { crm, version, assignees, refresh: reload, can } = useAppData();
@@ -55,6 +63,19 @@ export function Opportunities() {
     version,
   );
   const visible = list.rows;
+  const sel = useSelection(visible.map((o) => o.id), `${search}|${stageFilter}|${owner}|${tag}|${list.page}`);
+  const bulkEnabled = can("crm.opportunity.write") || can("crm.opportunity.assign") || can("crm.opportunity.delete");
+  const bulkActions: BulkActionDef[] = [
+    ...(can("crm.opportunity.assign") ? [{ key: "assign", label: "Assign to", input: "owner" as const }] : []),
+    ...(can("crm.opportunity.write")
+      ? [
+          { key: "add_tag", label: "Add tag", input: "tag" as const },
+          { key: "remove_tag", label: "Remove tag", input: "tag" as const },
+          { key: "stage", label: "Move to stage", input: "choice" as const, options: OPPORTUNITY_STAGES },
+        ]
+      : []),
+    ...(can("crm.opportunity.delete") ? [{ key: "delete", label: "Delete", input: "none" as const, danger: true }] : []),
+  ];
   const stageCount = (s: OpportunityStage) =>
     s === "Won" ? crm?.won_deals : s === "Lost" ? crm?.lost_deals : crm?.by_stage.find((b) => b.stage === s)?.count;
 
@@ -117,8 +138,30 @@ export function Opportunities() {
             </button>
           ))}
         </div>
+        <SavedViews
+          page="opportunities"
+          filters={{ stage: stageFilter, owner, tag, search }}
+          onApply={(f) => {
+            const stage = String(f.stage ?? "all");
+            setStageFilter(stage === "stale" || OPPORTUNITY_STAGES.includes(stage as OpportunityStage) ? (stage as OpportunityStage) : "all");
+            setOwner(((f.owner as OwnerFilter) || "all") as OwnerFilter);
+            setTag(String(f.tag ?? ""));
+            setSearch(String(f.search ?? ""));
+          }}
+        />
         <TagFilter recordType="opportunity" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search deal or customer" />
+        <ExportButton
+          kind="opportunities"
+          filters={{
+            q: search,
+            stage: stageFilter === "all" || stageFilter === "stale" ? "" : stageFilter,
+            stale: stageFilter === "stale" || undefined,
+            owner: ownerParam(owner),
+            tag,
+          }}
+          onError={setError}
+        />
         {can("crm.opportunity.write") && (
           <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
             {showForm ? "Cancel" : "+ New opportunity"}
@@ -136,6 +179,35 @@ export function Opportunities() {
         />
       )}
 
+      {bulkEnabled && (
+        <BulkBar
+          selection={sel}
+          total={list.total}
+          noun="deal"
+          actions={bulkActions}
+          assignees={assignees}
+          run={(action, value, lostReason, target) =>
+            bulkAction("opportunities", {
+              action,
+              value,
+              lost_reason: lostReason,
+              ...(target.all
+                ? {
+                    filters: {
+                    q: search,
+                    stage: stageFilter === "all" || stageFilter === "stale" ? "" : stageFilter,
+                    stale: stageFilter === "stale" || undefined,
+                    owner: ownerParam(owner),
+                    tag,
+                  },
+                  }
+                : { ids: target.ids }),
+            })
+          }
+          onDone={() => void reload()}
+        />
+      )}
+
       {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {search || tag || stageFilter !== "all" || owner !== "all" ? "No opportunities match this filter." : "No opportunities yet."}
@@ -147,6 +219,11 @@ export function Opportunities() {
           <table>
             <thead>
               <tr>
+                {bulkEnabled && (
+                  <th className="check-col">
+                    <input type="checkbox" aria-label="Select all on this page" checked={sel.allOnPage} onChange={sel.togglePage} />
+                  </th>
+                )}
                 <th>Deal</th>
                 <th>Stage</th>
                 <th>Value</th>
@@ -160,7 +237,7 @@ export function Opportunities() {
               {visible.map((o) =>
                 editingId === o.id ? (
                   <tr key={o.id}>
-                    <td colSpan={8}>
+                    <td colSpan={bulkEnabled ? 9 : 8}>
                       <OpportunityForm
                         opportunity={o}
                         onDone={() => {
@@ -171,7 +248,12 @@ export function Opportunities() {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={o.id}>
+                  <tr key={o.id} className={sel.has(o.id) ? "selected" : undefined}>
+                    {bulkEnabled && (
+                      <td className="check-col">
+                        <input type="checkbox" aria-label={`Select ${o.name}`} checked={sel.has(o.id)} onChange={() => sel.toggle(o.id)} />
+                      </td>
+                    )}
                     <td style={{ whiteSpace: "normal", minWidth: 180 }}>
                       <button
                         className="link-btn"
@@ -182,7 +264,7 @@ export function Opportunities() {
                         {o.name}
                       </button>
                       <span className="sub">
-                        {o.customer_name}
+                        <Link to={`/customers/${o.customer_id}`}>{o.customer_name}</Link>
                         {o.quotations.length ? ` · ${o.quotations.length} quote${o.quotations.length === 1 ? "" : "s"}` : ""}
                       </span>
                       <TagChips tags={o.tags} onClick={setTag} />

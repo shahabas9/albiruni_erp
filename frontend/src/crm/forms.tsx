@@ -55,7 +55,7 @@ export function FollowUpModal({
   onClose,
   onSaved,
 }: {
-  target: { lead_id?: string; opportunity_id?: string; name: string };
+  target: { lead_id?: string; opportunity_id?: string; customer_id?: string; name: string };
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -75,6 +75,7 @@ export function FollowUpModal({
         due_at: new Date(due).toISOString(),
         lead_id: target.lead_id,
         opportunity_id: target.opportunity_id,
+        customer_id: target.customer_id,
       }),
     onSaved,
   );

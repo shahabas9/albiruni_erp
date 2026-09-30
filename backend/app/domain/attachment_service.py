@@ -176,3 +176,29 @@ def delete(db: Session, context: RequestContext, attachment_id: UUID) -> None:
     db.delete(attachment)
     db.commit()
     path.unlink(missing_ok=True)  # after the commit: a failed delete keeps the file
+
+
+def remove_for_record(db: Session, context: RequestContext, record_type: str, record_id: UUID) -> list[Path]:
+    """Deletes a record's attachment rows (in the caller's transaction) and
+    returns their files, for the caller to unlink once the commit succeeds."""
+
+    rows = db.execute(select(Attachment).where(
+        Attachment.tenant_id == context.tenant_id, Attachment.record_type == record_type,
+        Attachment.record_id == record_id,
+    )).scalars().all()
+    paths = [_path(a) for a in rows]
+    for a in rows:
+        db.delete(a)
+    return paths
+
+
+def move_to_record(db: Session, context: RequestContext, record_type: str, from_id: UUID, to_id: UUID) -> int:
+    """Re-points a merged-away record's files at the record it merged into."""
+
+    rows = db.execute(select(Attachment).where(
+        Attachment.tenant_id == context.tenant_id, Attachment.record_type == record_type,
+        Attachment.record_id == from_id,
+    )).scalars().all()
+    for a in rows:
+        a.record_id = to_id
+    return len(rows)

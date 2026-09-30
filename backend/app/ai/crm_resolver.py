@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
+from app.domain import crm_service
 from app.models.crm import OPEN_STAGES, Lead, Opportunity
 from app.models.sales import Customer
 
@@ -73,7 +74,10 @@ def find(db: Session, context: RequestContext, text: str, *, kinds: tuple[str, .
     matches: list[Match] = []
 
     if "lead" in kinds:
-        for lead in db.execute(select(Lead).where(*scope(Lead), Lead.status.notin_(("Converted", "Lost")))).scalars():
+        leads = crm_service.only_visible(
+            select(Lead).where(*scope(Lead), Lead.status.notin_(("Converted", "Lost"))), Lead.owner_user_id, context
+        )
+        for lead in db.execute(leads).scalars():
             s = _score(text_tokens, text_lower, lead.company_name, lead.name)
             if s:
                 label = f"{lead.company_name} ({lead.name})" if lead.company_name else lead.name
@@ -84,7 +88,8 @@ def find(db: Session, context: RequestContext, text: str, *, kinds: tuple[str, .
             if s:
                 matches.append(Match("customer", c.id, c.name, c.id, s))
     if "opportunity" in kinds:
-        for o in db.execute(select(Opportunity).where(*scope(Opportunity))).scalars():
+        deals = crm_service.only_visible(select(Opportunity).where(*scope(Opportunity)), Opportunity.owner_user_id, context)
+        for o in db.execute(deals).scalars():
             s = _score(text_tokens, text_lower, o.name, o.customer.name)
             if s:
                 matches.append(Match("opportunity", o.id, o.name, o.customer_id, s, open=o.stage in OPEN_STAGES))
@@ -102,13 +107,10 @@ def top(matches: list[Match]) -> list[Match]:
 
 
 def open_deals_for_customer(db: Session, context: RequestContext, customer_id: UUID) -> list[Opportunity]:
-    return list(
-        db.execute(
-            select(Opportunity).where(
-                Opportunity.tenant_id == context.tenant_id,
-                Opportunity.company_id == context.company_id,
-                Opportunity.customer_id == customer_id,
-                Opportunity.stage.in_(OPEN_STAGES),
-            )
-        ).scalars()
+    stmt = select(Opportunity).where(
+        Opportunity.tenant_id == context.tenant_id,
+        Opportunity.company_id == context.company_id,
+        Opportunity.customer_id == customer_id,
+        Opportunity.stage.in_(OPEN_STAGES),
     )
+    return list(db.execute(crm_service.only_visible(stmt, Opportunity.owner_user_id, context)).scalars())

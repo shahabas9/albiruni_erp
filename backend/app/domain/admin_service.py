@@ -84,6 +84,7 @@ def create_user(db: Session, context: RequestContext, body: UserIn) -> User:
         display_name=body.display_name,
         hashed_password=hash_password(body.password),
         locale=body.locale,
+        email=body.email.strip(),
     )
     db.add(user)
     db.commit()
