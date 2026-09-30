@@ -76,6 +76,12 @@ def report(db: Session, context: RequestContext, month: date) -> dict:
     if ids:
         people.update({u.id: u for u in db.execute(select(User).where(User.id.in_(ids))).scalars()})
 
+    if not crm_service.sees_all(context):
+        # Own records only: your row, and "team" means you.
+        people = {context.user.id: people.get(context.user.id, context.user)}
+        targets = {k: v for k, v in targets.items() if k == context.user.id}
+        won = {k: v for k, v in won.items() if k == context.user.id}
+
     rows = []
     for user in sorted(people.values(), key=lambda u: u.display_name.lower()):
         if not user.active and user.id not in targets and user.id not in won:

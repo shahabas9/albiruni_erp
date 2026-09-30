@@ -94,7 +94,8 @@ def _n(count: int, noun: str) -> str:
 
 
 def _mine(context: RequestContext, args: dict[str, Any]) -> bool:
-    return not args.get("everyone")
+    # Without "see all" there is no team view to ask for.
+    return not args.get("everyone") or not crm_service.sees_all(context)
 
 
 def list_due_followups(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:

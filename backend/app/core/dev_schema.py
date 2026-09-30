@@ -132,3 +132,23 @@ def ensure_dev_schema() -> None:
                 """),
                 {"coarse": coarse, "fine": fine},
             )
+
+        # One-off upgrades: each runs once per database, so an admin's later
+        # change (e.g. taking "see all" away from a role) is never undone.
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS dev_upgrades (name VARCHAR(80) PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now())"
+        ))
+
+        def once(name: str) -> bool:
+            return conn.execute(
+                text("INSERT INTO dev_upgrades (name) VALUES (:n) ON CONFLICT DO NOTHING RETURNING name"), {"n": name}
+            ).first() is not None
+
+        if once("grant-crm-records-all"):
+            # Record visibility arrived with crm.records.all; roles that could
+            # read leads or deals before keep seeing everyone's.
+            conn.execute(text("""
+                UPDATE roles SET permissions = array_append(permissions, 'crm.records.all')
+                WHERE ('crm.lead.read' = ANY(permissions) OR 'crm.opportunity.read' = ANY(permissions))
+                  AND NOT 'crm.records.all' = ANY(permissions)
+            """))

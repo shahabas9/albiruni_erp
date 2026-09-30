@@ -23,7 +23,7 @@ from app.core.deps import RequestContext, require_any_permission, require_permis
 from app.core.dev_schema import ensure_dev_schema
 from app.domain import activity_service, crm_service, customer_service, lead_service, opportunity_service, sales_service
 from app.domain.duplicates import DuplicateError
-from app.domain.errors import ConflictError
+from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Activity, Contact, Lead, Opportunity
 from app.models.identity import Role, User
 from app.models.sales import Customer, Item, Quotation
@@ -32,6 +32,7 @@ from app.schemas import crm
 from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.models.audit import AuditEvent
+from app.ai import crm_resolver
 from app.toolgateway import tools_crm, tools_sales  # noqa: F401 — registers the tools
 
 
@@ -174,7 +175,8 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(timeline[4]["summary"], "Owner: Unassigned → Fathima")
 
         # Someone who can read leads but not deals doesn't see the deal's history.
-        reader = self.make_context(["crm.lead.read"], tenant=self.db.get(Tenant, self.context.tenant_id),
+        reader = self.make_context(["crm.lead.read", "crm.records.all"],
+                                   tenant=self.db.get(Tenant, self.context.tenant_id),
                                    company=self.db.get(Company, self.context.company_id))
         lead_only = routes_leads.lead_timeline(lead.id, reader, self.db)
         self.assertEqual({e["record_type"] for e in lead_only}, {"lead"})
@@ -270,7 +272,8 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(out.unassigned, 2)  # the lead and the deal
         self.assertEqual(out.overdue_items[0].related_label, f"Opportunity: {deal.name}")
 
-        reader = self.make_context(["crm.activity.read"], tenant=self.db.get(Tenant, self.context.tenant_id),
+        reader = self.make_context(["crm.activity.read", "crm.records.all"],
+                                   tenant=self.db.get(Tenant, self.context.tenant_id),
                                    company=self.db.get(Company, self.context.company_id))
         limited = routes_crm.summary("", 90, reader, self.db)
         self.assertEqual((limited.open_deals, limited.unassigned, limited.overdue_followups), (0, 0, 1))
@@ -558,7 +561,7 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(len(leftovers), 1)
 
         # Read needs the record's read permission; upload/delete need write; other companies see nothing.
-        reader = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        reader = self.make_context(["crm.lead.read", "crm.records.all"], *self._tenant_and_company())
         self.assertEqual(len(routes_attachments.list_attachments("lead", lead.id, reader, self.db)), 1)
         with self.assertRaises(HTTPException) as denied:
             routes_attachments.delete_attachment(saved["id"], reader, self.db)
@@ -641,6 +644,60 @@ class CrmTests(unittest.TestCase):
             web_form.form_for_key(self.db, key)
         with self.assertRaises(HTTPException):
             require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+
+    # --- Record visibility --------------------------------------------------------
+
+    def test_without_see_all_people_only_see_their_own_records(self):
+        rep_perms = ["crm.lead.read", "crm.lead.write", "crm.opportunity.read", "crm.opportunity.write",
+                     "crm.activity.read", "crm.activity.write"]
+        rep = self.make_context(rep_perms, *self._tenant_and_company())
+        other = self.make_context(rep_perms, *self._tenant_and_company())
+        mine = self.lead(name="Rep lead", company_name="Rep Co", phone="9123400001", owner_user_id=rep.user.id)
+        theirs = self.lead(name="Other lead", company_name="Secret Co", phone="9123400002",
+                           owner_user_id=other.user.id)
+        my_deal = self.deal(name="Rep deal", owner_user_id=rep.user.id, value=100)
+        their_deal = self.deal(name="Secret deal", owner_user_id=other.user.id, value=900)
+        activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Chase secret", opportunity_id=their_deal.id,
+            due_date=date.today() - timedelta(days=1)))
+        on_mine = activity_service.create_activity(self.db, self.context, crm.ActivityIn(
+            type="Call", subject="Chase mine", opportunity_id=my_deal.id, owner_id=other.user.id))
+
+        self.assertEqual([l.name for l in self.leads_out(context=rep)], ["Rep lead"])
+        self.assertEqual([o.name for o in self.opps_out(context=rep)], ["Rep deal"])
+        with self.assertRaises(HTTPException) as hidden:
+            routes_leads.get_lead(theirs.id, rep, self.db)
+        self.assertEqual(hidden.exception.status_code, 404)
+        with self.assertRaises(NotFoundError):  # can't change it either
+            opportunity_service.update_opportunity(self.db, rep, their_deal.id, crm.OpportunityUpdate(value=1))
+        # Follow-ups: theirs hidden, but one someone else owns on MY deal is visible.
+        rows = routes_activities.list_activities(Response(), show="all", open_only=False, owner="", lead_id=None,
+                                                 customer_id=None, opportunity_id=None, limit=None, offset=0,
+                                                 context=rep, db=self.db)
+        self.assertEqual([a.subject for a in rows], ["Chase mine"])
+        self.assertEqual(activity_service.get_activity(self.db, rep, on_mine.id).id, on_mine.id)
+
+        summary = routes_crm.summary("", 90, rep, self.db)
+        self.assertEqual((summary.open_deals, summary.open_value, summary.overdue_followups, summary.unassigned),
+                         (1, 100, 0, 0))
+        self.assertEqual([r["name"] for r in routes_crm.get_targets("", rep, self.db)["rows"]], ["Test user"])
+
+        # A duplicate warning says a match exists without revealing whose.
+        with self.assertRaises(DuplicateError) as dup:
+            lead_service.create_lead(self.db, rep, crm.LeadIn(name="Copy", phone="9123400002"))
+        self.assertEqual(dup.exception.matches[0]["label"], "A lead owned by someone else")
+        self.assertEqual(dup.exception.matches[0]["id"], "")
+
+        # Ask ERP only finds your own records and has no team view.
+        self.assertEqual({m.label for m in crm_resolver.find(self.db, rep, "Secret Co deal", kinds=("lead", "opportunity"))}, set())
+        answer = routes_ask.ask(AskRequest(text="what's overdue for the team"), rep, self.db)
+        self.assertNotIn("Chase secret", str(answer))
+
+        # With the permission (or "*"), everything as before.
+        boss = self.make_context(rep_perms + ["crm.records.all"], *self._tenant_and_company())
+        self.assertEqual({l.name for l in self.leads_out(context=boss)} >= {"Rep lead", "Other lead"}, True)
+        self.assertEqual(len(self.opps_out(context=self.context)), 2)
+        self.assertEqual(mine.owner_user_id, rep.user.id)
 
     # --- Quotation numbers ------------------------------------------------------
 
@@ -817,7 +874,7 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(answer["items"][0]["title"], "Chase payment")
         self.assertEqual(answer["items"][0]["tone"], "bad")
 
-        viewer = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        viewer = self.make_context(["crm.lead.read", "crm.records.all"], *self._tenant_and_company())
         self.assertEqual(self.ask("what's overdue today", viewer)["type"], "denied")
         self.assertEqual(self.ask("log a call with Customer Co", viewer)["type"], "denied")
         other = self.make_context(["*"], *self._tenant_and_company())

@@ -415,6 +415,7 @@ export const KNOWN_PERMISSIONS = [
   "crm.activity.read",
   "crm.activity.write",
   "crm.settings.write",
+  "crm.records.all",
   "admin.users.read",
   "admin.users.write",
   "audit.read",

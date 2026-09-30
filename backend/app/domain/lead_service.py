@@ -33,6 +33,7 @@ def list_leads(
     "unassigned" or a user id. q: name, company, phone or email."""
 
     stmt = select(Lead).where(Lead.tenant_id == context.tenant_id, Lead.company_id == context.company_id)
+    stmt = crm_service.only_visible(stmt, Lead.owner_user_id, context)
     if status == "open":
         stmt = stmt.where(Lead.status.notin_(("Converted", "Lost")))
     elif status:
@@ -47,7 +48,8 @@ def list_leads(
 
 def get_lead(db: Session, context: RequestContext, lead_id: UUID) -> Lead:
     lead = db.get(Lead, lead_id)
-    if lead is None or lead.tenant_id != context.tenant_id or lead.company_id != context.company_id:
+    if (lead is None or lead.tenant_id != context.tenant_id or lead.company_id != context.company_id
+            or not crm_service.can_see(lead.owner_user_id, context)):
         raise NotFoundError(f"No lead with id {lead_id}")
     return lead
 
@@ -57,7 +59,7 @@ def create_lead(db: Session, context: RequestContext, body: LeadIn) -> Lead:
         matches = duplicates.lead_matches(db, context, phone=body.phone, email=body.email)
         if matches:
             raise duplicates.DuplicateError(
-                "A lead with this phone or email already exists.", duplicates.describe_leads(matches)
+                "A lead with this phone or email already exists.", duplicates.describe_leads(matches, context)
             )
     lead = Lead(
         tenant_id=context.tenant_id,

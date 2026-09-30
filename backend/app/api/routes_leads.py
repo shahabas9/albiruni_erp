@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import crm_service, history, lead_service
+from app.domain import crm_service, history, lead_service, opportunity_service
 from app.domain.duplicates import DuplicateError
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import Lead
@@ -105,7 +105,11 @@ def lead_timeline(
         raise http_error(exc) from exc
     refs = [("lead", lead.id)]
     if lead.converted_opportunity_id and context.has_permission("crm.opportunity.read"):
-        refs.append(("opportunity", lead.converted_opportunity_id))
+        try:
+            opportunity_service.get_opportunity(db, context, lead.converted_opportunity_id)  # visible to them?
+            refs.append(("opportunity", lead.converted_opportunity_id))
+        except NotFoundError:
+            pass
     return history.timeline(db, context, refs)
 
 

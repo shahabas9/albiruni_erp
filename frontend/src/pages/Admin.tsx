@@ -13,6 +13,11 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 
+const PERMISSION_HINTS: Record<string, string> = {
+  "crm.records.all": "See every lead, deal and follow-up. Without it, people see only the ones they own.",
+  "crm.settings.write": "Change CRM settings: lead rotation, stale limits, custom fields, targets, web form.",
+};
+
 export function Admin() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -243,7 +248,7 @@ function RoleForm({ role, onDone }: { role?: Role; onDone: () => void }) {
         ) : (
           <div className="perm-grid">
             {KNOWN_PERMISSIONS.map((p) => (
-              <label key={p} className={`perm-chip${permissions.has(p) ? " on" : ""}`}>
+              <label key={p} className={`perm-chip${permissions.has(p) ? " on" : ""}`} title={PERMISSION_HINTS[p]}>
                 <input type="checkbox" checked={permissions.has(p)} onChange={() => toggle(p)} />
                 {p}
               </label>

@@ -38,6 +38,7 @@ def list_opportunities(
         .options(contains_eager(Opportunity.customer))
         .where(Opportunity.tenant_id == context.tenant_id, Opportunity.company_id == context.company_id)
     )
+    stmt = crm_service.only_visible(stmt, Opportunity.owner_user_id, context)
     if stage == "open" or stale_only:
         stmt = stmt.where(Opportunity.stage.in_(OPEN_STAGES))
     elif stage == "closed":
@@ -59,7 +60,8 @@ def list_opportunities(
 
 def get_opportunity(db: Session, context: RequestContext, opportunity_id: UUID) -> Opportunity:
     opp = db.get(Opportunity, opportunity_id)
-    if opp is None or opp.tenant_id != context.tenant_id or opp.company_id != context.company_id:
+    if (opp is None or opp.tenant_id != context.tenant_id or opp.company_id != context.company_id
+            or not crm_service.can_see(opp.owner_user_id, context)):
         raise NotFoundError(f"No opportunity with id {opportunity_id}")
     return opp
 

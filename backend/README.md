@@ -152,6 +152,15 @@ One API, one permission set. Each record type has its own routes and
 | `/api/assignees`, `GET /api/crm/summary` | any of `crm.lead.read`, `crm.opportunity.read`, `crm.activity.read` |
 | `GET /api/crm/settings` / `PUT` | `crm.opportunity.read` / `crm.settings.write` |
 
+**Record visibility.** People whose role lacks `crm.records.all` see only
+the leads and deals they own, and follow-ups they own or that sit on their
+leads and deals — in every list, detail, history, file, summary, target
+report, tag count and Ask ERP answer (others' records are a 404). A
+duplicate warning still says a matching lead exists, without saying whose.
+Customers and contacts stay shared. On upgrade, every existing role that
+could read leads or deals is granted `crm.records.all` once (tracked in
+`dev_upgrades`), so nothing changes until an admin takes it away.
+
 **Lists page on the server.** `GET /api/leads`, `/api/opportunities` and
 `/api/activities` take `limit` (max 200), `offset` and filters, and return
 the total matching count in `X-Total-Count`: leads `q` (every word must

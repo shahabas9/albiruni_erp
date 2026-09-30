@@ -31,6 +31,7 @@ def list_activities(
     soonest-due first (overdue on top); the rest newest first."""
 
     stmt = select(Activity).where(Activity.tenant_id == context.tenant_id, Activity.company_id == context.company_id)
+    stmt = crm_service.visible_activities(stmt, context)
     if show in ("open", "overdue"):
         stmt = stmt.where(Activity.done.is_(False))
     if show == "overdue":
@@ -53,6 +54,10 @@ def get_activity(db: Session, context: RequestContext, activity_id: UUID) -> Act
     activity = db.get(Activity, activity_id)
     if activity is None or activity.tenant_id != context.tenant_id or activity.company_id != context.company_id:
         raise NotFoundError(f"No activity with id {activity_id}")
+    if not crm_service.sees_all(context):
+        visible = crm_service.visible_activities(select(Activity.id).where(Activity.id == activity.id), context)
+        if db.execute(visible).first() is None:
+            raise NotFoundError(f"No activity with id {activity_id}")
     return activity
 
 

@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
+from app.domain import crm_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import CustomField, Lead, Opportunity
 from app.models.sales import Customer
@@ -53,7 +54,10 @@ def tag_counts(db: Session, context: RequestContext, record_type: str) -> list[d
 
     model = _model(record_type)
     tag = func.unnest(model.tags).label("tag")
-    inner = select(tag).where(model.tenant_id == context.tenant_id, model.company_id == context.company_id).subquery()
+    stmt = select(tag).where(model.tenant_id == context.tenant_id, model.company_id == context.company_id)
+    if model is not Customer:
+        stmt = crm_service.only_visible(stmt, model.owner_user_id, context)
+    inner = stmt.subquery()
     rows = db.execute(
         select(inner.c.tag, func.count()).group_by(inner.c.tag).order_by(func.count().desc(), inner.c.tag).limit(200)
     ).all()

@@ -237,11 +237,11 @@ export function DuplicateWarning({
     <div className="notice warn dup-warning" role="alert">
       <b>Possible duplicate — {matches.length === 1 ? `a ${noun} like this already exists` : `${matches.length} ${noun}s like this already exist`}:</b>
       <ul>
-        {matches.map((m) => (
-          <li key={m.id}>
+        {matches.map((m, i) => (
+          <li key={m.id || `hidden-${i}`}>
             {m.label}
             {m.detail && <small> · {m.detail}</small>}
-            {onUse && (
+            {onUse && m.id && (
               <button type="button" className="link-btn" onClick={() => onUse(m.id)}>
                 Use this one
               </button>
