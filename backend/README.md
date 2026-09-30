@@ -438,3 +438,29 @@ functions with their own unit tests).
   delivery, so two deliveries of the last few boxes can't both succeed.
 - **Cancelling a delivery** (`/api/sales/deliveries/{id}/cancel`, audited,
   needs a reason) puts the stock back and reopens the order's quantities.
+
+### Tax invoices
+
+- `POST /api/sales/orders/{id}/invoices` makes a **draft** from a confirmed
+  order: by default what's been delivered and not yet invoiced (before any
+  delivery, everything not invoiced; services, everything not invoiced), or
+  the quantities you pass. A draft has no number and can be deleted.
+- **Issuing** (`/api/sales/invoices/{id}/issue`, audited tool
+  `sales.issue_invoice.v1`, needs `sales.invoice.write`) numbers it
+  `INV/26-27/00001` (at most 16 characters, restarting each financial
+  year), copies the seller's and buyer's details onto it as they are that
+  day, and locks it. It's refused until Company & GST has a legal name,
+  GSTIN, state and address; for a future date; for a date before the last
+  invoice issued this year (numbers must follow dates); and if another
+  invoice has meanwhile taken the quantities (two drafts can't bill the same
+  goods).
+- Every issued invoice carries `amount_in_words`, an `hsn_summary`, `balance`
+  (total − paid − credited) and a `payment_status`: Unpaid, Partly paid, Paid
+  or Overdue (past due with something owed). `GET /api/sales/invoices` filters
+  by `status` = Draft, Issued, unpaid, overdue or paid.
+- The web app prints invoices at `/print/invoice/{id}` and delivery challans
+  at `/print/delivery/{id}` (the browser's Print / Save as PDF). A4, black on
+  white whatever the theme.
+- Not included: e-invoicing (IRN and signed QR from the GST portal) and
+  e-way bills. Both need a GST Suvidha Provider account; add them as tools
+  that call the provider when a company is above the e-invoicing threshold.

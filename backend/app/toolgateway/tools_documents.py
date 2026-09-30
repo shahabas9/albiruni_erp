@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import delivery_service, order_service
+from app.domain import delivery_service, invoice_service, order_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -56,7 +56,20 @@ def cancel_delivery(db: Session, context: RequestContext, args: dict[str, Any]) 
             "result_summary": f"Cancelled delivery {delivery.number}; stock returned"}
 
 
+@_guard
+def issue_invoice(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    invoice = invoice_service.issue(
+        db, context, UUID(str(args["invoice_id"])),
+        date.fromisoformat(args["invoice_date"]) if args.get("invoice_date") else None,
+    )
+    return {"invoice_id": str(invoice.id), "number": invoice.number,
+            "result_summary": f"Issued invoice {invoice.number} to {invoice.buyer_name} "
+                              f"(₹{float(invoice.grand_total):,.2f})"}
+
+
 for name, purpose, permission, handler in [
+    ("sales.issue_invoice.v1", "Issue a draft tax invoice: number it and lock it.", "sales.invoice.write",
+     issue_invoice),
     ("sales.confirm_order.v1", "Confirm a draft sales order after discount and credit-limit checks.",
      "sales.order.write", confirm_order),
     ("sales.cancel_order.v1", "Cancel a sales order that has nothing delivered or invoiced.",

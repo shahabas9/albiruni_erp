@@ -7,9 +7,11 @@ import {
   confirmOrder,
   deleteOrder,
   fetchDeliveries,
+  fetchInvoices,
   fetchOrder,
   fetchOrderTimeline,
   type DeliveryNote,
+  type Invoice,
   type SalesOrder,
 } from "../api/sales";
 import { Timeline } from "../crm/Timeline";
@@ -17,6 +19,7 @@ import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dateTime, dayDate, docStatusClass } from "../lib/format";
 import { DeliverModal } from "../sales/DeliverModal";
+import { InvoiceModal } from "../sales/InvoiceModal";
 import { DocLinesTable } from "../sales/DocLinesTable";
 import { DocTotals } from "../sales/DocTotals";
 import { ReasonModal } from "../sales/ReasonModal";
@@ -33,19 +36,26 @@ export function OrderPage() {
   const [delivering, setDelivering] = useState(false);
   const [deliveries, setDeliveries] = useState<DeliveryNote[]>([]);
   const [undoing, setUndoing] = useState<DeliveryNote | null>(null);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [invoicing, setInvoicing] = useState(false);
   const [changes, setChanges] = useState(0);
   const warnings = ((location.state as { warnings?: string[] } | null)?.warnings ?? []).filter(Boolean);
 
   const load = useCallback(async () => {
     try {
-      const [o, d] = await Promise.all([fetchOrder(id), fetchDeliveries({ order_id: id, limit: 100 })]);
+      const [o, d, inv] = await Promise.all([
+        fetchOrder(id),
+        fetchDeliveries({ order_id: id, limit: 100 }),
+        can("sales.invoice.read") ? fetchInvoices({ order_id: id, limit: 100 }) : Promise.resolve({ rows: [] as Invoice[], total: 0 }),
+      ]);
       setOrder(o);
       setDeliveries(d.rows);
+      setInvoices(inv.rows);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load this order.");
     }
-  }, [id]);
+  }, [id, can]);
 
   useEffect(() => {
     void load();
@@ -68,6 +78,8 @@ export function OrderPage() {
   const goodsLineIds = new Set(order.lines.filter((l) => l.item_kind === "goods").map((l) => l.id));
   const toDeliver = order.lines.some((l) => goodsLineIds.has(l.id) && l.qty > l.delivered_qty);
   const canDeliver = can("sales.delivery.write") && ["Confirmed", "Partly delivered"].includes(order.status) && toDeliver;
+  const canInvoice =
+    can("sales.invoice.write") && ["Confirmed", "Partly delivered", "Delivered"].includes(order.status) && order.lines.some((l) => l.qty > l.invoiced_qty);
 
   async function act(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -101,8 +113,13 @@ export function OrderPage() {
             {order.quotation_number && ` · from ${order.quotation_number}`}
           </p>
         </div>
-        {(canWrite || canDeliver) && (
+        {(canWrite || canDeliver || canInvoice) && (
           <div className="head-actions">
+            {canInvoice && (
+              <button className={canDeliver ? "ghost-btn" : "primary-btn"} disabled={busy} onClick={() => setInvoicing(true)}>
+                Create invoice
+              </button>
+            )}
             {canDeliver && (
               <button className="primary-btn" disabled={busy} onClick={() => setDelivering(true)}>
                 Deliver
@@ -191,6 +208,29 @@ export function OrderPage() {
               </div>
             )}
           </div>
+          {order.status !== "Draft" && can("sales.invoice.read") && (
+            <div className="card">
+              <div className="card-head">
+                <span className="card-title">Invoices</span>
+              </div>
+              {invoices.length === 0 && <p className="card-note">Not invoiced yet.</p>}
+              <div className="mini-docs">
+                {invoices.map((i) => (
+                  <div className="row" key={i.id}>
+                    <div>
+                      <Link className="mono" to={`/sales/invoices/${i.id}`}>
+                        {i.number ?? "Draft invoice"}
+                      </Link>
+                      <small>
+                        {i.lines.map((l) => `${l.qty} ${l.uom} ${l.description}`).join(", ")} · ₹{i.grand_total.toLocaleString("en-IN")}
+                      </small>
+                    </div>
+                    <span className={`badge ${docStatusClass(i.payment_status)}`}>{i.payment_status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {order.status !== "Draft" && (
             <div className="card">
               <div className="card-head">
@@ -206,11 +246,16 @@ export function OrderPage() {
                       {d.vehicle_no && <small>Vehicle {d.vehicle_no}</small>}
                       {d.status === "Cancelled" && <small>Cancelled — {d.cancel_reason}</small>}
                     </div>
-                    {d.status === "Delivered" && can("sales.delivery.write") && (
-                      <button className="ghost-btn sm" onClick={() => setUndoing(d)}>
-                        Cancel
-                      </button>
-                    )}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <a className="ghost-btn sm" href={`/print/delivery/${d.id}`} target="_blank" rel="noreferrer">
+                        Challan
+                      </a>
+                      {d.status === "Delivered" && can("sales.delivery.write") && (
+                        <button className="ghost-btn sm" onClick={() => setUndoing(d)}>
+                          Cancel
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -236,6 +281,7 @@ export function OrderPage() {
           }}
         />
       )}
+      {invoicing && <InvoiceModal order={order} onClose={() => setInvoicing(false)} />}
       {undoing && (
         <ReasonModal
           title={`Cancel delivery ${undoing.number}?`}

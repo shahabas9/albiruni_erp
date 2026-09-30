@@ -157,3 +157,86 @@ class DeliveryNoteLine(Base):
     qty: Mapped[float] = mapped_column(Numeric(14, 2))
 
     delivery: Mapped["DeliveryNote"] = relationship(back_populates="lines")
+
+
+class Invoice(Base):
+    """A GST tax invoice. A draft has no number; issuing gives it the next
+    INV/yy-yy/n and locks it — from then on only credit notes and payments
+    change what's owed on it."""
+
+    __tablename__ = "invoices"
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_invoices_tenant_number"),)
+
+    id: Mapped[uuid.UUID] = _id()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    number: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sales_orders.id"), index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
+    # Draft or Issued.
+    status: Mapped[str] = mapped_column(String(16), default="Draft")
+    invoice_date: Mapped[date] = mapped_column(Date)
+    due_date: Mapped[date] = mapped_column(Date)
+    place_of_supply: Mapped[str] = mapped_column(String(2), default="")
+    # Seller and buyer as printed, fixed when issued.
+    seller_name: Mapped[str] = mapped_column(String(160), default="")
+    seller_gstin: Mapped[str] = mapped_column(String(15), default="")
+    seller_state: Mapped[str] = mapped_column(String(2), default="")
+    seller_address: Mapped[str] = mapped_column(Text, default="")
+    buyer_name: Mapped[str] = mapped_column(String(160), default="")
+    buyer_gstin: Mapped[str] = mapped_column(String(15), default="")
+    buyer_state: Mapped[str] = mapped_column(String(2), default="")
+    billing_address: Mapped[str] = mapped_column(Text, default="")
+    shipping_address: Mapped[str] = mapped_column(Text, default="")
+    customer_po: Mapped[str] = mapped_column(String(60), default="")
+    subtotal: Mapped[float] = _money()
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    total: Mapped[float] = _money()  # taxable value
+    cgst: Mapped[float] = _money()
+    sgst: Mapped[float] = _money()
+    igst: Mapped[float] = _money()
+    round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
+    grand_total: Mapped[float] = _money()
+    # Running totals kept in step with receipts and credit notes.
+    amount_paid: Mapped[float] = _money()
+    amount_credited: Mapped[float] = _money()
+    notes: Mapped[str] = mapped_column(Text, default="")
+    terms: Mapped[str] = mapped_column(Text, default="")
+    bank_details: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    issued_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    lines: Mapped[list["InvoiceLine"]] = relationship(
+        back_populates="invoice", cascade="all, delete-orphan", order_by="InvoiceLine.position"
+    )
+    order: Mapped["SalesOrder"] = relationship()
+    customer: Mapped["Customer"] = relationship()  # noqa: F821
+
+
+class InvoiceLine(Base):
+    __tablename__ = "invoice_lines"
+
+    id: Mapped[uuid.UUID] = _id()
+    invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="CASCADE"))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    order_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sales_order_lines.id"))
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("items.id"))
+    description: Mapped[str] = mapped_column(String(200))
+    hsn_code: Mapped[str] = mapped_column(String(8), default="")
+    uom: Mapped[str] = mapped_column(String(20), default="")
+    qty: Mapped[float] = mapped_column(Numeric(14, 2))
+    unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
+    gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    amount: Mapped[float] = _money()
+    taxable_value: Mapped[float] = _money()
+    cgst: Mapped[float] = _money()
+    sgst: Mapped[float] = _money()
+    igst: Mapped[float] = _money()
+    # How much of this line credit notes have taken back.
+    credited_qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+
+    invoice: Mapped["Invoice"] = relationship(back_populates="lines")
+    item: Mapped["Item"] = relationship()  # noqa: F821

@@ -18,6 +18,8 @@ const PERMISSION_HINTS: Record<string, string> = {
   "crm.export": "Download CRM lists as CSV (every export is recorded in the audit trail).",
   "sales.order.read": "See sales orders.",
   "sales.order.write": "Create, edit, confirm and cancel sales orders. Big discounts still need sales.quotation.approve to confirm.",
+  "sales.invoice.read": "See tax invoices.",
+  "sales.invoice.write": "Make draft invoices from orders and issue them (issued invoices are numbered and locked).",
   "sales.delivery.write": "Record and cancel deliveries (takes goods out of stock).",
   "inventory.stock.adjust": "Correct stock after a count, with a reason. Every change is kept in the item's stock ledger.",
   "sales.credit.override": "Confirm an order that takes a customer past their credit limit.",

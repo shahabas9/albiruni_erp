@@ -220,3 +220,237 @@
 .qty-out {
   color: var(--bad);
 }
+
+.inline-date {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+.inline-date input {
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.fields .full {
+  grid-column: 1 / -1;
+}
+
+/* Printed documents: always black on white, whatever the app theme. */
+.print-shell {
+  min-height: 100vh;
+  background: #e9edf0;
+  padding: 24px 16px;
+  color: #111;
+}
+
+.print-bar {
+  max-width: 820px;
+  margin: 0 auto 12px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.print-error {
+  padding: 32px;
+  font-size: 14px;
+}
+
+.print-doc {
+  max-width: 820px;
+  margin: 0 auto;
+  background: #fff;
+  color: #111;
+  padding: 32px;
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.print-doc h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+}
+
+.print-doc h2 {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+.print-doc h3 {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #555;
+  margin: 0 0 4px;
+}
+
+.print-doc p {
+  margin: 0 0 2px;
+}
+
+.print-doc .pre {
+  white-space: pre-line;
+}
+
+.print-doc .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pd-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 2px solid #111;
+  padding-bottom: 12px;
+}
+
+.pd-title {
+  text-align: right;
+}
+
+.pd-title small {
+  display: block;
+  color: #555;
+}
+
+.pd-meta {
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid #ccc;
+}
+
+.pd-meta > div {
+  flex: 1;
+}
+
+.pd-meta dl,
+.pd-sum dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  margin: 0;
+  align-content: start;
+}
+
+.pd-meta dt,
+.pd-sum dt {
+  color: #555;
+}
+
+.pd-meta dd,
+.pd-sum dd {
+  margin: 0;
+  text-align: right;
+}
+
+.pd-lines,
+.pd-hsn {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.pd-lines th,
+.pd-lines td,
+.pd-hsn th,
+.pd-hsn td {
+  border: 1px solid #ccc;
+  padding: 5px 6px;
+  vertical-align: top;
+}
+
+.pd-lines th,
+.pd-hsn th {
+  background: #f2f4f5;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+.pd-lines td small {
+  display: block;
+  color: #666;
+  font-size: 10px;
+}
+
+.pd-sum {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(200px, 1fr);
+  gap: 24px;
+}
+
+.pd-sum .grand {
+  font-weight: 700;
+  font-size: 14px;
+  border-top: 2px solid #111;
+  padding-top: 4px;
+  color: #111;
+}
+
+.pd-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid #ccc;
+}
+
+.pd-sign {
+  text-align: right;
+  align-self: flex-end;
+}
+
+.pd-sign .sig {
+  margin-top: 40px;
+  border-top: 1px solid #111;
+  padding-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .pd-head,
+  .pd-meta,
+  .pd-foot {
+    flex-direction: column;
+  }
+  .pd-sum {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .print-doc {
+    padding: 16px;
+    overflow-x: auto;
+  }
+}
+
+@media print {
+  .print-bar {
+    display: none;
+  }
+  .print-shell {
+    background: #fff;
+    padding: 0;
+  }
+  .print-doc {
+    box-shadow: none;
+    max-width: none;
+    padding: 0;
+  }
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+}

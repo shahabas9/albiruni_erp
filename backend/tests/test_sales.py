@@ -13,18 +13,22 @@ from uuid import uuid4
 from fastapi import HTTPException, Response
 from sqlalchemy import select
 
-from app.api import routes_deliveries, routes_items, routes_orders, routes_sales
+from datetime import timedelta
+
+from app.api import routes_deliveries, routes_invoices, routes_items, routes_orders, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
 from app.domain import customer_service, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
+from app.models.documents import Invoice
 from app.models.crm import Opportunity
 from app.models.identity import Role, User
 from app.models.sales import Item
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
+from app.schemas.invoices import InvoiceDraftIn, InvoiceLineIn, IssueIn
 from app.schemas.items import ItemIn, ItemUpdate
 from app.schemas.orders import (
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
@@ -127,6 +131,16 @@ class SalesTestCase(unittest.TestCase):
 
     def confirm(self, order_id, context=None):
         return routes_orders.confirm_order(order_id, context or self.context, self.db)
+
+    def confirmed_order(self, lines, customer=None):
+        customer = customer or self.customer(allow_duplicate=True)
+        order = self.order(customer, lines)
+        return self.confirm(order.id)
+
+    def deliver(self, order, quantities, context=None, **fields):
+        body = DeliveryIn(lines=[DeliveryLineIn(order_line_id=order.lines[i].id, qty=q)
+                                 for i, q in quantities.items()], **fields)
+        return routes_deliveries.create_delivery(order.id, body, context or self.context, self.db)
 
 
 class GstTests(SalesTestCase):
@@ -324,16 +338,6 @@ class OrderTests(SalesTestCase):
 
 
 class DeliveryTests(SalesTestCase):
-    def confirmed_order(self, lines, customer=None):
-        customer = customer or self.customer(allow_duplicate=True)
-        order = self.order(customer, lines)
-        return self.confirm(order.id)
-
-    def deliver(self, order, quantities, context=None, **fields):
-        body = DeliveryIn(lines=[DeliveryLineIn(order_line_id=order.lines[i].id, qty=q)
-                                 for i, q in quantities.items()], **fields)
-        return routes_deliveries.create_delivery(order.id, body, context or self.context, self.db)
-
     def test_partial_deliveries_take_stock_and_complete_the_order(self):
         a, b = self.item("Tiles", stock=100), self.item("Grout", stock=10)
         order = self.confirmed_order([{"item_id": a.id, "qty": 60}, {"item_id": b.id, "qty": 4}])
@@ -420,6 +424,104 @@ class DeliveryTests(SalesTestCase):
         with self.assertRaises(HTTPException):
             routes_deliveries.adjust_stock(created.id, StockAdjustIn(counted_qty=9, reason="again"),
                                            self.context, self.db)
+
+
+
+class InvoiceTests(SalesTestCase):
+    def draft(self, order, quantities=None, context=None):
+        lines = None if quantities is None else [
+            InvoiceLineIn(order_line_id=order.lines[i].id, qty=q) for i, q in quantities.items()]
+        return routes_invoices.create_draft(order.id, InvoiceDraftIn(lines=lines), context or self.context, self.db)
+
+    def issue(self, invoice, day=None, context=None):
+        return routes_invoices.issue_invoice(invoice.id, IssueIn(invoice_date=day), context or self.context, self.db)
+
+    def test_invoice_what_was_delivered_then_lock_it(self):
+        item = self.item(stock=100)
+        customer = self.customer(gstin=KARNATAKA_GSTIN, payment_terms_days=15)
+        order = self.confirmed_order([{"item_id": item.id, "qty": 10}], customer)
+        self.deliver(order, {0: 4})
+
+        draft = self.draft(order)
+        self.assertEqual((draft.status, draft.number, draft.lines[0].qty), ("Draft", None, 4))
+        self.assertEqual((draft.igst, draft.grand_total, draft.payment_status), (302.4, 1982.0, "Draft"))
+        issued = self.issue(draft)
+        self.assertRegex(issued.number, r"^INV/\d\d-\d\d/00001$")
+        self.assertLessEqual(len(issued.number), 16)
+        self.assertEqual((issued.status, issued.payment_status, issued.balance), ("Issued", "Unpaid", 1982.0))
+        self.assertEqual((issued.due_date - issued.invoice_date).days, 15)
+        self.assertEqual((issued.seller_gstin, issued.buyer_gstin, issued.place_of_supply_name),
+                         (KERALA_GSTIN, KARNATAKA_GSTIN, "Karnataka"))
+        self.assertEqual(issued.amount_in_words, "Rupees One Thousand Nine Hundred Eighty Two Only")
+        self.assertEqual([(h.hsn_code, h.gst_rate, h.taxable_value) for h in issued.hsn_summary],
+                         [("6907", 18.0, 1680.0)])
+        order = routes_orders.get_order(order.id, self.context, self.db)
+        self.assertEqual((order.lines[0].invoiced_qty, order.invoice_status), (4, "Partly invoiced"))
+
+        # Locked: can't delete, re-issue, and later edits to the customer don't reach it.
+        with self.assertRaises(HTTPException):
+            routes_invoices.delete_draft(issued.id, self.context, self.db)
+        with self.assertRaises(HTTPException):
+            self.issue(issued)
+        customer_service.update_customer(self.db, self.context, customer.id, CustomerUpdate(name="Renamed Co"))
+        self.assertEqual(routes_invoices.get_invoice(issued.id, self.context, self.db).buyer_name, "Rahman Traders")
+
+        # Nothing delivered-but-uninvoiced is left; the rest can still be picked by hand.
+        with self.assertRaises(HTTPException) as nothing:
+            self.draft(order)
+        self.assertIn("deliver the goods first", nothing.exception.detail)
+        rest = self.issue(self.draft(order, {0: 6}))
+        self.assertTrue(rest.number.endswith("00002"))
+        self.assertEqual(routes_orders.get_order(order.id, self.context, self.db).invoice_status, "Invoiced")
+
+    def test_two_drafts_cant_invoice_the_same_goods(self):
+        item = self.item()
+        order = self.confirmed_order([{"item_id": item.id, "qty": 5}])
+        first, second = self.draft(order), self.draft(order)  # both default to all 5 (nothing delivered yet)
+        self.issue(first)
+        with self.assertRaises(HTTPException) as late:
+            self.issue(second)
+        self.assertIn("another invoice took the rest", late.exception.detail)
+        routes_invoices.delete_draft(second.id, self.context, self.db)
+
+    def test_issuing_needs_seller_details_and_dates_in_order(self):
+        item = self.item()
+        order = self.confirmed_order([{"item_id": item.id, "qty": 2}])
+        company = self.db.get(Company, self.context.company_id)
+        company.gstin = ""
+        self.db.commit()
+        draft = self.draft(order, {0: 1})
+        with self.assertRaises(HTTPException) as missing:
+            self.issue(draft)
+        self.assertIn("GSTIN", missing.exception.detail)
+        company.gstin = KERALA_GSTIN
+        self.db.commit()
+
+        with self.assertRaises(HTTPException):
+            self.issue(draft, date.today() + timedelta(days=1))
+        self.issue(draft)
+        earlier = self.draft(order, {0: 1})
+        if tax.fy_start_year(date.today() - timedelta(days=1)) == tax.fy_start_year(date.today()):
+            with self.assertRaises(HTTPException) as backdated:
+                self.issue(earlier, date.today() - timedelta(days=1))
+            self.assertIn("date order", backdated.exception.detail)
+        audit = self.db.execute(select(AuditEvent.validation_result).where(
+            AuditEvent.tenant_id == self.context.tenant_id, AuditEvent.tool_name == "sales.issue_invoice.v1",
+        )).scalars().all()
+        self.assertIn("PASS", audit)
+        self.assertIn("FAIL", audit)
+
+    def test_services_and_overdue_status(self):
+        service = self.item("Installation", price=1000, stock=0, kind="service")
+        order = self.confirmed_order([{"item_id": service.id, "qty": 1}])
+        invoice = self.issue(self.draft(order))
+        self.assertEqual(invoice.lines[0].qty, 1)
+        row = self.db.get(Invoice, invoice.id)
+        row.due_date = date.today() - timedelta(days=3)
+        self.db.commit()
+        self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).payment_status, "Overdue")
+        listed = routes_invoices.list_invoices(Response(), "overdue", None, None, "", None, 0, self.context, self.db)
+        self.assertEqual([i.id for i in listed], [invoice.id])
 
 
 if __name__ == "__main__":

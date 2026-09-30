@@ -23,6 +23,7 @@ from app.api import (
     routes_deliveries,
     routes_exports,
     routes_imports,
+    routes_invoices,
     routes_items,
     routes_leads,
     routes_notifications,
@@ -77,6 +78,7 @@ app.include_router(routes_auth.router)
 # Before routes_sales: /api/sales/quotations/{id}/order must win over /quotations/{id}/{action}.
 app.include_router(routes_orders.router)
 app.include_router(routes_deliveries.router)
+app.include_router(routes_invoices.router)
 app.include_router(routes_sales.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)

@@ -85,6 +85,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         { to: "/sales", label: "Quotations", permission: "sales.quotation.read" },
         { to: "/sales/orders", label: "Orders", permission: "sales.order.read" },
         { to: "/sales/deliveries", label: "Deliveries", permission: "sales.order.read" },
+        { to: "/sales/invoices", label: "Invoices", permission: "sales.invoice.read" },
         { to: "/customers", label: "Customers", permission: "sales.customer.read" },
         { to: "/sales?status=pending", label: "Approvals", permission: "sales.quotation.read", count: pending },
         { to: "/sales/settings", label: "Company & GST", permission: "sales.settings.write" },

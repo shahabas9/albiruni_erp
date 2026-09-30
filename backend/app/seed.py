@@ -43,6 +43,7 @@ CRM_PERMISSIONS = [
 SALES_PERMISSIONS = [
     "sales.settings.write", "sales.order.read", "sales.order.write", "sales.credit.override", "sales.delivery.write",
     "inventory.item.read", "inventory.item.write", "inventory.stock.adjust",
+    "sales.invoice.read", "sales.invoice.write",
 ]
 
 DEMO_COMPANY = dict(

@@ -237,3 +237,112 @@ export function fetchStockLedger(itemId: string, limit = 50, offset = 0): Promis
 export function adjustStock(itemId: string, countedQty: number, reason: string): Promise<void> {
   return request<void>(`/api/items/${itemId}/adjust`, { method: "POST", body: JSON.stringify({ counted_qty: countedQty, reason }) });
 }
+
+// --- Invoices ----------------------------------------------------------------------
+
+export interface InvoiceLine {
+  id: string;
+  order_line_id: string;
+  item_id: string;
+  description: string;
+  hsn_code: string;
+  uom: string;
+  qty: number;
+  unit_price: number;
+  gst_rate: number;
+  amount: number;
+  taxable_value: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  credited_qty: number;
+}
+
+export interface HsnRow {
+  hsn_code: string;
+  gst_rate: number;
+  qty: number;
+  taxable_value: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+}
+
+export type PaymentStatus = "Draft" | "Unpaid" | "Partly paid" | "Paid" | "Overdue";
+
+export interface Invoice extends TaxTotals {
+  id: string;
+  /** null until issued. */
+  number: string | null;
+  status: "Draft" | "Issued";
+  payment_status: PaymentStatus;
+  order_id: string;
+  order_number: string;
+  customer_id: string;
+  customer_name: string;
+  invoice_date: string;
+  due_date: string;
+  place_of_supply: string;
+  place_of_supply_name: string;
+  seller_name: string;
+  seller_gstin: string;
+  seller_state: string;
+  seller_state_name: string;
+  seller_address: string;
+  buyer_name: string;
+  buyer_gstin: string;
+  buyer_state: string;
+  billing_address: string;
+  shipping_address: string;
+  customer_po: string;
+  subtotal: number;
+  discount_pct: number;
+  amount_in_words: string;
+  amount_paid: number;
+  amount_credited: number;
+  /** Still owed: total − paid − credited. */
+  balance: number;
+  notes: string;
+  terms: string;
+  bank_details: string;
+  created_at: string;
+  issued_at: string | null;
+  issued_by_name: string | null;
+  lines: InvoiceLine[];
+  hsn_summary: HsnRow[];
+}
+
+export interface InvoiceQuery {
+  /** Draft, Issued, unpaid, overdue or paid. */
+  status?: string;
+  customer_id?: string;
+  order_id?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchInvoices(params: InvoiceQuery = {}): Promise<Page<Invoice>> {
+  return requestPage<Invoice>("/api/sales/invoices", { ...params });
+}
+
+export function fetchInvoice(id: string): Promise<Invoice> {
+  return request<Invoice>(`/api/sales/invoices/${id}`);
+}
+
+export function fetchInvoiceTimeline(id: string): Promise<TimelineEntry[]> {
+  return request<TimelineEntry[]>(`/api/sales/invoices/${id}/timeline`);
+}
+
+/** lines omitted: what's delivered and not invoiced (services: everything not invoiced). */
+export function createInvoiceDraft(orderId: string, lines?: { order_line_id: string; qty: number }[]): Promise<Invoice> {
+  return request<Invoice>(`/api/sales/orders/${orderId}/invoices`, { method: "POST", body: JSON.stringify({ lines: lines ?? null }) });
+}
+
+export function deleteInvoice(id: string): Promise<void> {
+  return request<void>(`/api/sales/invoices/${id}`, { method: "DELETE" });
+}
+
+export function issueInvoice(id: string, invoiceDate?: string): Promise<Invoice> {
+  return request<Invoice>(`/api/sales/invoices/${id}/issue`, { method: "POST", body: JSON.stringify({ invoice_date: invoiceDate ?? null }) });
+}
