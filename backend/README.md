@@ -93,8 +93,11 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
   `AuditEvent`s. `POST /api/opportunities/{id}/quotations` runs the same
   audited `sales.create_quotation_draft.v1` tool as every other quotation,
   with the opportunity linked via `quotations.opportunity_id`.
-- **More domains.** Only Sales/Quotations and CRM exist. Inventory, Finance etc.
-  follow the same three-file pattern: a model, a domain service, a tool.
+- **More domains.** CRM and the sales cycle (quotation to payment, with a
+  stock ledger) exist. Purchasing, a full accounts ledger, more than one
+  warehouse, e-invoicing / e-way bills, customer refunds and multi-currency
+  are not built; each follows the same pattern: a model, a domain service,
+  and tools for anything that commits the business.
 
 ## Frontend
 

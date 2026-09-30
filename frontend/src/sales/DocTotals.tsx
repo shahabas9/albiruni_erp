@@ -16,7 +16,7 @@ export function DocTotals({ doc, subtotal, discountPct }: { doc: TaxTotals; subt
       {rows.map(([label, value]) => (
         <div key={label}>
           <dt>{label}</dt>
-          <dd className="num">{inr(value)}</dd>
+          <dd className="num">{value < 0 ? `−${inr(-value)}` : inr(value)}</dd>
         </div>
       ))}
       <div className="grand">
