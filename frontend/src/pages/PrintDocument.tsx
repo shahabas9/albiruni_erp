@@ -7,10 +7,12 @@ import {
   fetchDelivery,
   fetchInvoice,
   fetchOrder,
+  fetchPayment,
   type CompanyProfile,
   type CreditNote,
   type DeliveryNote,
   type Invoice,
+  type Receipt,
   type SalesOrder,
 } from "../api/sales";
 import { dayDate } from "../lib/format";
@@ -18,11 +20,12 @@ import { dayDate } from "../lib/format";
 const money = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Print-ready documents at /print/invoice/:id and /print/delivery/:id — no app chrome; use the browser's Print / Save as PDF. */
-export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" }) {
+export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" | "receipt" }) {
   const { id = "" } = useParams();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [delivery, setDelivery] = useState<{ note: DeliveryNote; order: SalesOrder; company: CompanyProfile } | null>(null);
   const [credit, setCredit] = useState<CreditNote | null>(null);
+  const [receipt, setReceipt] = useState<{ receipt: Receipt; company: CompanyProfile } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,6 +34,8 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
         ? fetchInvoice(id).then(setInvoice)
         : kind === "credit-note"
           ? fetchCreditNote(id).then(setCredit)
+          : kind === "receipt"
+            ? Promise.all([fetchPayment(id), fetchCompanyProfile()]).then(([r, company]) => setReceipt({ receipt: r, company }))
           : fetchDelivery(id).then(async (note) => {
             const [order, company] = await Promise.all([fetchOrder(note.order_id), fetchCompanyProfile()]);
             setDelivery({ note, order, company });
@@ -39,12 +44,12 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
   }, [id, kind]);
 
   useEffect(() => {
-    const title = invoice?.number ?? delivery?.note.number ?? credit?.number;
+    const title = invoice?.number ?? delivery?.note.number ?? credit?.number ?? receipt?.receipt.number;
     if (title) document.title = title.replace(/\//g, "-");
-  }, [invoice, delivery, credit]);
+  }, [invoice, delivery, credit, receipt]);
 
   if (error) return <p className="print-error">{error}</p>;
-  if (!invoice && !delivery && !credit) return <p className="print-error">Loading…</p>;
+  if (!invoice && !delivery && !credit && !receipt) return <p className="print-error">Loading…</p>;
 
   return (
     <div className="print-shell">
@@ -56,7 +61,15 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
           Close
         </button>
       </div>
-      {invoice ? <InvoiceSheet inv={invoice} /> : credit ? <CreditSheet note={credit} /> : <ChallanSheet {...delivery!} />}
+      {invoice ? (
+        <InvoiceSheet inv={invoice} />
+      ) : credit ? (
+        <CreditSheet note={credit} />
+      ) : receipt ? (
+        <ReceiptSheet {...receipt} />
+      ) : (
+        <ChallanSheet {...delivery!} />
+      )}
     </div>
   );
 }
@@ -478,6 +491,77 @@ function CreditSheet({ note }: { note: CreditNote }) {
         <div />
         <div className="pd-sign">
           <p>For {note.seller_name}</p>
+          <p className="sig">Authorised signatory</p>
+        </div>
+      </footer>
+    </article>
+  );
+}
+
+function ReceiptSheet({ receipt: r, company }: { receipt: Receipt; company: CompanyProfile }) {
+  return (
+    <article className="print-doc">
+      <header className="pd-head">
+        <div>
+          <h1>{company.legal_name || company.name}</h1>
+          <p className="pre">{company.address}</p>
+          {company.gstin && (
+            <p>
+              GSTIN <b className="mono">{company.gstin}</b>
+            </p>
+          )}
+        </div>
+        <div className="pd-title">
+          <h2>PAYMENT RECEIPT</h2>
+          {r.status === "Voided" && <small>VOIDED — {r.void_reason}</small>}
+        </div>
+      </header>
+      <section className="pd-meta">
+        <div>
+          <h3>Received from</h3>
+          <p>
+            <b>{r.customer_name}</b>
+          </p>
+          <p style={{ marginTop: 12 }}>
+            The sum of <b>₹{money(r.amount)}</b> ({r.amount_in_words}) by {r.mode.toLowerCase()}
+            {r.reference && <> — ref. <span className="mono">{r.reference}</span></>}.
+          </p>
+        </div>
+        <dl>
+          <dt>Receipt no.</dt>
+          <dd className="mono">{r.number}</dd>
+          <dt>Date</dt>
+          <dd>{dayDate(r.receipt_date)}</dd>
+        </dl>
+      </section>
+      {(r.allocations.length > 0 || r.unallocated > 0) && (
+        <table className="pd-lines">
+          <thead>
+            <tr>
+              <th>Against invoice</th>
+              <th className="num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {r.allocations.map((a) => (
+              <tr key={a.invoice_id}>
+                <td className="mono">{a.invoice_number}</td>
+                <td className="num">{money(a.amount)}</td>
+              </tr>
+            ))}
+            {r.unallocated > 0 && (
+              <tr>
+                <td>Advance (to be adjusted against future invoices)</td>
+                <td className="num">{money(r.unallocated)}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
+      <footer className="pd-foot">
+        <p>{r.mode === "Cheque" ? "Subject to realisation of the cheque." : ""}</p>
+        <div className="pd-sign">
+          <p>For {company.legal_name || company.name}</p>
           <p className="sig">Authorised signatory</p>
         </div>
       </footer>

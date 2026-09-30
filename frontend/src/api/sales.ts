@@ -312,6 +312,8 @@ export interface Invoice extends TaxTotals {
   issued_by_name: string | null;
   lines: InvoiceLine[];
   hsn_summary: HsnRow[];
+  /** Single-invoice endpoint only: receipts applied to it. */
+  payments: { receipt_id: string; number: string; receipt_date: string; mode: string; reference: string; amount: number }[];
 }
 
 export interface InvoiceQuery {
@@ -401,4 +403,61 @@ export function fetchCreditNote(id: string): Promise<CreditNote> {
 
 export function createCreditNote(invoiceId: string, body: CreditNoteInput): Promise<CreditNote> {
   return request<CreditNote>(`/api/sales/invoices/${invoiceId}/credit-notes`, { method: "POST", body: JSON.stringify(body) });
+}
+
+// --- Payments ------------------------------------------------------------------------
+
+export const PAYMENT_MODES = ["UPI", "Bank transfer", "Cheque", "Cash", "Card", "Other"] as const;
+export type PaymentMode = (typeof PAYMENT_MODES)[number];
+
+export interface Receipt {
+  id: string;
+  number: string;
+  customer_id: string;
+  customer_name: string;
+  receipt_date: string;
+  amount: number;
+  mode: PaymentMode;
+  reference: string;
+  notes: string;
+  status: "Received" | "Voided";
+  void_reason: string;
+  allocated: number;
+  /** Advance: received and not yet applied to an invoice. */
+  unallocated: number;
+  amount_in_words: string;
+  created_by_name: string | null;
+  created_at: string;
+  allocations: { invoice_id: string; invoice_number: string | null; amount: number }[];
+}
+
+export interface ReceiptInput {
+  customer_id: string;
+  amount: number;
+  mode: PaymentMode;
+  receipt_date?: string;
+  reference: string;
+  notes: string;
+  /** Omit: oldest unpaid invoices first. []: keep it all as an advance. */
+  allocations?: { invoice_id: string; amount: number }[];
+}
+
+export function fetchPayments(params: { customer_id?: string; invoice_id?: string; q?: string; with_advance?: boolean; limit?: number; offset?: number } = {}): Promise<Page<Receipt>> {
+  return requestPage<Receipt>("/api/sales/payments", { ...params });
+}
+
+export function fetchPayment(id: string): Promise<Receipt> {
+  return request<Receipt>(`/api/sales/payments/${id}`);
+}
+
+export function recordPayment(body: ReceiptInput): Promise<Receipt> {
+  return request<Receipt>("/api/sales/payments", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function allocatePayment(id: string, allocations?: { invoice_id: string; amount: number }[]): Promise<Receipt> {
+  return request<Receipt>(`/api/sales/payments/${id}/allocate`, { method: "POST", body: JSON.stringify({ allocations: allocations ?? null }) });
+}
+
+export function voidPayment(id: string, reason: string): Promise<Receipt> {
+  return request<Receipt>(`/api/sales/payments/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
 }

@@ -296,3 +296,47 @@ class CreditNoteLine(Base):
     igst: Mapped[float] = _money()
 
     credit_note: Mapped["CreditNote"] = relationship(back_populates="lines")
+
+
+class Receipt(Base):
+    """Money received from a customer. Split across invoices by allocations;
+    whatever isn't allocated is an advance that can be applied later."""
+
+    __tablename__ = "receipts"
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_receipts_tenant_number"),)
+
+    id: Mapped[uuid.UUID] = _id()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    number: Mapped[str] = mapped_column(String(16))
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
+    receipt_date: Mapped[date] = mapped_column(Date)
+    amount: Mapped[float] = _money()
+    # Cash, UPI, Bank transfer, Cheque, Card, Other.
+    mode: Mapped[str] = mapped_column(String(20))
+    # UTR, cheque number, card slip…
+    reference: Mapped[str] = mapped_column(String(60), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    # Received or Voided (a bounced cheque, a mistaken entry).
+    status: Mapped[str] = mapped_column(String(12), default="Received")
+    void_reason: Mapped[str] = mapped_column(String(200), default="")
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    allocations: Mapped[list["ReceiptAllocation"]] = relationship(
+        back_populates="receipt", cascade="all, delete-orphan"
+    )
+    customer: Mapped["Customer"] = relationship()  # noqa: F821
+
+
+class ReceiptAllocation(Base):
+    __tablename__ = "receipt_allocations"
+
+    id: Mapped[uuid.UUID] = _id()
+    receipt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("receipts.id", ondelete="CASCADE"))
+    invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id"), index=True)
+    amount: Mapped[float] = _money()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    receipt: Mapped["Receipt"] = relationship(back_populates="allocations")
+    invoice: Mapped["Invoice"] = relationship()

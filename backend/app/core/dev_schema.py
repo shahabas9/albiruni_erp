@@ -249,3 +249,8 @@ def ensure_dev_schema() -> None:
                 WHERE 'sales.quotation.approve' = ANY(permissions) AND 'sales.invoice.write' = ANY(permissions)
                   AND NOT 'sales.credit_note.write' = ANY(permissions)
             """))
+        if once("grant-payments"):
+            conn.execute(text("""
+                UPDATE roles SET permissions = permissions || ARRAY['sales.payment.read', 'sales.payment.write']::VARCHAR[]
+                WHERE 'sales.invoice.write' = ANY(permissions) AND NOT 'sales.payment.write' = ANY(permissions)
+            """))

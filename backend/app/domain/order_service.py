@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, history, tax
+from app.domain import crm_service, history, receivables, tax
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.sales_service import (
@@ -258,9 +258,11 @@ def open_order_exposure(db: Session, context: RequestContext, customer_id: UUID,
 
 
 def credit_exposure(db: Session, context: RequestContext, customer_id: UUID, exclude: UUID | None = None) -> float:
-    """What the customer owes or has on order."""
+    """What the customer owes (unpaid invoices less advances) plus what confirmed orders will still bill."""
 
-    return open_order_exposure(db, context, customer_id, exclude)
+    return open_order_exposure(db, context, customer_id, exclude) + float(
+        receivables.net_owed(db, context, customer_id)
+    )
 
 
 def confirm_order(db: Session, context: RequestContext, order_id: UUID) -> SalesOrder:

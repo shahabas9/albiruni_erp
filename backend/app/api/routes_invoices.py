@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import credit_note_service, crm_service, history, invoice_service, tax
+from app.domain import credit_note_service, crm_service, history, invoice_service, payment_service, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import CreditNote, Invoice
 from app.models.identity import User
+from app.schemas.payments import InvoicePaymentOut
 from app.schemas.invoices import (
     CreditNoteIn, CreditNoteLineOut, CreditNoteOut, HsnRow, InvoiceDraftIn, InvoiceLineOut, InvoiceOut, IssueIn,
 )
@@ -83,7 +84,13 @@ def list_invoices(
 @router.get("/invoices/{invoice_id}", response_model=InvoiceOut)
 def get_invoice(invoice_id: UUID, context: RequestContext = Depends(require_permission(READ)),
                 db: Session = Depends(get_db)):
-    return invoice_out(db, _errors(lambda: invoice_service.get_invoice(db, context, invoice_id)))
+    out = invoice_out(db, _errors(lambda: invoice_service.get_invoice(db, context, invoice_id)))
+    out.payments = [
+        InvoicePaymentOut(receipt_id=r.id, number=r.number, receipt_date=r.receipt_date, mode=r.mode,
+                          reference=r.reference, amount=float(a.amount))
+        for a, r in payment_service.invoice_payments(db, invoice_id)
+    ]
+    return out
 
 
 @router.get("/invoices/{invoice_id}/timeline")

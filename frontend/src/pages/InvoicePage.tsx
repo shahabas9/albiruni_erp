@@ -15,6 +15,7 @@ import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format";
 import { CreditNoteModal } from "../sales/CreditNoteModal";
+import { PaymentModal } from "../sales/PaymentModal";
 import { DocTotals } from "../sales/DocTotals";
 
 export function InvoicePage() {
@@ -28,6 +29,7 @@ export function InvoicePage() {
   const [issueDate, setIssueDate] = useState(todayIso());
   const [notes, setNotes] = useState<CreditNote[]>([]);
   const [crediting, setCrediting] = useState(false);
+  const [paying, setPaying] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -93,6 +95,11 @@ export function InvoicePage() {
             <a className="ghost-btn" href={`/print/invoice/${invoice.id}`} target="_blank" rel="noreferrer">
               Print / PDF
             </a>
+          )}
+          {!draft && can("sales.payment.write") && invoice.balance > 0 && (
+            <button className="primary-btn" onClick={() => setPaying(true)}>
+              Record payment
+            </button>
           )}
           {!draft && can("sales.credit_note.write") && invoice.amount_credited < invoice.grand_total && (
             <button className="ghost-btn" onClick={() => setCrediting(true)}>
@@ -213,6 +220,27 @@ export function InvoicePage() {
               </div>
             )}
           </div>
+          {invoice.payments.length > 0 && (
+            <div className="card">
+              <div className="card-head">
+                <span className="card-title">Payments</span>
+              </div>
+              <div className="mini-docs">
+                {invoice.payments.map((p) => (
+                  <div className="row" key={p.receipt_id}>
+                    <div>
+                      <b className="mono">{p.number}</b> · {dayDate(p.receipt_date)}
+                      <small>
+                        {p.mode}
+                        {p.reference && ` ${p.reference}`}
+                      </small>
+                    </div>
+                    <span className="num">{inr(p.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {notes.length > 0 && (
             <div className="card">
               <div className="card-head">
@@ -244,6 +272,17 @@ export function InvoicePage() {
           </div>
         </div>
       </div>
+      {paying && (
+        <PaymentModal
+          customer={{ id: invoice.customer_id, name: invoice.customer_name }}
+          invoice={invoice}
+          onClose={() => setPaying(false)}
+          onDone={() => {
+            setPaying(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
       {crediting && (
         <CreditNoteModal
           invoice={invoice}

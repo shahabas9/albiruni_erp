@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.payments import InvoicePaymentOut
+
 
 class InvoiceLineIn(BaseModel):
     order_line_id: UUID
@@ -95,6 +97,8 @@ class InvoiceOut(BaseModel):
     issued_by_name: str | None
     lines: list[InvoiceLineOut]
     hsn_summary: list[HsnRow]
+    # Receipts applied to this invoice (only on the single-invoice endpoint).
+    payments: list["InvoicePaymentOut"] = []
 
 
 class CreditLineIn(BaseModel):

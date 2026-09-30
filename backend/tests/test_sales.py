@@ -15,11 +15,11 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_deliveries, routes_invoices, routes_items, routes_orders, routes_sales
+from app.api import routes_deliveries, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.dev_schema import ensure_dev_schema
-from app.domain import credit_note_service, customer_service, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import credit_note_service, customer_service, receivables, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -30,6 +30,7 @@ from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
 from app.schemas.items import ItemIn, ItemUpdate
+from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn
 from app.schemas.orders import (
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
 )
@@ -597,6 +598,94 @@ class CreditNoteTests(SalesTestCase):
         self.assertIn("only until", late.exception.detail)
         self.assertEqual(credit_note_service.deadline(date(2026, 5, 1)), date(2027, 11, 30))
         self.assertEqual(credit_note_service.deadline(date(2027, 2, 1)), date(2027, 11, 30))
+
+
+
+class PaymentTests(SalesTestCase):
+    def invoice_for(self, customer, qty, item=None):
+        item = item or self.item(stock=1000)
+        order = self.confirmed_order([{"item_id": item.id, "qty": qty}], customer)
+        return self.issue(self.draft(order))
+
+    def pay(self, customer, amount, mode="UPI", reference="UTR123", context=None, **fields):
+        body = ReceiptIn(customer_id=customer.id, amount=amount, mode=mode, reference=reference, **fields)
+        return routes_payments.record_payment(body, context or self.context, self.db)
+
+    def test_payments_settle_the_oldest_invoices_first_and_keep_the_rest(self):
+        customer = self.customer()
+        older = self.invoice_for(customer, 1)  # 496
+        newer = self.invoice_for(customer, 2)  # 991
+        row = self.db.get(Invoice, older.id)
+        row.due_date = row.due_date - timedelta(days=10)
+        self.db.commit()
+
+        receipt = self.pay(customer, 1000)
+        self.assertRegex(receipt.number, r"^RCT/\d\d-\d\d/00001$")
+        self.assertEqual([(a.invoice_number, a.amount) for a in receipt.allocations],
+                         [(older.number, 496.0), (newer.number, 504.0)])
+        self.assertEqual(routes_invoices.get_invoice(older.id, self.context, self.db).payment_status, "Paid")
+        partly = routes_invoices.get_invoice(newer.id, self.context, self.db)
+        self.assertEqual((partly.payment_status, partly.balance), ("Partly paid", 487.0))
+        self.assertEqual([p.number for p in partly.payments], [receipt.number])
+
+        advance = self.pay(customer, 600, mode="Cash", reference="")
+        self.assertEqual((advance.allocated, advance.unallocated), (487.0, 113.0))
+        self.assertEqual(float(receivables.net_owed(self.db, self.context, customer.id)), -113.0)
+
+        # The advance is applied to the next invoice when asked.
+        third = self.invoice_for(customer, 1)
+        applied = routes_payments.allocate_payment(advance.id, AllocateIn(), self.context, self.db)
+        self.assertEqual(applied.unallocated, 0)
+        self.assertEqual(routes_invoices.get_invoice(third.id, self.context, self.db).balance, 383.0)
+
+    def test_payment_rules(self):
+        customer, other = self.customer(), self.customer("Other Co")
+        invoice = self.invoice_for(customer, 1)
+        theirs = self.invoice_for(other, 1)
+        cases = [
+            ({"amount": 200000, "mode": "Cash", "reference": ""}, "269ST"),
+            ({"amount": 100, "mode": "Cheque", "reference": ""}, "cheque number"),
+            ({"amount": 600, "allocations": [AllocationIn(invoice_id=invoice.id, amount=600)]}, "only has"),
+            ({"amount": 100, "allocations": [AllocationIn(invoice_id=theirs.id, amount=100)]}, "another customer"),
+            ({"amount": 100, "allocations": [AllocationIn(invoice_id=invoice.id, amount=150)]}, "left to allocate"),
+            ({"amount": 100, "receipt_date": date.today() + timedelta(days=1)}, "future"),
+        ]
+        for fields, message in cases:
+            with self.subTest(message):
+                with self.assertRaises(HTTPException) as refused:
+                    self.pay(customer, **fields)
+                self.assertIn(message, refused.exception.detail)
+        kept = self.pay(customer, 100, allocations=[])  # [] keeps it all as an advance
+        self.assertEqual(kept.unallocated, 100)
+        clerk = self.make_context(["sales.payment.read"], self.context.tenant_id, self.context.company_id)
+        with self.assertRaises(HTTPException) as denied:
+            self.pay(customer, 10, context=clerk)
+        self.assertEqual(denied.exception.status_code, 403)
+
+    def test_a_bounced_cheque_makes_the_invoice_owed_again(self):
+        customer = self.customer()
+        invoice = self.invoice_for(customer, 1)
+        cheque = self.pay(customer, 496, mode="Cheque", reference="004512")
+        self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).payment_status, "Paid")
+        voided = routes_payments.void_payment(cheque.id, ReasonIn(reason="Cheque bounced"), self.context, self.db)
+        self.assertEqual((voided.status, voided.allocated, voided.unallocated), ("Voided", 0, 0))
+        again = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((again.balance, again.payment_status), (496.0, "Unpaid"))
+        with self.assertRaises(HTTPException):
+            routes_payments.void_payment(cheque.id, ReasonIn(reason="again"), self.context, self.db)
+
+    def test_unpaid_invoices_count_against_the_credit_limit(self):
+        item = self.item(stock=1000)
+        customer = self.customer(credit_limit=6000)
+        seller = self.make_context(["sales.order.read", "sales.order.write"], self.context.tenant_id,
+                                   self.context.company_id)
+        self.invoice_for(customer, 10, item)  # 4,956 owed
+        order = self.order(customer, [{"item_id": item.id, "qty": 4}], seller)  # 1,982 more
+        with self.assertRaises(HTTPException) as over:
+            self.confirm(order.id, seller)
+        self.assertIn("credit limit", over.exception.detail)
+        self.pay(customer, 4956)
+        self.assertEqual(self.confirm(order.id, seller).status, "Confirmed")
 
 
 if __name__ == "__main__":

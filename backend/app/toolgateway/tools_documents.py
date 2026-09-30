@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import credit_note_service, delivery_service, invoice_service, order_service
+from app.domain import credit_note_service, delivery_service, invoice_service, order_service, payment_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -79,7 +79,39 @@ def create_credit_note(db: Session, context: RequestContext, args: dict[str, Any
                               f"against {note.invoice.number} ({note.kind.lower()})"}
 
 
+@_guard
+def record_payment(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    receipt = payment_service.record_receipt(
+        db, context, customer_id=UUID(str(args["customer_id"])), amount=float(args["amount"]), mode=args["mode"],
+        receipt_date=date.fromisoformat(args["receipt_date"]) if args.get("receipt_date") else None,
+        reference=args.get("reference", ""), notes=args.get("notes", ""), allocations=args.get("allocations"),
+    )
+    left = payment_service.unallocated(receipt)
+    return {"receipt_id": str(receipt.id), "number": receipt.number,
+            "result_summary": f"Recorded payment {receipt.number}: ₹{float(receipt.amount):,.2f} from "
+                              f"{receipt.customer.name}" + (f" (₹{float(left):,.2f} advance)" if left > 0 else "")}
+
+
+@_guard
+def allocate_payment(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    receipt = payment_service.allocate(db, context, UUID(str(args["receipt_id"])), args.get("allocations"))
+    return {"receipt_id": str(receipt.id), "number": receipt.number,
+            "result_summary": f"Applied {receipt.number} to invoices"}
+
+
+@_guard
+def void_payment(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    receipt = payment_service.void_receipt(db, context, UUID(str(args["receipt_id"])), str(args.get("reason", "")))
+    return {"receipt_id": str(receipt.id), "number": receipt.number,
+            "result_summary": f"Voided payment {receipt.number}: {receipt.void_reason}"}
+
+
 for name, purpose, permission, handler in [
+    ("sales.record_payment.v1", "Record money received and apply it to invoices.", "sales.payment.write",
+     record_payment),
+    ("sales.allocate_payment.v1", "Apply an advance payment to invoices.", "sales.payment.write", allocate_payment),
+    ("sales.void_payment.v1", "Void a payment (e.g. a bounced cheque); its invoices are owed again.",
+     "sales.payment.write", void_payment),
     ("sales.create_credit_note.v1", "Credit part of an issued invoice: a return or a price correction.",
      "sales.credit_note.write", create_credit_note),
     ("sales.issue_invoice.v1", "Issue a draft tax invoice: number it and lock it.", "sales.invoice.write",

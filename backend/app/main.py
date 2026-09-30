@@ -29,6 +29,7 @@ from app.api import (
     routes_notifications,
     routes_opportunities,
     routes_orders,
+    routes_payments,
     routes_public,
     routes_sales,
     routes_setup,
@@ -79,6 +80,7 @@ app.include_router(routes_auth.router)
 app.include_router(routes_orders.router)
 app.include_router(routes_deliveries.router)
 app.include_router(routes_invoices.router)
+app.include_router(routes_payments.router)
 app.include_router(routes_sales.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)

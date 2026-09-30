@@ -484,3 +484,23 @@ functions with their own unit tests).
   original invoice's number and date.
 - `sales.credit_note.write` is granted on upgrade to roles that can both
   approve discounts and write invoices.
+
+### Payments received
+
+- `POST /api/sales/payments` (audited tool `sales.record_payment.v1`, needs
+  `sales.payment.write`) records a receipt, numbered `RCT/26-27/00001`, and
+  applies it to the customer's issued invoices — oldest due first unless you
+  pass `allocations` (`[]` keeps it all as an advance). Whatever isn't
+  applied stays on the receipt as an **advance**;
+  `/api/sales/payments/{id}/allocate` applies it to later invoices.
+- Checks: an allocation can't exceed an invoice's balance or belong to
+  another customer; no future dates; cheque, UPI and bank transfers need a
+  reference; **cash of ₹2,00,000 or more is refused** (Income Tax Act,
+  section 269ST).
+- **Voiding** (`/void`, needs a reason — a bounced cheque) takes the receipt's
+  allocations back off its invoices, so they're owed again.
+- Invoices are locked in id order while allocations change, so two receipts
+  can't both pay the last rupee of an invoice.
+- The credit-limit check on confirming an order now counts unpaid invoices
+  (less advances) as well as what confirmed orders will still bill.
+- Receipts print at `/print/receipt/{id}`.
