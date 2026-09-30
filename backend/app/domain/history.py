@@ -30,6 +30,7 @@ LABELS = {
     "probability_pct": "Probability",
     "expected_close_date": "Expected close",
     "lost_reason": "Lost reason",
+    "tags": "Tags",
 }
 
 
@@ -45,8 +46,12 @@ def _plain(value: Any) -> Any:
 
 
 def _show(field: str, value: Any) -> str:
-    if value in (None, ""):
+    if value in (None, "", []):
         return "—"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
     if field == "value":
         return f"₹{float(value):,.0f}"
     if field == "probability_pct":
@@ -70,7 +75,9 @@ def diff(record: Any, data: dict[str, Any]) -> dict[str, list[Any]]:
 def describe(changes: dict[str, list[Any]]) -> str:
     parts = []
     for field, (old, new) in changes.items():
-        label = LABELS.get(field, field.replace("_", " ").capitalize())
+        label = field[len("custom:"):] if field.startswith("custom:") else LABELS.get(
+            field, field.replace("_", " ").capitalize()
+        )
         if field == "notes":
             parts.append("Notes updated")
         else:
@@ -99,7 +106,7 @@ def record(
         company_id=context.company_id,
         record_type=record_type,
         record_id=record_id,
-        actor_user_id=context.user.id,
+        actor_user_id=context.user.id if context.user else None,  # None: the public web form
         source=context.channel,
         action=action,
         summary=summary[:400],

@@ -2921,3 +2921,318 @@ td .sub {
   font-size: 12.5px;
   text-align: center;
 }
+
+/* ================= CRM settings ================= */
+
+.settings-card {
+  margin-bottom: 18px;
+  max-width: 760px;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.rotation-list {
+  list-style: none;
+  margin: 14px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.rotation-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ink);
+  flex-wrap: wrap;
+}
+
+.rotation-list li.card-note {
+  border-style: dashed;
+  color: var(--ink-dim);
+}
+
+.rotation-list .grow {
+  flex: 1 1 140px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rotation-pos {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-grid;
+  place-items: center;
+}
+
+.rotation-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* ================= Targets ================= */
+
+.month-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.month-switch b {
+  min-width: 150px;
+  text-align: center;
+}
+
+.target-team {
+  margin-bottom: 16px;
+}
+
+.target-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 150px;
+}
+
+.target-progress .track {
+  flex: 1;
+  height: 8px;
+  border-radius: 6px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.target-progress .fill {
+  height: 100%;
+  border-radius: 6px;
+}
+
+.target-progress .fill.good {
+  background: var(--good);
+}
+
+.target-progress .fill.mid {
+  background: var(--accent);
+}
+
+.target-progress .fill.low {
+  background: var(--warn);
+}
+
+.target-progress .num {
+  font-size: 12.5px;
+  font-weight: 600;
+  min-width: 38px;
+  text-align: right;
+}
+
+.target-input {
+  width: 130px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+}
+
+tr.me-row td {
+  background: var(--accent-soft);
+}
+
+/* ================= Tags & custom fields ================= */
+
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--violet-soft);
+  color: var(--violet);
+  border: 0;
+  cursor: default;
+}
+
+button.tag-chip {
+  cursor: pointer;
+}
+
+button.tag-chip:hover {
+  text-decoration: underline;
+}
+
+.tag-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+  cursor: pointer;
+}
+
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.tag-input:focus-within {
+  outline: 2px solid var(--accent);
+  border-color: transparent;
+}
+
+.field .tag-input input {
+  flex: 1 1 120px;
+  width: auto;
+  border: 0;
+  padding: 4px;
+  outline: none;
+  background: transparent;
+}
+
+.field.check-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  align-self: end;
+  padding-bottom: 10px;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+.custom-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px 16px;
+  margin: 12px 0 0;
+}
+
+.custom-values dt {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+.custom-values dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.field-edit {
+  display: grid !important;
+  gap: 10px;
+}
+
+.archived-fields {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.archived-fields summary {
+  cursor: pointer;
+}
+
+.archived-fields ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.archived-fields li {
+  margin: 4px 0;
+}
+
+.archived-fields .link-btn {
+  margin-left: 8px;
+  padding: 0;
+}
+
+.add-field {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* ================= Attachments ================= */
+
+.attachments .file-name {
+  padding: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.attach-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.attach-actions .card-note {
+  margin: 0;
+}
+
+.drawer-section {
+  font-size: 14.5px;
+  margin: 4px 0 10px;
+  color: var(--ink);
+}
+
+.drawer-section + .attachments {
+  margin-bottom: 22px;
+}
+
+.copy-field {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.field .copy-field input,
+.field .copy-field textarea {
+  flex: 1;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}

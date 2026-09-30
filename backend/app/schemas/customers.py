@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -11,6 +12,8 @@ class CustomerIn(BaseModel):
     gstin: str = ""
     # Create even though a customer with the same name or GSTIN exists.
     allow_duplicate: bool = False
+    tags: list[str] = []
+    custom: dict[str, Any] = {}
 
     _gstin = field_validator("gstin")(normalize_gstin)
 
@@ -20,6 +23,9 @@ class CustomerUpdate(BaseModel):
     credit_limit: float | None = None
     active: bool | None = None
     gstin: str | None = None
+    tags: list[str] | None = None
+    # Only the keys sent change; null or "" clears one.
+    custom: dict[str, Any] | None = None
 
     @field_validator("gstin")
     @classmethod
@@ -33,3 +39,5 @@ class CustomerOut(BaseModel):
     credit_limit: float
     active: bool
     gstin: str
+    tags: list[str]
+    custom: dict[str, Any]

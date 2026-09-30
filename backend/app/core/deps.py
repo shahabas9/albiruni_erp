@@ -27,13 +27,14 @@ class RequestContext:
     of trusting raw request input for identity/authorization.
     """
 
-    user: User
+    user: User | None
     tenant_id: UUID
     company_id: UUID
     permissions: list[str]
     locale: str
     # Where the request came from — recorded on history entries.
-    # "app" (screens), "ask_erp" (confirmed AI actions) or "import" (CSV).
+    # "app" (screens), "ask_erp" (confirmed AI actions), "import" (CSV) or
+    # "web_form" (the public enquiry form, which has no user).
     channel: str = "app"
 
     def has_permission(self, permission: str) -> bool:

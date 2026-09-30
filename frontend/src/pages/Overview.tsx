@@ -1,11 +1,11 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAskErp } from "../askerp/AskErpContext";
 import { useAuth } from "../auth/AuthProvider";
 import { Icon, type IconName } from "../components/Icon";
 import { useAppData } from "../data/AppDataProvider";
 import { inrShort } from "../lib/format";
-import type { OpportunityStage, Quotation } from "../api/client";
+import { fetchTargets, type OpportunityStage, type Quotation, type TargetRow } from "../api/client";
 
 const OPEN_STAGES: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
 
@@ -35,7 +35,19 @@ export function Overview() {
   const { user } = useAuth();
   const { ask } = useAskErp();
   const navigate = useNavigate();
-  const { quotes, crm, loading, can } = useAppData();
+  const { quotes, crm, loading, can, version } = useAppData();
+  // Your own target this month, if one is set.
+  const [myTarget, setMyTarget] = useState<TargetRow | null>(null);
+  useEffect(() => {
+    if (!can("crm.opportunity.read") || !user) return;
+    let current = true;
+    fetchTargets()
+      .then((r) => current && setMyTarget(r.rows.find((row) => row.user_id === user.id && row.target > 0) ?? null))
+      .catch(() => current && setMyTarget(null));
+    return () => {
+      current = false;
+    };
+  }, [can, user, version]);
 
   const series = monthlyQuoted(quotes, 6);
   const thisMonth = series[series.length - 1]!.value;
@@ -125,6 +137,15 @@ export function Overview() {
             </button>
           </div>
           <div className="attention-list">
+            {myTarget && (
+              <Attention
+                tone={(myTarget.pct ?? 0) >= 100 ? "ok" : "warn"}
+                icon="target"
+                title={`Your target: ${myTarget.pct}% reached`}
+                sub={`${inrShort(myTarget.won_value)} won of ${inrShort(myTarget.target)} this month · forecast ${inrShort(myTarget.forecast)}`}
+                onView={() => navigate("/crm/targets")}
+              />
+            )}
             {overdueCount > 0 && (
               <Attention
                 tone="bad"

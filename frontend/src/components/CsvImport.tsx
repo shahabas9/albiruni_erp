@@ -10,7 +10,7 @@ const TEMPLATES: Record<ImportKind, { columns: string[]; rows: string[][]; hint:
       ["Nisha R", "Kannur Tiles & Co", "94460 44556", "nisha@example.com", "Referral", "Wants a price list", ""],
       ["", "Calicut Build Mart", "98470 11223", "", "IndiaMART", "", ""],
     ],
-    hint: "A name or company is required. Owner is a user's name — leave it blank to own them yourself. Headers like “Mobile” or “Business” work too.",
+    hint: "A name or company is required. Owner is a user's name — leave it blank to own them yourself (or to hand them out by the lead rotation, when that's on). Headers like “Mobile” or “Business” work too.",
   },
   customers: {
     columns: ["Name", "GSTIN", "Credit limit"],

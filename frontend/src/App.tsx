@@ -12,6 +12,8 @@ import { Leads } from "./pages/Leads";
 import { Contacts } from "./pages/Contacts";
 import { Opportunities } from "./pages/Opportunities";
 import { Activities } from "./pages/Activities";
+import { CrmSettings } from "./pages/CrmSettings";
+import { Targets } from "./pages/Targets";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -67,6 +69,8 @@ export default function App() {
             <Route path="/contacts" element={<div className="management-page"><Contacts /></div>} />
             <Route path="/opportunities" element={<div className="management-page"><Opportunities /></div>} />
             <Route path="/activities" element={<div className="management-page"><Activities /></div>} />
+            <Route path="/crm/targets" element={<div className="management-page"><Targets /></div>} />
+            <Route path="/crm/settings" element={<div className="management-page"><CrmSettings /></div>} />
             <Route path="/admin" element={<div className="management-page"><Admin /></div>} />
             <Route path="/audit" element={<div className="management-page"><AuditTrail /></div>} />
             <Route path="*" element={<Navigate to="/" replace />} />

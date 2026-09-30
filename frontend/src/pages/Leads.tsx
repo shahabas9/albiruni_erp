@@ -9,17 +9,22 @@ import {
   fetchLeadCustomerMatches,
   fetchLeadTimeline,
   fetchLeads,
+  fetchRotation,
   updateLead,
   type CustomerMatch,
   type DuplicateMatch,
   type Lead,
   type LeadStatus,
+  type CustomValues,
+  type Rotation,
 } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { CsvImport } from "../components/CsvImport";
+import { Attachments } from "../crm/Attachments";
 import { Icon } from "../components/Icon";
 import { useOpenOpportunity } from "../crm/drawerHost";
 import { ContactActions } from "../crm/ContactActions";
+import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { FollowUpModal } from "../crm/forms";
 import { Timeline } from "../crm/Timeline";
 import { Drawer, DuplicateWarning, FollowUpBadge, Modal, OwnerPicker, Pager, SearchBox, ownerParam, type OwnerFilter } from "../crm/ui";
@@ -42,8 +47,10 @@ export function Leads() {
   const [followUpFor, setFollowUpFor] = useState<Lead | null>(null);
   const [importing, setImporting] = useState(false);
   const [historyFor, setHistoryFor] = useState<Lead | null>(null);
+  const [fileChanges, setFileChanges] = useState(0);
   const [owner, setOwner] = useState<OwnerFilter>((params.get("owner") as OwnerFilter) || "all");
   const [status, setStatus] = useState(params.get("status") ?? "");
+  const [tag, setTag] = useState(params.get("tag") ?? "");
   const [search, setSearch] = useState("");
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
@@ -53,12 +60,12 @@ export function Leads() {
   const statusParam = owner === "unassigned" && !status ? "open" : status;
   const list = usePaged(
     (limit, offset) =>
-      fetchLeads({ q: search, status: statusParam, owner: ownerParam(owner), limit, offset }),
-    `${search}|${statusParam}|${owner}`,
+      fetchLeads({ q: search, status: statusParam, owner: ownerParam(owner), tag, limit, offset }),
+    `${search}|${statusParam}|${owner}|${tag}`,
     version,
   );
   const visible = list.rows;
-  const filtered = Boolean(search || status || owner !== "all");
+  const filtered = Boolean(search || status || tag || owner !== "all");
 
   async function assign(lead: Lead, ownerId: string | null) {
     try {
@@ -97,6 +104,7 @@ export function Leads() {
             </option>
           ))}
         </select>
+        <TagFilter recordType="lead" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name, company, phone, email" />
         {can("crm.lead.write") && (
           <div style={{ display: "flex", gap: 8 }}>
@@ -148,6 +156,7 @@ export function Leads() {
                           <span className="sub">
                             {[l.company_name ? l.name : "", l.source].filter(Boolean).join(" · ") || "—"}
                           </span>
+                          <TagChips tags={l.tags} onClick={setTag} />
                         </div>
                         {l.status !== "Converted" && (
                           <ContactActions phone={l.phone} name={l.name} target={{ lead_id: l.id }} onLogged={reload} />
@@ -173,7 +182,7 @@ export function Leads() {
                       )}
                     </td>
                     <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <button className="ghost-btn sm" onClick={() => setHistoryFor(l)} title="History" aria-label="History">
+                      <button className="ghost-btn sm" onClick={() => setHistoryFor(l)} title="Files and history" aria-label="History">
                         <Icon name="clock" size={14} />
                       </button>
                       {l.status === "Converted" && l.converted_opportunity_id && (
@@ -232,10 +241,18 @@ export function Leads() {
       {historyFor && (
         <Drawer
           title={historyFor.company_name || historyFor.name}
-          subtitle={`History · ${historyFor.status}`}
+          subtitle={`${historyFor.company_name ? historyFor.name + " · " : ""}${historyFor.status}`}
           onClose={() => setHistoryFor(null)}
         >
-          <Timeline load={() => fetchLeadTimeline(historyFor.id)} version={version} />
+          <h3 className="drawer-section">Files</h3>
+          <Attachments
+            recordType="lead"
+            recordId={historyFor.id}
+            canWrite={can("crm.lead.write") && historyFor.status !== "Converted"}
+            onChange={() => setFileChanges((n) => n + 1)}
+          />
+          <h3 className="drawer-section">History</h3>
+          <Timeline load={() => fetchLeadTimeline(historyFor.id)} version={version + fileChanges} />
         </Drawer>
       )}
 
@@ -255,12 +272,24 @@ export function Leads() {
 
 /** New leads are owned by whoever creates them; reassign from the Owner column. */
 function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | null; onDone: () => void }) {
+  // New leads: yours, or the next person in the lead rotation when it's on.
+  const [rotation, setRotation] = useState<Rotation | null>(null);
+  const [byRotation, setByRotation] = useState(false);
+  useEffect(() => {
+    if (lead) return;
+    fetchRotation()
+      .then((r) => setRotation(r.enabled ? r : null))
+      .catch(() => setRotation(null));
+  }, [lead]);
   const [name, setName] = useState(lead?.name ?? "");
   const [companyName, setCompanyName] = useState(lead?.company_name ?? "");
   const [email, setEmail] = useState(lead?.email ?? "");
   const [phone, setPhone] = useState(lead?.phone ?? "");
   const [source, setSource] = useState(lead?.source ?? "");
   const [status, setStatus] = useState<LeadStatus>(lead?.status ?? "New");
+  const [tags, setTags] = useState<string[]>(lead?.tags ?? []);
+  const customFields = useCustomFields("lead");
+  const [custom, setCustom] = useState<CustomValues>(lead?.custom ?? {});
   const [error, setError] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
@@ -270,7 +299,16 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
     setError(null);
     try {
       if (lead) {
-        await updateLead(lead.id, { name, company_name: companyName, email, phone, source, status });
+        await updateLead(lead.id, {
+          name,
+          company_name: companyName,
+          email,
+          phone,
+          source,
+          status,
+          tags,
+          custom: changedCustom(lead.custom, custom),
+        });
       } else {
         await createLead({
           name,
@@ -279,6 +317,9 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
           phone,
           source,
           owner_user_id: ownerId ?? null,
+          assign_by_rotation: byRotation,
+          tags,
+          custom,
           allow_duplicate: allowDuplicate,
         });
       }
@@ -314,6 +355,15 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
           <span>Source</span>
           <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="e.g. Referral, Website" />
         </label>
+        {!lead && rotation && (
+          <label className="field">
+            <span>Owner</span>
+            <select value={byRotation ? "rotation" : "me"} onChange={(e) => setByRotation(e.target.value === "rotation")}>
+              <option value="me">Me</option>
+              <option value="rotation">Next in rotation ({rotation.next_user_name})</option>
+            </select>
+          </label>
+        )}
         {lead && (
           <label className="field">
             <span>Status</span>
@@ -326,6 +376,11 @@ function LeadForm({ lead, ownerId, onDone }: { lead?: Lead; ownerId?: string | n
             </select>
           </label>
         )}
+        <CustomFieldInputs fields={customFields} values={custom} onChange={setCustom} />
+        <div className="field full">
+          <span>Tags</span>
+          <TagInput value={tags} onChange={setTags} recordType="lead" />
+        </div>
       </div>
       {error && <div className="error-banner">{error}</div>}
       {duplicates && (

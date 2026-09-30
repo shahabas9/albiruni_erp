@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const TOKEN_KEY = "albiruni-token";
 
 /** A record a create would duplicate (409 from the lead/customer forms). */
@@ -67,7 +67,8 @@ async function send(path: string, options: RequestInit = {}): Promise<Response> 
   const token = getToken();
   const headers = new Headers(options.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (options.body && !(options.body instanceof URLSearchParams)) {
+  // FormData sets its own multipart boundary; everything else we send is JSON.
+  if (options.body && !(options.body instanceof URLSearchParams) && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -273,6 +274,9 @@ export interface Customer {
   active: boolean;
   /** GST registration number; "" if unregistered. */
   gstin: string;
+  tags: string[];
+  /** Custom field values by field key. */
+  custom: CustomValues;
 }
 
 export interface CustomerInput {
@@ -281,9 +285,14 @@ export interface CustomerInput {
   gstin?: string;
   /** Create even though a customer with this name or GSTIN exists. */
   allow_duplicate?: boolean;
+  tags?: string[];
+  /** On update only the keys sent change; null or "" clears one. */
+  custom?: CustomValues;
 }
 
 export interface CustomerQuery {
+  /** Only records carrying this tag. */
+  tag?: string;
   /** Every word must appear in the name or GSTIN. */
   q?: string;
   active?: boolean;
@@ -445,6 +454,9 @@ export interface Lead extends FollowUpSummary {
   owner_name: string | null;
   converted_customer_id: string | null;
   converted_opportunity_id: string | null;
+  tags: string[];
+  /** Custom field values by field key. */
+  custom: CustomValues;
   created_at: string;
 }
 
@@ -459,10 +471,17 @@ export interface LeadInput {
   owner_user_id?: string | null;
   /** Create even though a lead with this phone or email exists. */
   allow_duplicate?: boolean;
+  /** Give it to the next person in the lead rotation (owner_user_id is then ignored). */
+  assign_by_rotation?: boolean;
+  tags?: string[];
+  /** On update only the keys sent change; null or "" clears one. */
+  custom?: CustomValues;
 }
 
 /** owner: "me", "unassigned" or a user id. status: a status or "open". */
 export interface LeadQuery {
+  /** Only records carrying this tag. */
+  tag?: string;
   q?: string;
   status?: string;
   owner?: string;
@@ -497,7 +516,7 @@ export interface TimelineEntry {
   summary: string;
   changes: Record<string, [unknown, unknown]>;
   /** Where the change was made. */
-  source: "app" | "ask_erp" | "import";
+  source: "app" | "ask_erp" | "import" | "web_form";
   actor_name: string | null;
 }
 
@@ -610,6 +629,9 @@ export interface Opportunity extends FollowUpSummary {
   idle_days: number;
   /** Open deal untouched longer than its stage allows. */
   is_stale: boolean;
+  tags: string[];
+  /** Custom field values by field key. */
+  custom: CustomValues;
   created_at: string;
 }
 
@@ -632,10 +654,15 @@ export interface OpportunityInput {
   notes?: string;
   /** Anyone but yourself needs crm.opportunity.assign. */
   owner_user_id?: string | null;
+  tags?: string[];
+  /** On update only the keys sent change; null or "" clears one. */
+  custom?: CustomValues;
 }
 
 /** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */
 export interface OpportunityQuery {
+  /** Only records carrying this tag. */
+  tag?: string;
   q?: string;
   stage?: string;
   owner?: string;
@@ -824,4 +851,173 @@ export interface CrmSummary {
 /** owner narrows the deal figures ("me", "unassigned" or a user id). */
 export function fetchCrmSummary(params: { owner?: string; closed_days?: number } = {}): Promise<CrmSummary> {
   return request<CrmSummary>(`/api/crm/summary${query(params)}`);
+}
+
+// --- CRM: lead rotation ------------------------------------------------------
+
+/** Who new leads go to in turn. */
+export interface Rotation {
+  enabled: boolean;
+  /** In rotation order. */
+  user_ids: string[];
+  next_user_id: string | null;
+  next_user_name: string | null;
+}
+
+export function fetchRotation(): Promise<Rotation> {
+  return request<Rotation>("/api/crm/rotation");
+}
+
+export function saveRotation(body: { enabled: boolean; user_ids: string[] }): Promise<Rotation> {
+  return request<Rotation>("/api/crm/rotation", { method: "PUT", body: JSON.stringify(body) });
+}
+
+// --- CRM: sales targets -------------------------------------------------------
+
+export interface TargetRow {
+  user_id: string;
+  name: string;
+  active: boolean;
+  target: number;
+  /** Value of deals this person moved to Won during the month. */
+  won_value: number;
+  won_count: number;
+  /** Their open deals expected to close this month, value × probability. */
+  forecast: number;
+  pct: number | null;
+}
+
+export interface TargetReport {
+  month: string;
+  rows: TargetRow[];
+  team_target: number;
+  team_won: number;
+  team_pct: number | null;
+  /** Won by deals nobody owns — counted in the team total only. */
+  unowned_won_value: number;
+  unowned_won_count: number;
+}
+
+/** month: "YYYY-MM"; this month when omitted. */
+export function fetchTargets(month?: string): Promise<TargetReport> {
+  return request<TargetReport>(`/api/crm/targets${query({ month })}`);
+}
+
+/** An amount of 0 removes that person's target. */
+export function saveTargets(month: string, targets: { user_id: string; amount: number }[]): Promise<TargetReport> {
+  return request<TargetReport>("/api/crm/targets", { method: "PUT", body: JSON.stringify({ month, targets }) });
+}
+
+// --- CRM: tags and custom fields ---------------------------------------------
+
+export type RecordType = "lead" | "opportunity" | "customer";
+export type CustomFieldType = "text" | "number" | "date" | "select" | "checkbox";
+export type CustomValue = string | number | boolean | null;
+export type CustomValues = Record<string, CustomValue>;
+
+export interface CustomField {
+  id: string;
+  record_type: RecordType;
+  /** Values are stored under this; it never changes. */
+  key: string;
+  label: string;
+  field_type: CustomFieldType;
+  /** Choices, for "select". */
+  options: string[];
+  position: number;
+  /** Archived fields are hidden from forms; their saved values are kept. */
+  active: boolean;
+}
+
+export function fetchCustomFields(recordType?: RecordType, includeArchived = false): Promise<CustomField[]> {
+  return request<CustomField[]>(`/api/crm/fields${query({ record_type: recordType, include_archived: includeArchived || undefined })}`);
+}
+
+export function createCustomField(body: {
+  record_type: RecordType;
+  label: string;
+  field_type: CustomFieldType;
+  options?: string[];
+}): Promise<CustomField> {
+  return request<CustomField>("/api/crm/fields", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateCustomField(
+  id: string,
+  body: Partial<{ label: string; options: string[]; position: number; active: boolean }>,
+): Promise<CustomField> {
+  return request<CustomField>(`/api/crm/fields/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function fetchTags(recordType: RecordType): Promise<{ tag: string; count: number }[]> {
+  return request<{ tag: string; count: number }[]>(`/api/crm/tags${query({ record_type: recordType })}`);
+}
+
+// --- CRM: attachments ----------------------------------------------------------
+
+export interface Attachment {
+  id: string;
+  record_type: RecordType;
+  record_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  uploaded_by_name: string | null;
+  created_at: string;
+}
+
+export const ATTACHMENT_MAX_MB = 10;
+
+export function fetchAttachments(recordType: RecordType, recordId: string): Promise<Attachment[]> {
+  return request<Attachment[]>(`/api/attachments${query({ record_type: recordType, record_id: recordId })}`);
+}
+
+export function uploadAttachment(recordType: RecordType, recordId: string, file: File): Promise<Attachment> {
+  const body = new FormData();
+  body.set("record_type", recordType);
+  body.set("record_id", recordId);
+  body.set("file", file);
+  return request<Attachment>("/api/attachments", { method: "POST", body });
+}
+
+export function deleteAttachment(id: string): Promise<void> {
+  return request<void>(`/api/attachments/${id}`, { method: "DELETE" });
+}
+
+/** Downloads with the session token (a plain link can't send it) and saves under the original name. */
+export async function downloadAttachment(attachment: Attachment): Promise<void> {
+  const res = await send(`/api/attachments/${attachment.id}/download`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: attachment.filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// --- CRM: web enquiry form ------------------------------------------------------
+
+export interface WebForm {
+  enabled: boolean;
+  /** Secret part of the public link; null until first turned on. */
+  key: string | null;
+  /** Lead source recorded on enquiries. */
+  source: string;
+  thank_you: string;
+}
+
+export function webFormUrl(key: string): string {
+  return `${API_BASE}/api/public/enquiry/${key}`;
+}
+
+export function fetchWebForm(): Promise<WebForm> {
+  return request<WebForm>("/api/crm/web-form");
+}
+
+export function saveWebForm(body: Partial<{ enabled: boolean; source: string; thank_you: string }>): Promise<WebForm> {
+  return request<WebForm>("/api/crm/web-form", { method: "PUT", body: JSON.stringify(body) });
+}
+
+export function newWebFormKey(): Promise<WebForm> {
+  return request<WebForm>("/api/crm/web-form/new-key", { method: "POST" });
 }

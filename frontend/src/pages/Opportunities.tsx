@@ -7,12 +7,14 @@ import {
   createOpportunity,
   fetchOpportunities,
   updateOpportunity,
+  type CustomValues,
   type Opportunity,
   type OpportunityStage,
 } from "../api/client";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { useAuth } from "../auth/AuthProvider";
 import { useOpenOpportunity } from "../crm/drawerHost";
+import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
 import { FollowUpBadge, IdleBadge, OwnerPicker, Pager, SearchBox, ownerParam, type OwnerFilter } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
@@ -33,6 +35,7 @@ export function Opportunities() {
   });
   const [owner, setOwner] = useState<OwnerFilter>("all");
   const [search, setSearch] = useState("");
+  const [tag, setTag] = useState(params.get("tag") ?? "");
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const { user } = useAuth();
   const { crm, version, assignees, refresh: reload, can } = useAppData();
@@ -44,10 +47,11 @@ export function Opportunities() {
         stage: stageFilter === "all" || stageFilter === "stale" ? "" : stageFilter,
         stale: stageFilter === "stale",
         owner: ownerParam(owner),
+        tag,
         limit,
         offset,
       }),
-    `${search}|${stageFilter}|${owner}`,
+    `${search}|${stageFilter}|${owner}|${tag}`,
     version,
   );
   const visible = list.rows;
@@ -113,6 +117,7 @@ export function Opportunities() {
             </button>
           ))}
         </div>
+        <TagFilter recordType="opportunity" value={tag} onChange={setTag} version={version} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search deal or customer" />
         {can("crm.opportunity.write") && (
           <button className="primary-btn" onClick={() => setShowForm((v) => !v)}>
@@ -133,7 +138,7 @@ export function Opportunities() {
 
       {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          {search || stageFilter !== "all" || owner !== "all" ? "No opportunities match this filter." : "No opportunities yet."}
+          {search || tag || stageFilter !== "all" || owner !== "all" ? "No opportunities match this filter." : "No opportunities yet."}
         </div>
       )}
 
@@ -180,6 +185,7 @@ export function Opportunities() {
                         {o.customer_name}
                         {o.quotations.length ? ` · ${o.quotations.length} quote${o.quotations.length === 1 ? "" : "s"}` : ""}
                       </span>
+                      <TagChips tags={o.tags} onClick={setTag} />
                     </td>
                     <td>
                       <span className={`badge ${o.stage === "Won" ? "status-confirmed" : o.stage === "Lost" ? "status-draft" : "status-pending"}`}>
@@ -236,6 +242,9 @@ function OpportunityForm({
   const [value, setValue] = useState(String(opportunity?.value ?? 0));
   const [probability, setProbability] = useState(String(opportunity?.probability_pct ?? 50));
   const [closeDate, setCloseDate] = useState(opportunity?.expected_close_date ?? "");
+  const [tags, setTags] = useState<string[]>(opportunity?.tags ?? []);
+  const customFields = useCustomFields("opportunity");
+  const [custom, setCustom] = useState<CustomValues>(opportunity?.custom ?? {});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -250,6 +259,8 @@ function OpportunityForm({
           value: Number(value),
           probability_pct: Number(probability),
           expected_close_date: closeDate || null,
+          tags,
+          custom: changedCustom(opportunity.custom, custom),
         });
       } else {
         await createOpportunity({
@@ -259,6 +270,8 @@ function OpportunityForm({
           probability_pct: Number(probability),
           expected_close_date: closeDate || null,
           owner_user_id: ownerId ?? null,
+          tags,
+          custom,
         });
       }
       onDone();
@@ -303,6 +316,11 @@ function OpportunityForm({
           <span>Expected close date</span>
           <input type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
         </label>
+        <CustomFieldInputs fields={customFields} values={custom} onChange={setCustom} />
+        <div className="field full">
+          <span>Tags</span>
+          <TagInput value={tags} onChange={setTags} recordType="opportunity" />
+        </div>
       </div>
       {error && <div className="error-banner">{error}</div>}
       <div className="form-actions">

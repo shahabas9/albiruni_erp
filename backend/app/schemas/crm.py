@@ -1,4 +1,6 @@
 from datetime import date, datetime
+from typing import Any
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -19,6 +21,11 @@ class LeadIn(BaseModel):
     owner_user_id: UUID | None = None
     # Create even though a lead with the same phone or email exists.
     allow_duplicate: bool = False
+    # Give it to the next person in the lead rotation (owner_user_id is then ignored).
+    assign_by_rotation: bool = False
+    tags: list[str] = []
+    # Custom field values by key; see GET /api/crm/fields.
+    custom: dict[str, Any] = {}
 
 
 class LeadUpdate(BaseModel):
@@ -32,6 +39,9 @@ class LeadUpdate(BaseModel):
     source: str | None = None
     status: str | None = None
     notes: str | None = None
+    tags: list[str] | None = None
+    # Only the keys sent change; null or "" clears one.
+    custom: dict[str, Any] | None = None
 
 
 class OwnerIn(BaseModel):
@@ -59,6 +69,8 @@ class LeadOut(FollowUpSummary):
     owner_name: str | None
     converted_customer_id: UUID | None
     converted_opportunity_id: UUID | None
+    tags: list[str]
+    custom: dict[str, Any]
     created_at: datetime
 
 
@@ -123,6 +135,9 @@ class OpportunityIn(BaseModel):
     notes: str = ""
     # Assigning someone other than yourself needs crm.opportunity.assign.
     owner_user_id: UUID | None = None
+    tags: list[str] = []
+    # Custom field values by key; see GET /api/crm/fields.
+    custom: dict[str, Any] = {}
 
 
 class OpportunityUpdate(BaseModel):
@@ -136,6 +151,9 @@ class OpportunityUpdate(BaseModel):
     notes: str | None = None
     # Required when moving to Lost (unless one is already recorded).
     lost_reason: str | None = Field(default=None, max_length=200)
+    tags: list[str] | None = None
+    # Only the keys sent change; null or "" clears one.
+    custom: dict[str, Any] | None = None
 
 
 class OpportunityQuotationIn(BaseModel):
@@ -161,6 +179,8 @@ class OpportunityOut(FollowUpSummary):
     stage_changed_at: datetime
     owner_user_id: UUID | None
     owner_name: str | None
+    tags: list[str]
+    custom: dict[str, Any]
     quotations: list[QuotationOut]
     # Idle-deal signal: last stage change, follow-up or quotation on the deal.
     last_touch_at: datetime
@@ -282,3 +302,100 @@ class CrmSummary(BaseModel):
     open_followups: int = 0
     overdue_followups: int = 0
     overdue_items: list[ActivityOut] = []
+
+
+class RotationIn(BaseModel):
+    enabled: bool
+    user_ids: list[UUID]
+
+
+class RotationOut(BaseModel):
+    enabled: bool
+    user_ids: list[UUID]
+    next_user_id: UUID | None
+    next_user_name: str | None
+
+
+class TargetRow(BaseModel):
+    user_id: UUID
+    name: str
+    active: bool
+    target: float
+    won_value: float
+    won_count: int
+    forecast: float
+    pct: int | None
+
+
+class TargetReport(BaseModel):
+    month: str
+    rows: list[TargetRow]
+    team_target: float
+    team_won: float
+    team_pct: int | None
+    unowned_won_value: float
+    unowned_won_count: int
+
+
+class TargetIn(BaseModel):
+    user_id: UUID
+    amount: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+
+
+class TargetsIn(BaseModel):
+    month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    targets: list[TargetIn]
+
+
+class CustomFieldIn(BaseModel):
+    record_type: str
+    label: str = Field(min_length=1, max_length=80)
+    field_type: str
+    options: list[str] = []
+
+
+class CustomFieldUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+    options: list[str] | None = None
+    position: int | None = None
+    active: bool | None = None
+
+
+class CustomFieldOut(BaseModel):
+    id: UUID
+    record_type: str
+    key: str
+    label: str
+    field_type: str
+    options: list[str]
+    position: int
+    active: bool
+
+
+class TagCount(BaseModel):
+    tag: str
+    count: int
+
+
+class AttachmentOut(BaseModel):
+    id: UUID
+    record_type: str
+    record_id: UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    uploaded_by_name: str | None
+    created_at: datetime
+
+
+class WebFormIn(BaseModel):
+    enabled: bool | None = None
+    source: str | None = Field(default=None, max_length=60)
+    thank_you: str | None = Field(default=None, max_length=300)
+
+
+class WebFormOut(BaseModel):
+    enabled: bool
+    key: str | None
+    source: str
+    thank_you: str

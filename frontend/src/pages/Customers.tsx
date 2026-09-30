@@ -1,7 +1,9 @@
 import { useCallback, useState } from "react";
-import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer, type DuplicateMatch } from "../api/client";
+import { ApiError, createCustomer, fetchCustomers, updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
 import { CsvImport } from "../components/CsvImport";
-import { DuplicateWarning, Pager, SearchBox } from "../crm/ui";
+import { CustomFieldInputs, TagChips, TagFilter, TagInput, changedCustom, useCustomFields } from "../crm/fields";
+import { Attachments } from "../crm/Attachments";
+import { Drawer, DuplicateWarning, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
@@ -16,14 +18,21 @@ export function Customers() {
   const [search, setSearch] = useState("");
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const [active, setActive] = useState<ActiveFilter>("all");
+  const [tag, setTag] = useState("");
+  const [filesFor, setFilesFor] = useState<Customer | null>(null);
   const list = usePaged(
     (limit, offset) =>
-      fetchCustomers({ q: search, active: active === "all" ? undefined : active === "active", limit, offset }),
-    `${search}|${active}`,
+      fetchCustomers({ q: search, active: active === "all" ? undefined : active === "active", tag, limit, offset }),
+    `${search}|${active}|${tag}`,
     version,
   );
   const customers = list.rows;
-  const refresh = list.reload;
+  // Saves here reload only this list, so bump the tag filter's suggestions too.
+  const [saves, setSaves] = useState(0);
+  const refresh = async () => {
+    setSaves((n) => n + 1);
+    await list.reload();
+  };
 
   return (
     <section>
@@ -43,6 +52,7 @@ export function Customers() {
             </button>
           ))}
         </div>
+        <TagFilter recordType="customer" value={tag} onChange={setTag} version={version + saves} />
         <SearchBox value={search} onChange={onSearch} placeholder="Search name or GSTIN" />
         {can("sales.customer.write") && (
           <div style={{ display: "flex", gap: 8 }}>
@@ -61,7 +71,7 @@ export function Customers() {
 
       {!list.loading && list.total === 0 && !showForm && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
-          {search || active !== "all" ? "No customers match this filter." : "No customers yet — add one above."}
+          {search || tag || active !== "all" ? "No customers match this filter." : "No customers yet — add one above."}
         </div>
       )}
 
@@ -93,7 +103,10 @@ export function Customers() {
                   </tr>
                 ) : (
                   <tr key={c.id}>
-                    <td>{c.name}</td>
+                    <td>
+                      {c.name}
+                      <TagChips tags={c.tags} onClick={setTag} />
+                    </td>
                     <td>{c.gstin ? <span className="mono">{c.gstin}</span> : <span className="followup none">Unregistered</span>}</td>
                     <td className="mono">₹{c.credit_limit.toLocaleString("en-IN")}</td>
                     <td>
@@ -104,6 +117,9 @@ export function Customers() {
                     <td style={{ display: "flex", gap: 8 }}>
                       <button className="secondary-btn" onClick={() => setEditingId(c.id)}>
                         Edit
+                      </button>
+                      <button className="secondary-btn" onClick={() => setFilesFor(c)}>
+                        Files
                       </button>
                       <button
                         className="secondary-btn"
@@ -127,6 +143,12 @@ export function Customers() {
         </div>
       )}
       <Pager page={list.page} pageSize={PAGE_SIZE} total={list.total} onPage={list.setPage} />
+
+      {filesFor && (
+        <Drawer title={filesFor.name} subtitle="Files" onClose={() => setFilesFor(null)}>
+          <Attachments recordType="customer" recordId={filesFor.id} canWrite={can("sales.customer.write")} />
+        </Drawer>
+      )}
     </section>
   );
 }
@@ -135,6 +157,9 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
   const [name, setName] = useState(customer?.name ?? "");
   const [creditLimit, setCreditLimit] = useState(String(customer?.credit_limit ?? 0));
   const [gstin, setGstin] = useState(customer?.gstin ?? "");
+  const [tags, setTags] = useState<string[]>(customer?.tags ?? []);
+  const customFields = useCustomFields("customer");
+  const [custom, setCustom] = useState<CustomValues>(customer?.custom ?? {});
   const [error, setError] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
   const [saving, setSaving] = useState(false);
@@ -144,9 +169,22 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
     setError(null);
     try {
       if (customer) {
-        await updateCustomer(customer.id, { name, credit_limit: Number(creditLimit), gstin });
+        await updateCustomer(customer.id, {
+          name,
+          credit_limit: Number(creditLimit),
+          gstin,
+          tags,
+          custom: changedCustom(customer.custom, custom),
+        });
       } else {
-        await createCustomer({ name, credit_limit: Number(creditLimit), gstin, allow_duplicate: allowDuplicate });
+        await createCustomer({
+          name,
+          credit_limit: Number(creditLimit),
+          gstin,
+          tags,
+          custom,
+          allow_duplicate: allowDuplicate,
+        });
       }
       onDone();
     } catch (err) {
@@ -178,6 +216,11 @@ function CustomerForm({ customer, onDone }: { customer?: Customer; onDone: () =>
             style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
           />
         </label>
+        <CustomFieldInputs fields={customFields} values={custom} onChange={setCustom} />
+        <div className="field full">
+          <span>Tags</span>
+          <TagInput value={tags} onChange={setTags} recordType="customer" />
+        </div>
       </div>
       {error && <div className="error-banner">{error}</div>}
       {duplicates && (

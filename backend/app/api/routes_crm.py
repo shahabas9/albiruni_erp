@@ -1,4 +1,5 @@
 from datetime import timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func, select
@@ -9,10 +10,10 @@ from app.api.routes_leads import http_error
 from app.api.routes_opportunities import opportunity_rows
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_any_permission, require_permission
-from app.domain import activity_service, crm_service
-from app.domain.errors import ConflictError
+from app.domain import activity_service, crm_service, fields, target_service, web_form
+from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, Activity, Lead, Opportunity
-from app.schemas.crm import CrmSummary, LostReasonCount, StaleLimits, StageTotal
+from app.schemas.crm import CrmSummary, CustomFieldIn, CustomFieldOut, CustomFieldUpdate, TagCount, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetReport, TargetsIn, WebFormIn, WebFormOut
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -38,6 +39,156 @@ def put_settings(
         return crm_service.set_stale_limits(db, context, body.model_dump())
     except ConflictError as exc:
         raise http_error(exc) from exc
+
+
+@router.get("/rotation", response_model=RotationOut)
+def get_rotation(
+    context: RequestContext = Depends(require_any_permission("crm.lead.read", "crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Who new leads go to in turn, and who's next. Leads use it when created
+    with assign_by_rotation, from CSV rows with no Owner, and from the web
+    enquiry form."""
+
+    return crm_service.rotation_status(db, context)
+
+
+@router.put("/rotation", response_model=RotationOut)
+def put_rotation(
+    body: RotationIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return crm_service.set_rotation(db, context, body.enabled, body.user_ids)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/targets", response_model=TargetReport)
+def get_targets(
+    month: str = Query("", description="YYYY-MM; this month when blank"),
+    context: RequestContext = Depends(require_permission("crm.opportunity.read")),
+    db: Session = Depends(get_db),
+):
+    """Each person's target for the month against the deals they won."""
+
+    try:
+        when = target_service.parse_month(month) if month else crm_service.now_utc().date().replace(day=1)
+        return target_service.report(db, context, when)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.put("/targets", response_model=TargetReport)
+def put_targets(
+    body: TargetsIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Sets targets for the month; an amount of 0 removes that person's target."""
+
+    try:
+        when = target_service.parse_month(body.month)
+        target_service.set_targets(db, context, when, [(t.user_id, t.amount) for t in body.targets])
+        return target_service.report(db, context, when)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/fields", response_model=list[CustomFieldOut])
+def list_custom_fields(
+    record_type: str = "",
+    include_archived: bool = False,
+    context: RequestContext = Depends(require_any_permission(
+        "crm.lead.read", "crm.opportunity.read", "sales.customer.read", "crm.settings.write",
+    )),
+    db: Session = Depends(get_db),
+):
+    """The company's custom fields (for one record type when given), in form order."""
+
+    try:
+        return fields.list_fields(db, context, record_type or None, include_archived=include_archived)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/fields", response_model=CustomFieldOut)
+def create_custom_field(
+    body: CustomFieldIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return fields.create_field(db, context, record_type=body.record_type, label=body.label,
+                                   field_type=body.field_type, options=body.options)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.patch("/fields/{field_id}", response_model=CustomFieldOut)
+def update_custom_field(
+    field_id: UUID,
+    body: CustomFieldUpdate,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Rename, change choices, reorder or archive. Archiving keeps saved values."""
+
+    try:
+        return fields.update_field(db, context, field_id, body.model_dump(exclude_unset=True))
+    except (NotFoundError, ConflictError) as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/tags", response_model=list[TagCount])
+def list_tags(
+    record_type: str = Query(..., description="lead, opportunity or customer"),
+    context: RequestContext = Depends(require_any_permission(
+        "crm.lead.read", "crm.opportunity.read", "sales.customer.read",
+    )),
+    db: Session = Depends(get_db),
+):
+    """Tags in use on a record type, most used first — for filters and suggestions."""
+
+    try:
+        return fields.tag_counts(db, context, record_type)
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/web-form", response_model=WebFormOut)
+def get_web_form(
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """The public enquiry form's settings, including its secret key."""
+
+    return web_form.settings_for(db, context)
+
+
+@router.put("/web-form", response_model=WebFormOut)
+def put_web_form(
+    body: WebFormIn,
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Turning it on for the first time creates the secret key."""
+
+    try:
+        return web_form.update_settings(db, context, **body.model_dump(exclude_unset=True))
+    except ConflictError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/web-form/new-key", response_model=WebFormOut)
+def new_web_form_key(
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Replaces the secret link; the old one stops working at once."""
+
+    return web_form.regenerate_key(db, context)
 
 
 @router.get("/summary", response_model=CrmSummary)

@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, contains_eager
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, history
+from app.domain import crm_service, fields, history
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, OPPORTUNITY_STAGES, Opportunity
@@ -22,6 +22,7 @@ def list_opportunities(
     owner: str = "",
     closed_since: date | None = None,
     stale_only: bool = False,
+    tag: str = "",
     limit: int | None = None,
     offset: int = 0,
 ) -> tuple[list[Opportunity], int]:
@@ -47,6 +48,8 @@ def list_opportunities(
         since = datetime.combine(closed_since, time.min, timezone.utc)
         stmt = stmt.where(or_(Opportunity.stage.in_(OPEN_STAGES), Opportunity.stage_changed_at >= since))
     stmt = crm_service.filter_owner(stmt, Opportunity.owner_user_id, owner, context)
+    if tag.strip():
+        stmt = stmt.where(Opportunity.tags.contains([tag.strip().lower()]))
     if q.strip():
         stmt = stmt.where(crm_service.search(q, Opportunity.name, Customer.name))
     if stale_only:
@@ -74,6 +77,8 @@ def create_opportunity(db: Session, context: RequestContext, body: OpportunityIn
         expected_close_date=body.expected_close_date,
         notes=body.notes,
         stage_changed_at=crm_service.now_utc(),
+        tags=fields.normalize_tags(body.tags),
+        custom=fields.clean_custom(db, context, "opportunity", body.custom),
         owner_user_id=crm_service.resolve_owner(db, context, body.owner_user_id),
     )
     db.add(opp)
@@ -101,7 +106,8 @@ def update_opportunity(db: Session, context: RequestContext, opportunity_id: UUI
         data["lost_reason"] = ""  # a reopened or won deal carries no lost reason
     if stage != opp.stage:
         opp.stage_changed_at = crm_service.now_utc()
-    changes = history.diff(opp, data)
+    extra = fields.apply_tags_and_custom(db, context, "opportunity", opp, data)
+    changes = {**history.diff(opp, data), **extra}
     for field, value in data.items():
         setattr(opp, field, value)
     if changes:

@@ -63,6 +63,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         { to: "/opportunities", label: "Opportunities", permission: "crm.opportunity.read" },
         { to: "/contacts", label: "Contacts", permission: "crm.contact.read" },
         { to: "/activities", label: "Activities", permission: "crm.activity.read", count: overdue },
+        { to: "/crm/targets", label: "Targets", permission: "crm.opportunity.read" },
+        { to: "/crm/settings", label: "Settings", permission: "crm.settings.write" },
       ],
     },
     {
@@ -155,6 +157,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                       <NavLink
                         key={c.to}
                         to={c.to}
+                        end
                         onClick={onNavigate}
                         className={() => (isChildActive(c.to, pathname, search) ? "active" : "")}
                       >

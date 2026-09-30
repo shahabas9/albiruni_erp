@@ -5,10 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.dev_schema import ensure_dev_schema
+from app.core.public_cors import PublicCORSMiddleware
 
 # Import routers
 from app.api import (
     routes_activities,
+    routes_attachments,
     routes_crm,
     routes_admin,
     routes_ask,
@@ -20,6 +22,7 @@ from app.api import (
     routes_items,
     routes_leads,
     routes_opportunities,
+    routes_public,
     routes_sales,
     routes_setup,
 )
@@ -48,6 +51,8 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Total-Count"],  # list totals for paging
 )
+# Added last, so it runs first: /api/public/* (the web enquiry form) is open to any origin.
+app.add_middleware(PublicCORSMiddleware)
 
 app.include_router(routes_setup.router)
 app.include_router(routes_auth.router)
@@ -64,6 +69,8 @@ app.include_router(routes_opportunities.router)
 app.include_router(routes_activities.router)
 app.include_router(routes_activities.assignees_router)
 app.include_router(routes_crm.router)
+app.include_router(routes_attachments.router)
+app.include_router(routes_public.router)
 
 
 @app.get("/api/health")

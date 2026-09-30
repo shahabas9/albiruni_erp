@@ -3,7 +3,12 @@ import { ApiError, type TimelineEntry } from "../api/client";
 import { dateTime } from "../lib/format";
 import { ErrorNote } from "./ui";
 
-const SOURCE: Record<TimelineEntry["source"], string | null> = { app: null, ask_erp: "Ask ERP", import: "CSV import" };
+const SOURCE: Record<TimelineEntry["source"], string | null> = {
+  app: null,
+  ask_erp: "Ask ERP",
+  import: "CSV import",
+  web_form: "Web form",
+};
 
 /** Who changed what on a record, newest first. `version` refetches after an edit. */
 export function Timeline({ load, version = 0 }: { load: () => Promise<TimelineEntry[]>; version?: number }) {
@@ -34,7 +39,7 @@ export function Timeline({ load, version = 0 }: { load: () => Promise<TimelineEn
             {e.summary}
           </div>
           <div className="tl-meta">
-            {e.actor_name ?? "System"} · {dateTime(e.at)}
+            {e.actor_name ?? (e.source === "web_form" ? "Website visitor" : "System")} · {dateTime(e.at)}
             {SOURCE[e.source] && <span className="badge accent">{SOURCE[e.source]}</span>}
           </div>
         </li>

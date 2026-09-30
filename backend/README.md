@@ -186,6 +186,57 @@ one. `GET /api/leads/{id}/customer-matches` lists the customers the lead
 might already be — same name, or a contact with its phone or email — so the
 user picks.
 
+**Lead rotation.** `GET/PUT /api/crm/rotation` (`crm.settings.write` to
+change) holds an ordered list of people who get new leads in turn. It
+applies to leads created with `assign_by_rotation: true`, CSV rows with a
+blank Owner, and web enquiries; deactivated members are skipped. The next
+person is chosen under a row lock, so leads arriving together go to
+different people. The web app edits it under CRM → Settings.
+
+**Sales targets.** `GET /api/crm/targets?month=YYYY-MM` lists each person's
+monthly target against the value of deals they moved to Won that month
+(by `stage_changed_at`, UTC), plus a forecast (their open deals expected to
+close that month × probability). `PUT` sets targets (`crm.settings.write`;
+an amount of 0 removes one). Shown under CRM → Targets and, for your own
+target, on the dashboard.
+
+**Tags and custom fields.** Leads, deals and customers carry `tags`
+(lower-cased, trimmed, de-duplicated, at most 20 of 40 characters) and
+`custom` values. Lists filter with `?tag=`; `GET /api/crm/tags?record_type=`
+counts the tags in use. Custom fields are defined per company and record
+type (`GET/POST /api/crm/fields`, `PATCH /api/crm/fields/{id}`;
+`crm.settings.write` to change): text, number, date, dropdown (`select`,
+with choices) or yes/no (`checkbox`). Values are validated against their
+field; sending `null` or `""` clears one, and an update changes only the keys
+sent. A field's key and type never change; archiving hides it from forms but
+keeps saved values. Changes show in record history under the field's name.
+CSV import reads a Tags column (separated by `,`, `;` or `|`).
+
+**Attachments.** `GET /api/attachments?record_type=&record_id=`,
+`POST /api/attachments` (multipart: `record_type`, `record_id`, `file`),
+`GET /api/attachments/{id}/download` and `DELETE /api/attachments/{id}` put
+files on leads, opportunities and customers. Reading needs the record's read
+permission, adding or removing its write permission. Files are stored under
+`ATTACHMENTS_DIR` (default `var/attachments`, one folder per tenant), at most
+`ATTACHMENT_MAX_MB` (default 10) each and 50 per record; programs and scripts
+are refused. Downloads are always served as attachments with `nosniff` and a
+sandbox CSP, never rendered inline. Adding or removing a file on a lead or
+deal shows in its history.
+
+**Web enquiry form.** `GET/PUT /api/crm/web-form` and
+`POST /api/crm/web-form/new-key` (`crm.settings.write`) switch on a public
+form at `/api/public/enquiry/<secret key>`: a hosted page to link to or
+embed in an iframe, and the same URL takes a JSON `POST` (`name`, `company`,
+`phone`, `email`, `message`) from a site's own form. It needs no login and
+only `/api/public/*` is open to any origin (`core/public_cors.py`); the rest
+of the API keeps its CORS allow-list. Guards: the key must match an enabled
+form (a new key kills the old link), a hidden honeypot field silently drops
+bots, submissions are rate-limited per IP and per form (in-process), and
+bodies are capped at 20 KB. An enquiry from a known phone or email is added
+to that lead as a note (reopening it if Lost) instead of creating a
+duplicate; new leads get the configured source and go to the lead rotation
+when it's on. History shows these as "Web form".
+
 **Record history.** Creating, editing, re-staging, reassigning or
 converting a lead or deal, logging or completing a follow-up, and raising a
 quotation each write a `crm_events` row in the same transaction: who, when,

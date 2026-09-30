@@ -356,6 +356,292 @@ class CrmTests(unittest.TestCase):
         self.assertIsNone(result.due_at)
         self.assertFalse(result.is_overdue)
 
+    # --- Lead rotation ----------------------------------------------------------
+
+    def colleague(self, name, permissions=("*",)):
+        other = self.make_context(list(permissions), *self._tenant_and_company())
+        other.user.display_name = name
+        self.db.commit()
+        return other.user
+
+    def test_rotation_hands_new_leads_out_in_turn(self):
+        asha, binu = self.colleague("Asha"), self.colleague("Binu")
+        self.assertFalse(routes_crm.get_rotation(self.context, self.db)["enabled"])
+        with self.assertRaises(HTTPException):  # can't switch it on empty
+            routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[]), self.context, self.db)
+        status = routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[asha.id, binu.id]), self.context, self.db)
+        self.assertEqual(status["next_user_name"], "Asha")
+
+        owners = [self.lead(name=f"R{i}", assign_by_rotation=True).owner_user_id for i in range(3)]
+        self.assertEqual(owners, [asha.id, binu.id, asha.id])
+        self.assertIn("assigned by rotation to Asha",
+                      routes_leads.lead_timeline(self.leads_out(q="R0")[0].id, self.context, self.db)[0]["summary"])
+        # Without the flag the form's owner applies as before.
+        self.assertEqual(self.lead(name="Mine", owner_user_id=self.context.user.id).owner_user_id, self.context.user.id)
+
+        # A deactivated member is skipped, not handed leads.
+        self.db.get(User, binu.id).active = False
+        self.db.commit()
+        self.assertEqual([self.lead(name=f"S{i}", assign_by_rotation=True).owner_user_id for i in range(2)],
+                         [asha.id, asha.id])
+
+        # CSV rows with no Owner go round too; rows naming an owner don't.
+        self.db.get(User, binu.id).active = True
+        self.db.commit()
+        self.import_csv("leads", "name,phone,owner\nCsv A,9000011111,\nCsv B,9000022222,Asha\nCsv C,9000033333,\n",
+                        commit=True)
+        by_name = {l.name: l.owner_user_id for l in self.leads_out(q="Csv")}
+        self.assertEqual(by_name, {"Csv A": binu.id, "Csv B": asha.id, "Csv C": asha.id})
+
+        # Off: rotation leads are unassigned; outsiders can't join; only settings writers change it.
+        routes_crm.put_rotation(crm.RotationIn(enabled=False, user_ids=[asha.id]), self.context, self.db)
+        self.assertIsNone(self.lead(name="Off", assign_by_rotation=True).owner_user_id)
+        with self.assertRaises(HTTPException):
+            routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[self.make_context(["*"]).user.id]),
+                                    self.context, self.db)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+
+    # --- Sales targets ----------------------------------------------------------
+
+    def test_targets_compare_each_persons_wins_with_their_month(self):
+        asha = self.colleague("Asha")
+        month = crm_service.now_utc().date().replace(day=1)
+        label = f"{month:%Y-%m}"
+        routes_crm.put_targets(crm.TargetsIn(month=label, targets=[
+            crm.TargetIn(user_id=asha.id, amount=100000), crm.TargetIn(user_id=self.context.user.id, amount=50000),
+        ]), self.context, self.db)
+
+        won = self.deal(name="Won big", value=60000, owner_user_id=asha.id)
+        opportunity_service.update_opportunity(self.db, self.context, won.id, crm.OpportunityUpdate(stage="Won"))
+        old = self.deal(name="Won last year", value=999, owner_user_id=asha.id)
+        opportunity_service.update_opportunity(self.db, self.context, old.id, crm.OpportunityUpdate(stage="Won"))
+        old.stage_changed_at = crm_service.now_utc() - timedelta(days=400)
+        self.deal(name="Closing soon", value=20000, probability_pct=50, owner_user_id=asha.id,
+                  expected_close_date=month + timedelta(days=5))
+        self.db.commit()
+
+        report = routes_crm.get_targets(label, self.context, self.db)
+        rows = {r["name"]: r for r in report["rows"]}
+        self.assertEqual((rows["Asha"]["target"], rows["Asha"]["won_value"], rows["Asha"]["won_count"],
+                          rows["Asha"]["pct"], rows["Asha"]["forecast"]), (100000, 60000, 1, 60, 10000))
+        self.assertEqual((rows["Test user"]["won_value"], rows["Test user"]["pct"]), (0, 0))
+        self.assertEqual((report["team_target"], report["team_won"], report["team_pct"]), (150000, 60000, 40))
+
+        # 0 removes a target; another month is separate; bad input is refused.
+        routes_crm.put_targets(crm.TargetsIn(month=label, targets=[crm.TargetIn(user_id=asha.id, amount=0)]),
+                               self.context, self.db)
+        self.assertIsNone({r["name"]: r for r in routes_crm.get_targets(label, self.context, self.db)["rows"]}["Asha"]["pct"])
+        self.assertEqual(routes_crm.get_targets("2020-01", self.context, self.db)["team_target"], 0)
+        with self.assertRaises(HTTPException):
+            routes_crm.get_targets("2026-13", self.context, self.db)
+        with self.assertRaises(HTTPException):  # not this company's user
+            routes_crm.put_targets(crm.TargetsIn(month=label, targets=[
+                crm.TargetIn(user_id=self.make_context(["*"]).user.id, amount=5)]), self.context, self.db)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.opportunity.read"]))
+
+    # --- Tags and custom fields ---------------------------------------------------
+
+    def field(self, record_type, label, field_type, options=()):
+        return routes_crm.create_custom_field(
+            crm.CustomFieldIn(record_type=record_type, label=label, field_type=field_type, options=list(options)),
+            self.context, self.db)
+
+    def test_tags_are_normalized_counted_and_filterable(self):
+        lead = self.lead(name="Tagged", tags=["VIP", " vip ", "Kerala  North", ""])
+        self.assertEqual(lead.tags, ["vip", "kerala north"])
+        self.lead(name="Other", tags=["vip"])
+        self.assertEqual({l.name for l in self.leads_out(tag="VIP")}, {"Tagged", "Other"})
+        self.assertEqual([l.name for l in self.leads_out(tag="kerala north")], ["Tagged"])
+        counts = routes_crm.list_tags("lead", self.context, self.db)
+        self.assertEqual(counts[0], {"tag": "vip", "count": 2})
+
+        lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(tags=["vip", "hot"]))
+        latest = routes_leads.lead_timeline(lead.id, self.context, self.db)[0]
+        self.assertEqual(latest["summary"], "Tags: vip, kerala north → vip, hot")
+        with self.assertRaises(ConflictError):
+            lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(tags=[f"t{i}" for i in range(21)]))
+
+        deal = self.deal(name="Tagged deal", tags=["Export"])
+        self.assertEqual([o.name for o in self.opps_out(tag="export")], ["Tagged deal"])
+        customer = customer_service.create_customer(self.db, self.context, CustomerIn(name="Tag Co", tags=["Distributor"]))
+        page = routes_customers.list_customers(Response(), q="", active=None, tag="distributor", limit=None, offset=0,
+                                               context=self.context, db=self.db)
+        self.assertEqual([c.id for c in page], [customer.id])
+        self.assertEqual(deal.tags, ["export"])
+
+    def test_custom_fields_validate_values_and_show_in_history(self):
+        budget = self.field("lead", "Budget", "number")
+        city = self.field("lead", "City", "select", ["Kozhikode", "Kannur"])
+        visit = self.field("lead", "Site visit", "date")
+        self.field("lead", "GST registered", "checkbox")
+        self.assertEqual((budget.key, city.key, visit.key), ("budget", "city", "site_visit"))
+        with self.assertRaises(HTTPException):  # same name twice
+            self.field("lead", "budget", "text")
+        with self.assertRaises(HTTPException):  # a dropdown needs choices
+            self.field("lead", "Region", "select")
+
+        lead = self.lead(name="Custom", custom={"budget": "2,50,000", "city": "Kannur", "gst_registered": True})
+        self.assertEqual(lead.custom, {"budget": 250000, "city": "Kannur", "gst_registered": True})
+        for bad in ({"budget": "lots"}, {"city": "Delhi"}, {"site_visit": "31/12/2026"}, {"nope": 1},
+                    {"gst_registered": "yes"}):
+            with self.assertRaises(ConflictError, msg=bad):
+                lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(custom=bad))
+        self.db.rollback()
+
+        lead = lead_service.update_lead(self.db, self.context, lead.id,
+                                        crm.LeadUpdate(custom={"budget": None, "site_visit": "2026-12-31"}))
+        self.assertEqual(lead.custom, {"city": "Kannur", "gst_registered": True, "site_visit": "2026-12-31"})
+        summary = routes_leads.lead_timeline(lead.id, self.context, self.db)[0]["summary"]
+        self.assertEqual(summary, "Budget: 250000 → —; Site visit: — → 2026-12-31")
+
+        # Archiving hides the field but keeps what's saved; its values can't be set any more.
+        routes_crm.update_custom_field(city.id, crm.CustomFieldUpdate(active=False), self.context, self.db)
+        self.assertNotIn("city", [f.key for f in routes_crm.list_custom_fields("lead", False, self.context, self.db)])
+        lead = lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(custom={"budget": 5}))
+        self.assertEqual(lead.custom["city"], "Kannur")
+        with self.assertRaises(ConflictError):
+            lead_service.update_lead(self.db, self.context, lead.id, crm.LeadUpdate(custom={"city": "Kozhikode"}))
+        self.db.rollback()
+
+        # Fields belong to one record type; deals and customers have their own.
+        stage = self.field("opportunity", "Competitor", "text")
+        deal = self.deal(name="With competitor", custom={stage.key: "Acme"})
+        self.assertEqual(self.opps_out(q="With competitor")[0].custom, {"competitor": "Acme"})
+        with self.assertRaises(ConflictError):
+            self.deal(name="Wrong field", custom={"budget": 1})
+        self.db.rollback()
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+        self.assertEqual(deal.custom, {"competitor": "Acme"})
+
+    def test_csv_import_reads_a_tags_column(self):
+        self.import_csv("leads", "name,phone,tags\nCsv Tag,9011122233,VIP; Kerala | hot\n", commit=True)
+        self.assertEqual(self.leads_out(q="Csv Tag")[0].tags, ["vip", "kerala", "hot"])
+
+    # --- Attachments -------------------------------------------------------------
+
+    def test_attachments_store_download_and_respect_permissions(self):
+        import io
+        import tempfile
+        from app.api import routes_attachments
+        from app.core.config import settings
+        from app.domain import attachment_service
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        old_dir, old_mb = settings.attachments_dir, settings.attachment_max_mb
+        settings.attachments_dir, settings.attachment_max_mb = folder.name, 1
+        self.addCleanup(setattr, settings, "attachments_dir", old_dir)
+        self.addCleanup(setattr, settings, "attachment_max_mb", old_mb)
+
+        lead = self.lead(name="With files")
+        saved = attachment_service.save(self.db, self.context, "lead", lead.id, "../../etc/quote <v2>.pdf",
+                                        "application/pdf", io.BytesIO(b"%PDF-1.4 hello"))
+        self.assertEqual((saved["filename"], saved["size_bytes"], saved["uploaded_by_name"]),
+                         ("quote v2.pdf", 14, "Test user"))
+        listed = routes_attachments.list_attachments("lead", lead.id, self.context, self.db)
+        self.assertEqual([a["id"] for a in listed], [saved["id"]])
+        self.assertEqual(routes_leads.lead_timeline(lead.id, self.context, self.db)[0]["summary"], "Attached quote v2.pdf")
+
+        response = routes_attachments.download_attachment(saved["id"], self.context, self.db)
+        self.assertEqual(open(response.path, "rb").read(), b"%PDF-1.4 hello")
+        self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertEqual(response.media_type, "application/octet-stream")
+
+        for name, data in (("run.exe", b"MZ"), ("empty.txt", b""), ("big.bin", b"x" * (1024 * 1024 + 1))):
+            with self.assertRaises(ConflictError, msg=name):
+                attachment_service.save(self.db, self.context, "lead", lead.id, name, None, io.BytesIO(data))
+        # Refused uploads leave nothing behind.
+        leftovers = [p for p in __import__("pathlib").Path(folder.name).rglob("*") if p.is_file()]
+        self.assertEqual(len(leftovers), 1)
+
+        # Read needs the record's read permission; upload/delete need write; other companies see nothing.
+        reader = self.make_context(["crm.lead.read"], *self._tenant_and_company())
+        self.assertEqual(len(routes_attachments.list_attachments("lead", lead.id, reader, self.db)), 1)
+        with self.assertRaises(HTTPException) as denied:
+            routes_attachments.delete_attachment(saved["id"], reader, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
+        with self.assertRaises(HTTPException) as other:
+            routes_attachments.list_attachments("lead", lead.id, self.make_context(["*"]), self.db)
+        self.assertEqual(other.exception.status_code, 404)
+        with self.assertRaises(HTTPException):
+            routes_attachments.list_attachments("lead", lead.id, self.make_context(["crm.opportunity.read"],
+                                                *self._tenant_and_company()), self.db)
+
+        routes_attachments.delete_attachment(saved["id"], self.context, self.db)
+        self.assertEqual(routes_attachments.list_attachments("lead", lead.id, self.context, self.db), [])
+        self.assertFalse(any(p.is_file() for p in __import__("pathlib").Path(folder.name).rglob("*")))
+
+        customer = crm_service.find_or_create_customer(self.db, self.context, "Files Co")
+        self.db.commit()
+        attachment_service.save(self.db, self.context, "customer", customer.id, "gst.png", "image/png", io.BytesIO(b"png"))
+        self.assertEqual(len(routes_attachments.list_attachments("customer", customer.id, self.context, self.db)), 1)
+
+    # --- Web enquiry form ----------------------------------------------------------
+
+    def test_web_form_creates_leads_safely(self):
+        from app.domain import web_form
+        from app.domain.errors import NotFoundError
+
+        web_form.reset_rate_limits()
+        self.addCleanup(web_form.reset_rate_limits)
+        off = routes_crm.get_web_form(self.context, self.db)
+        self.assertEqual((off["enabled"], off["key"]), (False, None))
+        on = routes_crm.put_web_form(crm.WebFormIn(enabled=True, source="Website form"), self.context, self.db)
+        key = on["key"]
+        self.assertTrue(on["enabled"] and len(key) >= 30)
+
+        result = web_form.submit(self.db, key, {"name": "Visitor", "phone": "+91 90000 12345",
+                                                "message": "Need 200 boxes"}, "10.0.0.1")
+        self.assertTrue(result["created"])
+        lead = lead_service.get_lead(self.db, self.context, result["lead_id"])
+        self.assertEqual((lead.source, lead.notes, lead.owner_user_id), ("Website form", "Need 200 boxes", None))
+        entry = routes_leads.lead_timeline(lead.id, self.context, self.db)[0]
+        self.assertEqual((entry["source"], entry["actor_name"]), ("web_form", None))
+
+        # The same person again: a note on their lead, not a second lead.
+        again = web_form.submit(self.db, key, {"name": "Visitor", "phone": "9000012345", "message": "Any update?"},
+                                "10.0.0.2")
+        self.assertEqual((again["created"], again["lead_id"]), (False, lead.id))
+        notes = self.activities_out(lead_id=lead.id)
+        self.assertEqual([a.subject for a in notes], ["Web enquiry: Any update?"])
+
+        # New leads follow the rotation when it's on.
+        asha = self.colleague("Asha")
+        routes_crm.put_rotation(crm.RotationIn(enabled=True, user_ids=[asha.id]), self.context, self.db)
+        rotated = web_form.submit(self.db, key, {"name": "Rotated", "email": "r@example.test"}, "10.0.0.3")
+        self.assertEqual(lead_service.get_lead(self.db, self.context, rotated["lead_id"]).owner_user_id, asha.id)
+
+        # Bad input, bots, floods, wrong or disabled keys.
+        for bad in ({"name": "No contact"}, {"phone": "9000099999"}, {"name": "X", "email": "nope"},
+                    {"name": "X", "phone": "123"}, {"name": "X" * 161, "phone": "9000099999"}):
+            with self.assertRaises(ConflictError, msg=bad):
+                web_form.submit(self.db, key, bad, "10.0.0.4")
+        bot = web_form.submit(self.db, key, {"name": "Bot", "phone": "9000077777", "website": "http://spam"}, "10.0.0.5")
+        self.assertEqual((bot["created"], bot["lead_id"]), (False, None))
+        self.assertEqual(self.leads_out(q="Bot"), [])
+        for i in range(web_form.PER_IP_LIMIT[0]):
+            try:
+                web_form.submit(self.db, key, {"name": f"Flood {i}", "phone": f"91000{i:05d}"}, "10.0.0.6")
+            except ConflictError:
+                pass
+        with self.assertRaises(web_form.RateLimited):
+            web_form.submit(self.db, key, {"name": "One more", "phone": "9100099999"}, "10.0.0.6")
+        with self.assertRaises(NotFoundError):
+            web_form.submit(self.db, "not-the-key", {"name": "X", "phone": "9000099999"}, "10.0.0.7")
+        old_key = key
+        key = routes_crm.new_web_form_key(self.context, self.db)["key"]
+        self.assertNotEqual(key, old_key)
+        with self.assertRaises(NotFoundError):
+            web_form.form_for_key(self.db, old_key)
+        routes_crm.put_web_form(crm.WebFormIn(enabled=False), self.context, self.db)
+        with self.assertRaises(NotFoundError):
+            web_form.form_for_key(self.db, key)
+        with self.assertRaises(HTTPException):
+            require_permission("crm.settings.write")(self.make_context(["crm.lead.read"]))
+
     # --- Quotation numbers ------------------------------------------------------
 
     def test_quotation_numbers_count_per_tenant_and_year(self):

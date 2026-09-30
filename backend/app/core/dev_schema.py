@@ -64,7 +64,15 @@ def ensure_dev_schema() -> None:
                 "owner_id": "UUID REFERENCES users(id)",
             },
             "quotations": {"opportunity_id": "UUID REFERENCES opportunities(id)"},
+            "crm_settings": {
+                "lead_rotation": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+                "web_form": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+            },
         }
+        for table in ("leads", "opportunities", "customers"):
+            additions.setdefault(table, {}).update(
+                {"tags": "VARCHAR(40)[] NOT NULL DEFAULT '{}'", "custom": "JSONB NOT NULL DEFAULT '{}'::jsonb"}
+            )
         before_activity = columns("activities")
         for table, definitions in additions.items():
             existing = columns(table)
@@ -85,6 +93,10 @@ def ensure_dev_schema() -> None:
             conn.execute(text("UPDATE activities SET done = completed_at IS NOT NULL"))
         if "completed_at" not in before_activity:
             conn.execute(text("UPDATE activities SET completed_at = created_at WHERE done"))
+
+        # Tag filters use array containment; GIN keeps them fast.
+        for table in ("leads", "opportunities", "customers"):
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_tags ON {table} USING gin (tags)"))
 
         # Quotation numbers are unique per tenant, not across the database.
         conn.execute(text("ALTER TABLE quotations DROP CONSTRAINT IF EXISTS quotations_number_key"))

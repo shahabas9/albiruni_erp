@@ -36,7 +36,7 @@ def _to_out(
         stage=o.stage, value=float(o.value), probability_pct=o.probability_pct,
         expected_close_date=o.expected_close_date, notes=o.notes, lost_reason=o.lost_reason,
         stage_changed_at=o.stage_changed_at, owner_user_id=o.owner_user_id,
-        owner_name=owners.get(o.owner_user_id), quotations=[to_quotation_out(q) for q in quotes.get(o.id, [])],
+        owner_name=owners.get(o.owner_user_id), tags=list(o.tags or []), custom=dict(o.custom or {}), quotations=[to_quotation_out(q) for q in quotes.get(o.id, [])],
         created_at=o.created_at, **stats.for_opportunity(o.id),
         **crm_service.idle_status(o, touches[o.id], limits),
     )
@@ -64,6 +64,7 @@ def list_opportunities(
     owner: str = Query("", description='"me", "unassigned" or a user id'),
     closed_since: date | None = Query(None, description="Open deals plus those won/lost since this date"),
     stale: bool = False,
+    tag: str = "",
     limit: int | None = Query(None, ge=1, le=crm_service.MAX_PAGE),
     offset: int = Query(0, ge=0),
     context: RequestContext = Depends(require_permission("crm.opportunity.read")),
@@ -73,7 +74,7 @@ def list_opportunities(
 
     try:
         opps, total = opportunity_service.list_opportunities(
-            db, context, q=q, stage=stage, owner=owner, closed_since=closed_since, stale_only=stale,
+            db, context, q=q, stage=stage, owner=owner, closed_since=closed_since, stale_only=stale, tag=tag,
             limit=limit, offset=offset,
         )
     except ConflictError as exc:
