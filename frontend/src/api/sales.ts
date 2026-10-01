@@ -780,3 +780,30 @@ export interface PublicDocument {
 export function fetchPublicDocument(token: string): Promise<PublicDocument> {
   return request<PublicDocument>(`/api/public/documents/${encodeURIComponent(token)}`);
 }
+
+// --- Dashboard ------------------------------------------------------------
+
+export interface SalesDashboard {
+  as_of: string;
+  /** Needs sales.invoice.read. */
+  money?: {
+    invoiced_this_month: number;
+    invoiced_last_month: number;
+    /** Payments received less refunds paid, this month. */
+    collected_this_month: number;
+    outstanding: number;
+    overdue: number;
+    advances: number;
+    overdue_customers: { customer_id: string; name: string; overdue: number }[];
+    /** Invoiced less credit notes per month, oldest first. */
+    monthly: { month: string; label: string; value: number }[];
+    top_customers: { customer_id: string; name: string; value: number }[];
+    fy_label: string;
+  };
+  orders?: { to_invoice: number; drafts: number };
+  quotations?: { awaiting_reply: number; awaiting_value: number };
+}
+
+export function fetchSalesDashboard(): Promise<SalesDashboard> {
+  return request<SalesDashboard>("/api/sales/dashboard");
+}

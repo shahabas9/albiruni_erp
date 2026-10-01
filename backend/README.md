@@ -706,3 +706,13 @@ invoice for printing.
   Exports need `crm.export` plus the list's read permission and are audited
   (`crm.export_records.v1`). The invoice export carries the GST split,
   paid/credited/TDS/refunded and balance per invoice.
+
+### Sales dashboard
+
+- Overview shows, for people who can read invoices: invoiced this month
+  (less credit notes) against last month, collected this month (payments
+  less refunds), what customers owe and how much is overdue, six months of
+  sales and the top customers this financial year; plus orders waiting to be
+  invoiced, overdue customers and unapplied advances under "Needs your
+  attention". `GET /api/sales/dashboard`; each block appears only with the
+  permission to read what's behind it.

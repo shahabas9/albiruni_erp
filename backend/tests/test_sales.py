@@ -19,7 +19,7 @@ from app.api import routes_price_lists, routes_ask, routes_share, routes_custome
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
-from app.domain import price_lists, refund_service, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -1320,6 +1320,33 @@ class SalesListToolsTests(SalesTestCase):
         view = routes_views.create_view(routes_views.ViewIn(page="invoices", name="Overdue", filters={"status": "overdue"}),
                                         self.context, self.db)
         self.assertEqual([v.name for v in routes_views.list_views("invoices", self.context, self.db)], [view.name])
+
+
+class DashboardTests(SalesTestCase):
+    def test_dashboard_sums_this_month_and_hides_what_you_cant_read(self):
+        big = self.customer("Big Buyer")
+        small = self.customer("Small Buyer")
+        self.invoice_for(big, 4)  # 1,982
+        late = self.invoice_for(small, 1)  # 496, made overdue below
+        row = self.db.get(Invoice, late.id)
+        row.due_date = date.today() - timedelta(days=10)
+        self.db.commit()
+        self.pay(big, 1000)
+        self.order(big, [{"item_id": self.item(name="Draft only").id, "qty": 1}])
+
+        dash = routes_sales.dashboard(self.context, self.db)
+        money = dash["money"]
+        self.assertEqual((money["invoiced_this_month"], money["collected_this_month"]), (2478, 1000))
+        self.assertEqual((money["outstanding"], money["overdue"]), (1478, 496))
+        self.assertEqual([c["name"] for c in money["top_customers"]], ["Big Buyer", "Small Buyer"])
+        self.assertEqual(money["overdue_customers"][0]["name"], "Small Buyer")
+        self.assertEqual(len(money["monthly"]), 6)
+        self.assertEqual(dash["orders"], {"to_invoice": 0, "drafts": 1})
+
+        seller = self.make_context(["sales.order.read"], self.context.tenant_id, self.context.company_id)
+        limited = sales_dashboard.dashboard(self.db, seller)
+        self.assertNotIn("money", limited)
+        self.assertIn("orders", limited)
 
 
 if __name__ == "__main__":

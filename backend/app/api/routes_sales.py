@@ -9,7 +9,7 @@ from app.ai.orchestrator import new_correlation_id
 from app.api.routes_items import _to_out as item_out
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_any_permission, require_permission
-from app.domain import quotation_service, sales_settings, tax
+from app.domain import quotation_service, sales_dashboard, sales_settings, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import SalesOrder
 from app.models.sales import Item, Quotation
@@ -228,3 +228,16 @@ def update_company_profile(
         return sales_settings.update_profile(db, context, body)
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/dashboard")
+def dashboard(
+    context: RequestContext = Depends(require_any_permission("sales.invoice.read", "sales.order.read",
+                                                             "sales.quotation.read")),
+    db: Session = Depends(get_db),
+):
+    """Overview figures: invoiced and collected this month, what's owed and overdue, the last six
+    months, top customers this financial year, orders to invoice and quotes awaiting a reply. Each
+    block is present only with permission to read what's behind it."""
+
+    return sales_dashboard.dashboard(db, context)
