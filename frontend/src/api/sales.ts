@@ -617,3 +617,36 @@ export interface QuickSaleInput {
 export function quickSale(body: QuickSaleInput): Promise<{ order_id: string; invoice_id: string; receipt_id: string | null }> {
   return request(`/api/sales/quick-sale`, { method: "POST", body: JSON.stringify(body) });
 }
+
+// --- Sending documents ---------------------------------------------------------------
+
+export type ShareKind = "invoice" | "quotation" | "credit_note" | "receipt" | "statement";
+
+export interface ShareResult {
+  url: string;
+  message: string;
+  subject: string;
+  /** The message, URL-encoded for a wa.me link. */
+  whatsapp_text: string;
+  emailed_to: string | null;
+  expires: string;
+}
+
+export function shareDocument(body: { kind: ShareKind; id: string; email?: string; date_from?: string; date_to?: string }): Promise<ShareResult> {
+  return request<ShareResult>("/api/sales/share", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function fetchShareRecipients(customerId: string): Promise<{ name: string; email: string; phone: string }[]> {
+  return request(`/api/sales/share/recipients?customer_id=${customerId}`);
+}
+
+export interface PublicDocument {
+  kind: ShareKind;
+  document: unknown;
+  company: Pick<CompanyProfile, "name" | "legal_name" | "gstin" | "state_code" | "address" | "phone" | "email" | "bank_details" | "invoice_terms">;
+  expires: number;
+}
+
+export function fetchPublicDocument(token: string): Promise<PublicDocument> {
+  return request<PublicDocument>(`/api/public/documents/${encodeURIComponent(token)}`);
+}

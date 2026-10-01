@@ -30,6 +30,7 @@ import { StatementPage } from "./pages/StatementPage";
 import { SalesReports } from "./pages/SalesReports";
 import { QuickSale } from "./pages/QuickSale";
 import { QuotationEditor } from "./pages/QuotationEditor";
+import { PublicDocumentPage } from "./pages/PublicDocumentPage";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -52,6 +53,15 @@ export default function App() {
   }, [pathname, status, refresh]);
   const { isOpen } = useAskErp();
   const [navOpen, setNavOpen] = useState(false);
+
+  // Share links: customers open these without an account.
+  if (pathname.startsWith("/d/")) {
+    return (
+      <Routes>
+        <Route path="/d/:token" element={<PublicDocumentPage />} />
+      </Routes>
+    );
+  }
 
   if (status === "checking") {
     return (

@@ -8,6 +8,7 @@ import { dayDate, docStatusClass, inr } from "../lib/format";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 import { PaymentModal } from "../sales/PaymentModal";
 import { ReasonModal } from "../sales/ReasonModal";
+import { SendModal } from "../sales/SendModal";
 
 export function Payments() {
   const { can, version } = useAppData();
@@ -118,6 +119,7 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
+  const [sending, setSending] = useState(false);
   const canWrite = can("sales.payment.write") && r.status === "Received";
 
   async function applyAdvance() {
@@ -173,6 +175,11 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
         <a className="ghost-btn" href={`/print/receipt/${r.id}`} target="_blank" rel="noreferrer">
           Print receipt
         </a>
+        {r.status === "Received" && (
+          <button className="ghost-btn" onClick={() => setSending(true)}>
+            Send receipt
+          </button>
+        )}
         {canWrite && r.unallocated > 0 && (
           <button className="primary-btn" disabled={busy} onClick={applyAdvance}>
             Apply advance to unpaid invoices
@@ -184,6 +191,7 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
           </button>
         )}
       </div>
+      {sending && <SendModal kind="receipt" id={r.id} customerId={r.customer_id} title={`receipt ${r.number}`} onClose={() => setSending(false)} />}
       {voiding && (
         <ReasonModal
           title={`Void ${r.number}?`}

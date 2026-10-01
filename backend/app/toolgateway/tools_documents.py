@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import RequestContext
 from app.domain import (
     credit_note_service, delivery_service, invoice_service, order_service, payment_service, sales_reports,
+    share_service,
 )
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
@@ -241,3 +242,24 @@ register_tool(ToolDefinition(
     name="sales.quick_sale.v1", purpose="Counter sale: order, delivery, invoice and payment in one step.",
     permission="sales.invoice.write", risk_level="L3 Execute", handler=quick_sale,
 ))
+
+
+def share_document(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = share_service.share(
+            db, context, kind=args["kind"], doc_id=UUID(args["id"]), customer_id=UUID(args["customer_id"]),
+            title=args["title"], summary=args["summary"], email=args.get("email", ""),
+            date_from=date.fromisoformat(args["date_from"]) if args.get("date_from") else None,
+            date_to=date.fromisoformat(args["date_to"]) if args.get("date_to") else None,
+        )
+    except (ConflictError, NotFoundError, PermissionError) as exc:
+        raise ToolValidationError(str(exc)) from exc
+    sent = f"emailed to {result['emailed_to']}" if result["emailed_to"] else "share link made"
+    return {**result, "result_summary": f"{args['title']}: {sent}"}
+
+
+for kind, (permission, _) in share_service.KINDS.items():
+    register_tool(ToolDefinition(
+        name=f"sales.share_{kind}.v1", purpose=f"Send a customer a link to a {kind.replace('_', ' ')}, by email or WhatsApp.",
+        permission=permission, risk_level="L2 Prepare", handler=share_document,
+    ))

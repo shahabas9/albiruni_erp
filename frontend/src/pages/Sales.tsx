@@ -9,6 +9,7 @@ import { Drawer, ErrorNote } from "../crm/ui";
 import { dateTime, dayDate, inr, quoteStatusClass } from "../lib/format";
 import { DocTotals } from "../sales/DocTotals";
 import { ReasonModal } from "../sales/ReasonModal";
+import { SendModal } from "../sales/SendModal";
 
 type QuoteStatus = Quotation["status"];
 
@@ -147,6 +148,7 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
+  const [sending, setSending] = useState(false);
   const canAct = can("sales.quotation.create");
 
   async function run(action: QuotationAction) {
@@ -241,6 +243,11 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
           <a className="ghost-btn" href={`/print/quotation/${q.id}`} target="_blank" rel="noreferrer">
             Print / PDF
           </a>
+          {q.customer_id && ["Draft", "Sent", "Accepted"].includes(q.status) && (
+            <button className="ghost-btn" onClick={() => setSending(true)}>
+              Send
+            </button>
+          )}
           {["Draft", "Pending approval"].includes(q.status) && !q.order_id && (
             <button className="ghost-btn" onClick={() => navigate(`/sales/quotations/${q.id}/edit`)}>
               Edit
@@ -266,6 +273,9 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
             </button>
           )}
         </div>
+      )}
+      {sending && q.customer_id && (
+        <SendModal kind="quotation" id={q.id} customerId={q.customer_id} title={`quotation ${q.number}`} onClose={() => setSending(false)} />
       )}
       {rejecting && (
         <ReasonModal

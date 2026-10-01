@@ -620,3 +620,20 @@ invoice for printing.
 - Past `valid_until`, a draft or sent quotation shows `is_expired`; it can't be
   sent, accepted or turned into an order until its validity is extended.
 - Quotations print at `/print/quotation/{id}`.
+
+### Sending documents to customers
+
+- `POST /api/sales/share` makes a signed link to an issued invoice, a
+  quotation, a credit note, a receipt or a statement (with its period) and a
+  ready-to-send message; with `email` it also emails it through the SMTP
+  settings. Each kind is its own audited tool (`sales.share_invoice.v1` …)
+  needing that document's read permission, and the document's history
+  notes it.
+- The link (`/d/<token>`, valid 30 days) opens a print-ready page with no
+  login, showing that one document only; `GET /api/public/documents/{token}`
+  serves it. Tokens are signed with `JWT_SECRET`: they can't be altered to
+  reach another document, and changing the secret revokes them all.
+- WhatsApp opens `wa.me/<number>?text=<message>` from the user's own
+  WhatsApp — no WhatsApp Business API provider is wired in.
+  `GET /api/sales/share/recipients?customer_id=` lists the customer's
+  contacts with an email or phone to pick from.

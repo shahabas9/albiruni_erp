@@ -16,6 +16,7 @@ import { useAppData } from "../data/AppDataProvider";
 import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format";
 import { CreditNoteModal } from "../sales/CreditNoteModal";
 import { PaymentModal } from "../sales/PaymentModal";
+import { SendModal } from "../sales/SendModal";
 import { DocTotals } from "../sales/DocTotals";
 
 export function InvoicePage() {
@@ -30,6 +31,7 @@ export function InvoicePage() {
   const [notes, setNotes] = useState<CreditNote[]>([]);
   const [crediting, setCrediting] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [sending, setSending] = useState<{ kind: "invoice" | "credit_note"; id: string; title: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -95,6 +97,11 @@ export function InvoicePage() {
             <a className="ghost-btn" href={`/print/invoice/${invoice.id}`} target="_blank" rel="noreferrer">
               Print / PDF
             </a>
+          )}
+          {!draft && (
+            <button className="ghost-btn" onClick={() => setSending({ kind: "invoice", id: invoice.id, title: `invoice ${invoice.number}` })}>
+              Send
+            </button>
           )}
           {!draft && can("sales.payment.write") && invoice.balance > 0 && (
             <button className="primary-btn" onClick={() => setPaying(true)}>
@@ -256,9 +263,14 @@ export function InvoicePage() {
                         {n.restocked && " · back in stock"}
                       </small>
                     </div>
-                    <a className="ghost-btn sm" href={`/print/credit-note/${n.id}`} target="_blank" rel="noreferrer">
-                      Print
-                    </a>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="ghost-btn sm" onClick={() => setSending({ kind: "credit_note", id: n.id, title: `credit note ${n.number}` })}>
+                        Send
+                      </button>
+                      <a className="ghost-btn sm" href={`/print/credit-note/${n.id}`} target="_blank" rel="noreferrer">
+                        Print
+                      </a>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -272,6 +284,9 @@ export function InvoicePage() {
           </div>
         </div>
       </div>
+      {sending && (
+        <SendModal kind={sending.kind} id={sending.id} customerId={invoice.customer_id} title={sending.title} onClose={() => setSending(null)} />
+      )}
       {paying && (
         <PaymentModal
           customer={{ id: invoice.customer_id, name: invoice.customer_name }}

@@ -92,7 +92,7 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
   );
 }
 
-function InvoiceSheet({ inv }: { inv: Invoice }) {
+export function InvoiceSheet({ inv }: { inv: Invoice }) {
   const interstate = inv.igst > 0 || (inv.cgst === 0 && inv.sgst === 0 && inv.place_of_supply !== inv.seller_state);
   return (
     <article className="print-doc">
@@ -289,7 +289,7 @@ function InvoiceSheet({ inv }: { inv: Invoice }) {
   );
 }
 
-function ChallanSheet({ note, order, company }: { note: DeliveryNote; order: SalesOrder; company: CompanyProfile }) {
+export function ChallanSheet({ note, order, company }: { note: DeliveryNote; order: SalesOrder; company: CompanyProfile }) {
   return (
     <article className="print-doc">
       <header className="pd-head">
@@ -382,7 +382,7 @@ function ChallanSheet({ note, order, company }: { note: DeliveryNote; order: Sal
   );
 }
 
-function CreditSheet({ note }: { note: CreditNote }) {
+export function CreditSheet({ note }: { note: CreditNote }) {
   const interstate = note.igst > 0;
   return (
     <article className="print-doc">
@@ -516,7 +516,7 @@ function CreditSheet({ note }: { note: CreditNote }) {
   );
 }
 
-function ReceiptSheet({ receipt: r, company }: { receipt: Receipt; company: CompanyProfile }) {
+export function ReceiptSheet({ receipt: r, company }: { receipt: Receipt; company: CompanyProfile }) {
   return (
     <article className="print-doc">
       <header className="pd-head">
@@ -587,7 +587,7 @@ function ReceiptSheet({ receipt: r, company }: { receipt: Receipt; company: Comp
   );
 }
 
-function StatementSheet({ data, company }: { data: Statement; company: CompanyProfile }) {
+export function StatementSheet({ data, company }: { data: Statement; company: CompanyProfile }) {
   return (
     <article className="print-doc">
       <header className="pd-head">
@@ -642,7 +642,7 @@ function StatementSheet({ data, company }: { data: Statement; company: CompanyPr
   );
 }
 
-function QuotationSheet({ q, company }: { q: Quotation; company: CompanyProfile }) {
+export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyProfile }) {
   const interstate = q.igst > 0;
   return (
     <article className="print-doc">

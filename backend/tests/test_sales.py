@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_ask, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
@@ -999,6 +999,47 @@ class QuotationFormTests(SalesTestCase):
         self.assertFalse(extended.is_expired)
         self.assertEqual(routes_sales.quotation_action(quote.id, "accept", QuotationActionIn(), self.context,
                                                        self.db).status, "Accepted")
+
+
+
+class ShareTests(SalesTestCase):
+    def test_share_links_open_one_document_and_nothing_else(self):
+        from app.core.config import settings
+
+        customer = self.customer()
+        invoice = self.invoice_for(customer, 2)
+        out = routes_share.share_document(routes_share.ShareIn(kind="invoice", id=invoice.id), self.context, self.db)
+        self.assertIn(f"invoice {invoice.number}", out["message"])
+        self.assertIsNone(out["emailed_to"])
+        token = out["url"].rsplit("/d/", 1)[1]
+        public = routes_share.public_document(token, self.db)
+        self.assertEqual((public["kind"], public["document"].number, public["company"]["gstin"]),
+                         ("invoice", invoice.number, KERALA_GSTIN))
+        with self.assertRaises(HTTPException):  # tampered
+            routes_share.public_document(token[:-2] + ("AA" if token[-2:] != "AA" else "BB"), self.db)
+
+        # Statements carry their period; email needs SMTP.
+        st = routes_share.share_document(routes_share.ShareIn(kind="statement", id=customer.id), self.context, self.db)
+        statement = routes_share.public_document(st["url"].rsplit("/d/", 1)[1], self.db)["document"]
+        self.assertEqual(statement["closing_balance"], 991.0)
+        self.addCleanup(setattr, settings, "smtp_host", settings.smtp_host)
+        settings.smtp_host = ""
+        with self.assertRaises(HTTPException) as no_smtp:
+            routes_share.share_document(routes_share.ShareIn(kind="invoice", id=invoice.id, email="a@b.example"),
+                                        self.context, self.db)
+        self.assertIn("SMTP", no_smtp.exception.detail)
+
+    def test_sharing_needs_the_documents_read_permission(self):
+        draft = self.draft(self.confirmed_order([{"item_id": self.item().id, "qty": 1}]))
+        with self.assertRaises(HTTPException) as unissued:
+            routes_share.share_document(routes_share.ShareIn(kind="invoice", id=draft.id), self.context, self.db)
+        self.assertIn("Issue the invoice", unissued.exception.detail)
+        quote = self.quote()
+        clerk = self.make_context(["sales.invoice.read"], self.context.tenant_id, self.context.company_id)
+        self.db.commit()
+        with self.assertRaises(HTTPException) as denied:
+            routes_share.share_document(routes_share.ShareIn(kind="quotation", id=quote.id), clerk, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
 
 
 if __name__ == "__main__":
