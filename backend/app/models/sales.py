@@ -31,6 +31,10 @@ class Customer(Base):
     # Where invoices, statements and payment reminders go.
     email: Mapped[str] = mapped_column(String(160), default="", server_default="")
     phone: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    # Agreed prices for this customer; None uses the company's default list, then item prices.
+    price_list_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("price_lists.id"), nullable=True
+    )
     # Days to pay; None falls back to the company's default terms.
     payment_terms_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -106,10 +110,43 @@ class QuotationLine(Base):
     line_total: Mapped[float] = mapped_column(Numeric(14, 2))
     hsn_code: Mapped[str] = mapped_column(String(8), default="")
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     taxable_value: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     tax_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
 
     quotation: Mapped["Quotation"] = relationship(back_populates="lines")
+    item: Mapped["Item"] = relationship()
+
+
+class PriceList(Base):
+    """Agreed prices: per item, with quantity breaks (₹420 from 1 box, ₹400 from 100)."""
+
+    __tablename__ = "price_lists"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    name: Mapped[str] = mapped_column(String(80))
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    rows: Mapped[list["PriceListItem"]] = relationship(
+        back_populates="price_list", cascade="all, delete-orphan", order_by="PriceListItem.min_qty"
+    )
+
+
+class PriceListItem(Base):
+    __tablename__ = "price_list_items"
+    __table_args__ = (UniqueConstraint("price_list_id", "item_id", "min_qty", name="uq_price_list_item_qty"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    price_list_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("price_lists.id", ondelete="CASCADE"))
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("items.id"), index=True)
+    # This price applies from this quantity up (until a higher break).
+    min_qty: Mapped[float] = mapped_column(Numeric(14, 2), default=1)
+    unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
+
+    price_list: Mapped["PriceList"] = relationship(back_populates="rows")
     item: Mapped["Item"] = relationship()
 
 

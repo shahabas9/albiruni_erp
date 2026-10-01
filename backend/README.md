@@ -666,3 +666,19 @@ invoice for printing.
   statement) send reminder wording by email or WhatsApp
   (`POST /api/sales/share` with `reminder: true`). The customer's billing
   contact is offered first.
+
+### Price lists, quantity breaks and line discounts
+
+- Sales → Price lists (`/api/sales/price-lists`, edit needs
+  `sales.settings.write`): named lists of agreed prices per item, with
+  quantity breaks — the same item again with a higher `min_qty`
+  (₹400 from 1 box, ₹380 from 100). One list can be the default.
+- A customer pays their own list (`customers.price_list_id`), else the
+  default list, else the item's price; a list switched off is skipped. Rates
+  left blank on quotations, orders and quick sales use that price, and it is
+  the order line's `list_price`: going below it needs a manager.
+  `GET /api/sales/prices?customer_id=` returns the breaks for line editors.
+- Each line can carry its own `discount_pct`, taken off before the
+  document's discount (10% then 5% is 14.5%). Combined over 2% needs
+  approval, like the document discount. It carries from quotation to order
+  to invoice and shows on prints. Migration `0005`.

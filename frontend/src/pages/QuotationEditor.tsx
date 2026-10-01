@@ -5,7 +5,7 @@ import { createQuotation, fetchQuotation, updateQuotation } from "../api/sales";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { ErrorNote } from "../crm/ui";
 import { inr, todayIso } from "../lib/format";
-import { blankLine, estimate, LineItemsEditor, type EditLine } from "../sales/LineItemsEditor";
+import { blankLine, editLine, estimate, LineItemsEditor, linePayload, useAgreedPrices, type EditLine } from "../sales/LineItemsEditor";
 
 /** New quotation (/sales/quotations/new) or a draft being edited (/sales/quotations/:id/edit). */
 export function QuotationEditor() {
@@ -20,6 +20,7 @@ export function QuotationEditor() {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const prices = useAgreedPrices(existing?.customer_id ?? customerId);
 
   useEffect(() => {
     let live = true;
@@ -29,7 +30,7 @@ export function QuotationEditor() {
         setItems(its);
         if (q) {
           setExisting(q);
-          setLines(q.lines.map((l) => ({ item_id: l.item_id ?? "", qty: String(l.qty), unit_price: String(l.unit_price) })));
+          setLines(q.lines.map(editLine));
           setDiscount(String(q.discount_pct));
           setValidUntil(q.valid_until ?? "");
           setNotes(q.notes);
@@ -54,14 +55,14 @@ export function QuotationEditor() {
     );
   }
 
-  const est = estimate(lines, items, Number(discount));
+  const est = estimate(lines, items, Number(discount), prices);
   const valid = (existing || customerId) && lines.length > 0 && lines.every((l) => l.item_id && Number(l.qty) > 0);
 
   async function save() {
     setSaving(true);
     setError(null);
     const body = {
-      lines: lines.map((l) => ({ item_id: l.item_id, qty: Number(l.qty), ...(l.unit_price === "" ? {} : { unit_price: Number(l.unit_price) }) })),
+      lines: lines.map(linePayload),
       discount_pct: Number(discount) || 0,
       notes,
       ...(validUntil ? { valid_until: validUntil } : {}),
@@ -104,7 +105,7 @@ export function QuotationEditor() {
             <input type="number" min={0} max={100} step="0.5" value={discount} onChange={(e) => setDiscount(e.target.value)} />
           </label>
         </div>
-        <LineItemsEditor lines={lines} items={items} onChange={setLines} />
+        <LineItemsEditor lines={lines} items={items} onChange={setLines} prices={prices} />
         <label className="field full">
           <span>Notes (printed on the quotation)</span>
           <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Delivery within 7 days of order" />

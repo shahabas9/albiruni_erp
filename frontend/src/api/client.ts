@@ -156,6 +156,7 @@ export interface QuotationLine {
   line_total: number;
   hsn_code?: string;
   gst_rate?: number;
+  discount_pct?: number;
   taxable_value?: number;
   tax_amount?: number;
 }
@@ -316,6 +317,8 @@ export interface Customer {
   /** Billing contact: invoices, statements and payment reminders go here. */
   email: string;
   phone: string;
+  /** null: the company's default price list, else item prices. */
+  price_list_id: string | null;
 }
 
 export interface CustomerInput {
@@ -333,6 +336,7 @@ export interface CustomerInput {
   payment_terms_days?: number | null;
   email?: string;
   phone?: string;
+  price_list_id?: string | null;
 }
 
 export interface CustomerQuery {

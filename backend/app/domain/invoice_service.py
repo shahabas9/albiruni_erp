@@ -101,7 +101,8 @@ def _price(invoice: Invoice, company: Company) -> None:
         invoice.place_of_supply != company.state_code
     )
     worked = tax.compute(
-        [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), Decimal(str(l.gst_rate))) for l in invoice.lines],
+        [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), Decimal(str(l.gst_rate)),
+                    Decimal(str(l.discount_pct or 0))) for l in invoice.lines],
         invoice.discount_pct, interstate,
     )
     for line, parts in zip(invoice.lines, worked.lines):
@@ -155,7 +156,7 @@ def create_draft(db: Session, context: RequestContext, order_id: UUID, lines: li
         invoice.lines.append(InvoiceLine(
             position=position, order_line_id=line.id, item_id=line.item_id, description=line.description,
             hsn_code=line.hsn_code, uom=line.uom, qty=qty, unit_price=line.unit_price, gst_rate=line.gst_rate,
-            credited_qty=0,
+            discount_pct=line.discount_pct, credited_qty=0,
         ))
     _price(invoice, company)
     db.add(invoice)

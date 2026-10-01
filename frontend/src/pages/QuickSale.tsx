@@ -6,7 +6,7 @@ import { CustomerPicker } from "../components/CustomerPicker";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { inr } from "../lib/format";
-import { blankLine, estimate, LineItemsEditor, type EditLine } from "../sales/LineItemsEditor";
+import { blankLine, estimate, LineItemsEditor, linePayload, useAgreedPrices, type EditLine } from "../sales/LineItemsEditor";
 
 /** A counter sale: pick items, take the money, print the invoice. */
 export function QuickSale() {
@@ -22,6 +22,7 @@ export function QuickSale() {
   const [reference, setReference] = useState("");
   const [received, setReceived] = useState("");
   const [busy, setBusy] = useState(false);
+  const prices = useAgreedPrices(walkIn ? null : customerId);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,7 +33,7 @@ export function QuickSale() {
 
   if (!items) return <section>{error ? <ErrorNote message={error} /> : <p className="card-note">Loading…</p>}</section>;
 
-  const est = estimate(lines, items, Number(discount));
+  const est = estimate(lines, items, Number(discount), prices);
   const tendered = received === "" ? est.total : Number(received) || 0;
   const change = paidNow && mode === "Cash" ? tendered - est.total : 0;
   const needsRef = paidNow && (mode === "UPI" || mode === "Bank transfer" || mode === "Cheque");
@@ -45,7 +46,7 @@ export function QuickSale() {
     try {
       const out = await quickSale({
         ...(walkIn ? {} : { customer_id: customerId }),
-        lines: lines.map((l) => ({ item_id: l.item_id, qty: Number(l.qty), ...(l.unit_price === "" ? {} : { unit_price: Number(l.unit_price) }) })),
+        lines: lines.map(linePayload),
         discount_pct: Number(discount) || 0,
         notes: "",
         // The bill can only be settled up to its own total; cash change is handed back, not recorded.
@@ -79,7 +80,7 @@ export function QuickSale() {
           </div>
         </div>
         {!walkIn && <CustomerPicker value={customerId} onChange={setCustomerId} />}
-        <LineItemsEditor lines={lines} items={items} onChange={setLines} />
+        <LineItemsEditor lines={lines} items={items} onChange={setLines} prices={prices} />
         <div className="field-grid">
           <label className="field">
             <span>Discount %</span>

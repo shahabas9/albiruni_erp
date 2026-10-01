@@ -9,8 +9,9 @@ class QuotationLineIn(BaseModel):
     item_name: str | None = None
     item_id: UUID | None = None
     qty: float = Field(gt=0)
-    # Leave out for the list price; below it needs approval.
+    # Leave out for the customer's agreed price; below it needs approval.
     unit_price: float | None = Field(default=None, ge=0)
+    discount_pct: float = Field(default=0, ge=0, le=100)
 
     @model_validator(mode="after")
     def _one_item(self):
@@ -58,6 +59,7 @@ class QuotationLineOut(BaseModel):
     line_total: float
     hsn_code: str = ""
     gst_rate: float = 0
+    discount_pct: float = 0
     taxable_value: float = 0
     tax_amount: float = 0
 

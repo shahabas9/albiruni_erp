@@ -7,7 +7,7 @@ from app.models.documents import (
     SalesOrder, SalesOrderLine, StockMovement,
 )
 from app.models.identity import Role, User
-from app.models.sales import Customer, DocumentCounter, Item, Quotation, QuotationLine
+from app.models.sales import Customer, DocumentCounter, Item, PriceList, PriceListItem, Quotation, QuotationLine
 from app.models.tenant import Company, Tenant
 
 __all__ = [
@@ -19,6 +19,8 @@ __all__ = [
     "DocumentCounter",
     "Quotation",
     "QuotationLine",
+    "PriceList",
+    "PriceListItem",
     "SalesOrder",
     "SalesOrderLine",
     "DeliveryNote",

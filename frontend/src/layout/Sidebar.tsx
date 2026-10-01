@@ -93,6 +93,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         { to: "/sales/reports", label: "Reports", permission: "sales.reports.read" },
         { to: "/customers", label: "Customers", permission: "sales.customer.read" },
         { to: "/sales?status=pending", label: "Approvals", permission: "sales.quotation.read", count: pending },
+        { to: "/sales/price-lists", label: "Price lists", permission: "sales.settings.write" },
         { to: "/sales/settings", label: "Company & GST", permission: "sales.settings.write" },
       ],
     },

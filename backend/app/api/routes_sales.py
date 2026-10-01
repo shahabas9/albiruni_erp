@@ -71,6 +71,7 @@ def to_quotation_out(q: Quotation, order: tuple[UUID, str] | None = None) -> Quo
                 line_total=float(line.line_total),
                 hsn_code=line.hsn_code or "",
                 gst_rate=float(line.gst_rate),
+                discount_pct=float(line.discount_pct or 0),
                 taxable_value=float(line.taxable_value),
                 tax_amount=float(line.tax_amount),
             )

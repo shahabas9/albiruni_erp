@@ -23,6 +23,7 @@ def _to_out(c) -> CustomerOut:
         tags=list(c.tags or []), custom=dict(c.custom or {}), billing_address=c.billing_address or "",
         shipping_address=c.shipping_address or "", state_code=c.state_code or "",
         payment_terms_days=c.payment_terms_days, email=c.email or "", phone=c.phone or "",
+        price_list_id=c.price_list_id,
     )
 
 

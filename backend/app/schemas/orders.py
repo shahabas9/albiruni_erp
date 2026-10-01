@@ -7,8 +7,10 @@ from pydantic import BaseModel, Field
 class DocLineIn(BaseModel):
     item_id: UUID
     qty: float = Field(gt=0, le=10_000_000)
-    # Leave out to use the item's list price. Below list price needs approval.
+    # Leave out for the customer's agreed price (price list, else item price). Below it needs approval.
     unit_price: float | None = Field(default=None, ge=0)
+    # This line's own discount; with the document's, over the limit needs approval.
+    discount_pct: float = Field(default=0, ge=0, le=100)
 
 
 class OrderIn(BaseModel):
@@ -46,6 +48,7 @@ class DocLineOut(BaseModel):
     unit_price: float
     list_price: float
     gst_rate: float
+    discount_pct: float = 0
     amount: float
     taxable_value: float
     cgst: float

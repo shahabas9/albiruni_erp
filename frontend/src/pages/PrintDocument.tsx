@@ -179,7 +179,10 @@ export function InvoiceSheet({ inv }: { inv: Invoice }) {
               <td className="num">
                 {l.qty} {l.uom}
               </td>
-              <td className="num">{money(l.unit_price)}</td>
+              <td className="num">
+                {money(l.unit_price)}
+                {l.discount_pct ? <div className="print-sub">less {l.discount_pct}%</div> : null}
+              </td>
               <td className="num">{money(l.taxable_value)}</td>
               {interstate ? (
                 <td className="num">
@@ -715,8 +718,11 @@ export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyP
               <td className="num">
                 {l.qty} {l.uom}
               </td>
-              <td className="num">{money(l.unit_price)}</td>
-              <td className="num">{money(l.line_total)}</td>
+              <td className="num">
+                {money(l.unit_price)}
+                {l.discount_pct ? <div className="print-sub">less {l.discount_pct}%</div> : null}
+              </td>
+              <td className="num">{money(l.line_total * (1 - (l.discount_pct ?? 0) / 100))}</td>
               <td className="num">{l.gst_rate ?? 0}%</td>
             </tr>
           ))}

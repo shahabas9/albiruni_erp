@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import RequestContext
 from app.domain import crm_service, duplicates, fields, history
 from app.domain.errors import ConflictError, NotFoundError
-from app.models.sales import Customer
+from app.models.sales import Customer, PriceList
 from app.schemas.customers import CustomerIn, CustomerUpdate
 
 
@@ -49,7 +49,16 @@ def state_for(gstin: str, state_code: str) -> str:
     return state_code
 
 
+def _check_price_list(db: Session, context: RequestContext, price_list_id: UUID | None) -> None:
+    if price_list_id is None:
+        return
+    row = db.get(PriceList, price_list_id)
+    if row is None or row.tenant_id != context.tenant_id or row.company_id != context.company_id:
+        raise NotFoundError("No such price list.")
+
+
 def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> Customer:
+    _check_price_list(db, context, body.price_list_id)
     if body.email.strip() and "@" not in body.email:
         raise ConflictError("That email address doesn't look right.")
     if not body.allow_duplicate:
@@ -73,6 +82,7 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
         payment_terms_days=body.payment_terms_days,
         email=body.email.strip().lower(),
         phone=body.phone.strip(),
+        price_list_id=body.price_list_id,
     )
     db.add(customer)
     db.flush()
@@ -88,6 +98,8 @@ def update_customer(db: Session, context: RequestContext, customer_id: UUID, bod
     for key in ("tags", "custom", "billing_address", "shipping_address", "state_code", "email", "phone"):
         if key in data and data[key] is None:
             data.pop(key)
+    if "price_list_id" in data:
+        _check_price_list(db, context, data["price_list_id"])
     if data.get("email") is not None:
         data["email"] = data["email"].strip().lower()
     if data.get("email") and "@" not in data["email"]:

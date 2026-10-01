@@ -47,5 +47,9 @@ class Company(Base):
     reminders_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     reminder_before_days: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
     reminder_after_days: Mapped[str] = mapped_column(String(40), default="1,7,15,30", server_default="1,7,15,30")
+    # Price list for customers without one of their own; None: item prices.
+    default_price_list_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("price_lists.id", use_alter=True), nullable=True
+    )
     # Whether a delivery may take stock below zero.
     allow_negative_stock: Mapped[bool] = mapped_column(Boolean, default=False)

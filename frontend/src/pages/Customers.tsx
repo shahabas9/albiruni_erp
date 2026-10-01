@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ApiError,
@@ -9,6 +9,7 @@ import {
   fetchCustomers,
   mergeCustomers,
   updateCustomer, type Customer, type CustomValues, type DuplicateMatch } from "../api/client";
+import { fetchPriceLists, type PriceList } from "../api/sales";
 import { CsvImport } from "../components/CsvImport";
 import { StateSelect } from "../components/StateSelect";
 import { SavedViews } from "../components/SavedViews";
@@ -281,6 +282,12 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
   const [terms, setTerms] = useState(customer?.payment_terms_days == null ? "" : String(customer.payment_terms_days));
   const [billEmail, setBillEmail] = useState(customer?.email ?? "");
   const [billPhone, setBillPhone] = useState(customer?.phone ?? "");
+  const [priceListId, setPriceListId] = useState(customer?.price_list_id ?? "");
+  const [priceLists, setPriceLists] = useState<PriceList[] | null>(null);
+  useEffect(() => {
+    // Hidden for users who can't see price lists.
+    fetchPriceLists().then(setPriceLists).catch(() => setPriceLists(null));
+  }, []);
   // A registered customer's state is fixed by their GSTIN.
   const gstinState = /^\d{2}/.test(gstin.trim()) && gstin.trim().length === 15 ? gstin.trim().slice(0, 2) : "";
   const gstFields = {
@@ -290,6 +297,7 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
     payment_terms_days: terms === "" ? null : Number(terms),
     email: billEmail.trim(),
     phone: billPhone.trim(),
+    ...(priceListId !== (customer?.price_list_id ?? "") ? { price_list_id: priceListId || null } : {}),
   };
   const customFields = useCustomFields("customer");
   const [custom, setCustom] = useState<CustomValues>(customer?.custom ?? {});
@@ -367,6 +375,20 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
           <span>Billing phone / WhatsApp</span>
           <input value={billPhone} onChange={(e) => setBillPhone(e.target.value)} />
         </label>
+        {priceLists && priceLists.length > 0 && (
+          <label className="field">
+            <span>Price list</span>
+            <select value={priceListId} onChange={(e) => setPriceListId(e.target.value)}>
+              <option value="">{priceLists.find((l) => l.is_default) ? `Default (${priceLists.find((l) => l.is_default)!.name})` : "Item prices"}</option>
+              {priceLists.filter((l) => !l.is_default || l.id === priceListId).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                  {l.active ? "" : " (off)"}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="field full">
           <span>Billing address</span>
           <textarea rows={2} value={billing} onChange={(e) => setBilling(e.target.value)} />

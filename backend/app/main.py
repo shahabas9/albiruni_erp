@@ -33,6 +33,7 @@ from app.api import (
     routes_public,
     routes_receivables,
     routes_reports,
+    routes_price_lists,
     routes_sales,
     routes_setup,
     routes_share,
@@ -87,6 +88,7 @@ app.include_router(routes_payments.router)
 app.include_router(routes_receivables.router)
 app.include_router(routes_reports.router)
 app.include_router(routes_share.router)
+app.include_router(routes_price_lists.router)
 app.include_router(routes_sales.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)

@@ -15,11 +15,11 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_price_lists, routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
-from app.domain import credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import price_lists, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -1128,6 +1128,83 @@ class ReminderTests(SalesTestCase):
             sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(reminder_after_days="0,400"))
         saved = sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(reminder_after_days="30, 7,7"))
         self.assertEqual(saved.reminder_after_days, "7,30")
+
+
+class PricingTests(SalesTestCase):
+    def price_list(self, name, rows, **fields):
+        body = routes_price_lists.PriceListIn(name=name, rows=[routes_price_lists.PriceRowIn(**r) for r in rows],
+                                              **fields)
+        return routes_price_lists.create_price_list(body, self.context, self.db)
+
+    def test_customers_pay_their_agreed_price_with_quantity_breaks(self):
+        item = self.item()
+        retail = self.price_list("Retail", [{"item_id": item.id, "unit_price": 410}], is_default=True)
+        dealer = self.price_list("Dealer", [{"item_id": item.id, "min_qty": 1, "unit_price": 400},
+                                            {"item_id": item.id, "min_qty": 100, "unit_price": 380}])
+        rahman = self.customer(price_list_id=dealer.id)
+        walk_in = self.customer("Walk in")
+        self.assertEqual(price_lists.price_for(self.db, self.context, walk_in, item, 10), 410)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 10), 400)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 150), 380)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 99.5), 400)
+        prices = routes_price_lists.customer_prices(rahman.id, self.context, self.db)
+        self.assertEqual(prices["prices"][str(item.id)], [{"min_qty": 1, "unit_price": 400}, {"min_qty": 100, "unit_price": 380}])
+
+        # Switching the dealer list off sends Rahman back to the default.
+        routes_price_lists.update_price_list(dealer.id, routes_price_lists.PriceListIn(name="Dealer", active=False),
+                                             self.context, self.db)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 10), 410)
+        listed = {pl.name: pl for pl in routes_price_lists.list_price_lists(self.context, self.db)}
+        self.assertEqual((listed["Retail"].is_default, listed["Dealer"].customers), (True, 1))
+        with self.assertRaises(HTTPException) as in_use:
+            routes_price_lists.delete_price_list(dealer.id, self.context, self.db)
+        self.assertIn("Rahman", in_use.exception.detail)
+        customer_service.update_customer(self.db, self.context, rahman.id, CustomerUpdate(price_list_id=None))
+        routes_price_lists.delete_price_list(dealer.id, self.context, self.db)
+        with self.assertRaises(HTTPException):  # names are unique per company
+            self.price_list("retail", [])
+        with self.assertRaises(HTTPException):  # the same break twice
+            self.price_list("Bulk", [{"item_id": item.id, "unit_price": 1}, {"item_id": item.id, "unit_price": 2}])
+        self.assertEqual(retail.rows[0].item_price, 420)
+
+    def test_line_discounts_and_agreed_prices_flow_to_the_invoice(self):
+        item = self.item()
+        dealer = self.price_list("Dealer", [{"item_id": item.id, "unit_price": 400}])
+        customer = self.customer(price_list_id=dealer.id)
+        seller = self.make_context(["sales.order.read", "sales.order.write"], self.context.tenant_id,
+                                   self.context.company_id)
+        order = self.order(customer, [{"item_id": item.id, "qty": 10, "discount_pct": 2}], seller)
+        line = order.lines[0]
+        self.assertEqual((line.unit_price, line.list_price, line.discount_pct, line.taxable_value),
+                         (400, 400, 2, 3920))
+        self.assertEqual((order.cgst, order.grand_total, order.needs_approval), (352.8, 4626, False))
+        below = self.order(customer, [{"item_id": item.id, "qty": 10, "unit_price": 395}], seller)
+        stacked = self.order(customer, [{"item_id": item.id, "qty": 10, "discount_pct": 2}], seller, discount_pct=1)
+        self.assertEqual((below.needs_approval, stacked.needs_approval), (True, True))  # 2% then 1% is 2.98%
+
+        confirmed = self.confirm(order.id, seller)
+        self.deliver(confirmed, {0: 10})
+        invoice = self.issue(self.draft(confirmed))
+        self.assertEqual((invoice.lines[0].discount_pct, invoice.lines[0].taxable_value, invoice.grand_total),
+                         (2, 3920, 4626))
+
+    def test_quotation_line_discounts_carry_into_the_order(self):
+        item = self.item()
+        dealer = self.price_list("Dealer", [{"item_id": item.id, "unit_price": 400}])
+        customer = self.customer(price_list_id=dealer.id)
+        body = CreateQuotationIn(customer_id=customer.id, discount_pct=1,
+                                 lines=[QuotationLineIn(item_id=item.id, qty=10, discount_pct=1)])
+        quote = routes_sales.get_quotation(UUID(routes_sales.create_quotation(body, self.context, self.db)["quotation_id"]),
+                                           self.context, self.db)
+        self.assertEqual((quote.status, quote.lines[0].unit_price, quote.lines[0].discount_pct), ("Draft", 400, 1))
+        big = routes_sales.create_quotation(CreateQuotationIn(
+            customer_id=customer.id, lines=[QuotationLineIn(item_id=item.id, qty=10, discount_pct=5)]),
+            self.context, self.db)
+        self.assertEqual(self.db.get(Quotation, UUID(big["quotation_id"])).status, "Pending approval")
+
+        order = routes_orders.order_from_quotation(quote.id, Response(), self.context, self.db)
+        self.assertEqual((order.lines[0].discount_pct, order.lines[0].list_price, order.grand_total, order.needs_approval),
+                         (1, 400, quote.grand_total, False))
 
 
 if __name__ == "__main__":

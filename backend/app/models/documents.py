@@ -83,6 +83,8 @@ class SalesOrderLine(Base):
     # The item's list price when the line was made; a lower unit price needs approval.
     list_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    # This line's own discount, before the order's.
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     amount: Mapped[float] = _money()  # qty × price
     taxable_value: Mapped[float] = _money()  # after discount
     cgst: Mapped[float] = _money()
@@ -241,6 +243,7 @@ class InvoiceLine(Base):
     qty: Mapped[float] = mapped_column(Numeric(14, 2))
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     amount: Mapped[float] = _money()
     taxable_value: Mapped[float] = _money()
     cgst: Mapped[float] = _money()

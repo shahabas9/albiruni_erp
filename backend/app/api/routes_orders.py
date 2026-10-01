@@ -57,6 +57,7 @@ def line_out(l) -> DocLineOut:
     return DocLineOut(
         id=l.id, item_id=l.item_id, item_kind=l.item.kind, description=l.description, hsn_code=l.hsn_code, uom=l.uom, qty=float(l.qty),
         unit_price=float(l.unit_price), list_price=float(l.list_price), gst_rate=float(l.gst_rate),
+        discount_pct=float(l.discount_pct or 0),
         amount=float(l.amount), taxable_value=float(l.taxable_value), cgst=float(l.cgst), sgst=float(l.sgst),
         igst=float(l.igst), delivered_qty=float(l.delivered_qty), invoiced_qty=float(l.invoiced_qty),
     )
@@ -165,8 +166,8 @@ def quick_sale(body: QuickSaleIn, context: RequestContext = Depends(require_perm
 
     args = {
         "customer_id": str(body.customer_id) if body.customer_id else None,
-        "lines": [{"item_id": str(l.item_id), "qty": l.qty, **({"unit_price": l.unit_price} if l.unit_price is not None else {})}
-                  for l in body.lines],
+        "lines": [{"item_id": str(l.item_id), "qty": l.qty, "discount_pct": l.discount_pct,
+                   **({"unit_price": l.unit_price} if l.unit_price is not None else {})} for l in body.lines],
         "discount_pct": body.discount_pct, "notes": body.notes,
         "payment": body.payment.model_dump() if body.payment else None,
     }

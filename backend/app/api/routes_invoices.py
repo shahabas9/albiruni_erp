@@ -53,7 +53,8 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
         lines=[InvoiceLineOut(
             id=l.id, order_line_id=l.order_line_id, item_id=l.item_id, description=l.description,
             hsn_code=l.hsn_code, uom=l.uom, qty=float(l.qty), unit_price=float(l.unit_price),
-            gst_rate=float(l.gst_rate), amount=float(l.amount), taxable_value=float(l.taxable_value),
+            gst_rate=float(l.gst_rate), discount_pct=float(l.discount_pct or 0), amount=float(l.amount),
+            taxable_value=float(l.taxable_value),
             cgst=float(l.cgst), sgst=float(l.sgst), igst=float(l.igst), credited_qty=float(l.credited_qty),
             credited_value=float(l.credited_value),
         ) for l in inv.lines],

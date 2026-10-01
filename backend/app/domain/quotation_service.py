@@ -95,8 +95,8 @@ def update_quotation(db: Session, context: RequestContext, quotation_id: UUID, b
         quotation.notes = data["notes"].strip()
     if "lines" in data or "discount_pct" in data:
         lines = ([l.model_dump(exclude_none=True) for l in body.lines] if body.lines is not None
-                 else [{"item_id": l.item_id, "qty": float(l.qty), "unit_price": float(l.unit_price)}
-                       for l in quotation.lines])
+                 else [{"item_id": l.item_id, "qty": float(l.qty), "unit_price": float(l.unit_price),
+                        "discount_pct": float(l.discount_pct or 0)} for l in quotation.lines])
         discount = float(quotation.discount_pct) if body.discount_pct is None else body.discount_pct
         try:
             pricing = price_quotation(db, context, None, lines, discount, customer_id=quotation.customer_id)

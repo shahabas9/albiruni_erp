@@ -16,6 +16,7 @@ import { CrmSettings } from "./pages/CrmSettings";
 import { Targets } from "./pages/Targets";
 import { CustomerPage } from "./pages/CustomerPage";
 import { SalesSettings } from "./pages/SalesSettings";
+import { PriceLists } from "./pages/PriceLists";
 import { Orders } from "./pages/Orders";
 import { OrderEditor } from "./pages/OrderEditor";
 import { OrderPage } from "./pages/OrderPage";
@@ -120,6 +121,7 @@ export default function App() {
             <Route path="/sales/quotations/:id/edit" element={<div className="management-page"><QuotationEditor /></div>} />
             <Route path="/sales/quick-sale" element={<div className="management-page"><QuickSale /></div>} />
             <Route path="/sales/reports" element={<div className="management-page"><SalesReports /></div>} />
+            <Route path="/sales/price-lists" element={<div className="management-page"><PriceLists /></div>} />
             <Route path="/sales/settings" element={<div className="management-page"><SalesSettings /></div>} />
             <Route path="/items" element={<div className="management-page"><Items /></div>} />
             <Route path="/leads" element={<div className="management-page"><Leads /></div>} />

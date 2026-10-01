@@ -54,6 +54,58 @@ export function fetchQuotation(id: string): Promise<Quotation> {
   return request<Quotation>(`/api/sales/quotations/${id}`);
 }
 
+// --- Price lists ----------------------------------------------------------
+
+export interface PriceRow {
+  item_id: string;
+  item_name: string;
+  sku: string;
+  /** The item's own price, for comparison. */
+  item_price: number;
+  min_qty: number;
+  unit_price: number;
+}
+
+export interface PriceList {
+  id: string;
+  name: string;
+  active: boolean;
+  /** Applies to customers without a list of their own. */
+  is_default: boolean;
+  /** Customers on this list. */
+  customers: number;
+  rows: PriceRow[];
+}
+
+export interface PriceListInput {
+  name: string;
+  active: boolean;
+  is_default: boolean;
+  rows: { item_id: string; min_qty: number; unit_price: number }[];
+}
+
+export function fetchPriceLists(): Promise<PriceList[]> {
+  return request<PriceList[]>("/api/sales/price-lists");
+}
+
+export function savePriceList(id: string | null, body: PriceListInput): Promise<PriceList> {
+  return request<PriceList>(id ? `/api/sales/price-lists/${id}` : "/api/sales/price-lists", {
+    method: id ? "PUT" : "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deletePriceList(id: string): Promise<void> {
+  return request<void>(`/api/sales/price-lists/${id}`, { method: "DELETE" });
+}
+
+/** Quantity breaks per item id, lowest first. */
+export type AgreedPrices = Record<string, { min_qty: number; unit_price: number }[]>;
+
+export function fetchAgreedPrices(customerId?: string): Promise<{ price_list_id: string | null; prices: AgreedPrices }> {
+  return request(`/api/sales/prices${customerId ? `?customer_id=${customerId}` : ""}`);
+}
+
 export interface QuotationInput {
   customer_id?: string;
   lines: DocLineInput[];
@@ -88,6 +140,8 @@ export interface DocLine {
   unit_price: number;
   list_price: number;
   gst_rate: number;
+  /** This line's own discount, before the document's. */
+  discount_pct: number;
   amount: number;
   taxable_value: number;
   cgst: number;
@@ -134,8 +188,9 @@ export interface SalesOrder extends TaxTotals {
 export interface DocLineInput {
   item_id: string;
   qty: number;
-  /** Omit for the item's list price. */
+  /** Omit for the customer's agreed price (their price list, else the item's price). */
   unit_price?: number;
+  discount_pct?: number;
 }
 
 export interface OrderInput {
@@ -271,6 +326,7 @@ export interface InvoiceLine {
   qty: number;
   unit_price: number;
   gst_rate: number;
+  discount_pct: number;
   amount: number;
   taxable_value: number;
   cgst: number;

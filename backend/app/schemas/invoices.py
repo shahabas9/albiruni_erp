@@ -33,6 +33,7 @@ class InvoiceLineOut(BaseModel):
     qty: float
     unit_price: float
     gst_rate: float
+    discount_pct: float = 0
     amount: float
     taxable_value: float
     cgst: float

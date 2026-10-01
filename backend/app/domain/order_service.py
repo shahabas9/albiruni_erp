@@ -15,11 +15,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, history, receivables, tax
+from app.domain import crm_service, history, price_lists, receivables, tax
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.sales_service import (
-    DISCOUNT_AUTO_APPROVE_LIMIT_PCT, DomainValidationError, PricedLine, apply_tax, company_of, next_document_number,
+    DISCOUNT_AUTO_APPROVE_LIMIT_PCT, DomainValidationError, PricedLine, apply_tax, company_of, effective_discount,
+    next_document_number,
 )
 from app.models.crm import Opportunity
 from app.models.documents import SalesOrder, SalesOrderLine
@@ -83,7 +84,11 @@ def needs_approval(order: SalesOrder) -> bool:
         return False
     if float(order.discount_pct) > DISCOUNT_AUTO_APPROVE_LIMIT_PCT:
         return True
-    return any(float(l.unit_price) < float(l.list_price) for l in order.lines)
+    return any(
+        float(l.unit_price) < float(l.list_price)
+        or effective_discount(float(l.discount_pct or 0), float(order.discount_pct)) > DISCOUNT_AUTO_APPROVE_LIMIT_PCT
+        for l in order.lines
+    )
 
 
 def _items(db: Session, context: RequestContext, ids: list[UUID]) -> dict[UUID, Item]:
@@ -107,6 +112,7 @@ def price_lines(
     warnings: list[str] = []
     priced = [
         PricedLine(item=l["item"], qty=float(l["qty"]), unit_price=float(l["unit_price"]),
+                   discount_pct=float(l.get("discount_pct") or 0),
                    line_total=float(tax.money(Decimal(str(l["qty"])) * Decimal(str(l["unit_price"])))))
         for l in lines_in
     ]
@@ -121,7 +127,9 @@ def price_lines(
         item = line.item
         order.lines.append(SalesOrderLine(
             position=position, item_id=item.id, description=item.name, hsn_code=item.hsn_code or "", uom=item.uom,
-            qty=line.qty, unit_price=line.unit_price, list_price=float(item.unit_price), gst_rate=line.gst_rate,
+            qty=line.qty, unit_price=line.unit_price,
+            list_price=line_in.get("list_price", price_lists.price_for(db, context, customer, item, line.qty)),
+            gst_rate=line.gst_rate, discount_pct=line.discount_pct,
             amount=float(parts.amount), taxable_value=float(parts.taxable), cgst=float(parts.cgst),
             sgst=float(parts.sgst), igst=float(parts.igst), delivered_qty=0, invoiced_qty=0,
         ))
@@ -137,13 +145,14 @@ def price_lines(
     return warnings
 
 
-def _lines_from(db: Session, context: RequestContext, lines: list[DocLineIn]) -> list[dict]:
+def _lines_from(db: Session, context: RequestContext, lines: list[DocLineIn], customer: Customer) -> list[dict]:
     items = _items(db, context, list({l.item_id for l in lines}))
-    return [
-        {"item": items[l.item_id], "qty": l.qty,
-         "unit_price": items[l.item_id].unit_price if l.unit_price is None else l.unit_price}
-        for l in lines
-    ]
+    out = []
+    for l in lines:
+        agreed = price_lists.price_for(db, context, customer, items[l.item_id], l.qty)
+        out.append({"item": items[l.item_id], "qty": l.qty, "list_price": agreed,
+                    "unit_price": agreed if l.unit_price is None else l.unit_price, "discount_pct": l.discount_pct})
+    return out
 
 
 def _new_order(db: Session, context: RequestContext, customer: Customer, **fields) -> SalesOrder:
@@ -167,7 +176,7 @@ def create_order(
     customer = get_customer(db, context, body.customer_id)
     order = _new_order(db, context, customer, order_date=body.order_date, customer_po=body.customer_po.strip(),
                        notes=body.notes.strip())
-    warnings = price_lines(db, context, order, customer, _lines_from(db, context, body.lines), body.discount_pct)
+    warnings = price_lines(db, context, order, customer, _lines_from(db, context, body.lines, customer), body.discount_pct)
     db.flush()
     history.record(db, context, "sales_order", order.id, "created", f"Order {order.number} drafted")
     if commit:
@@ -195,7 +204,8 @@ def order_from_quotation(db: Session, context: RequestContext, quotation_id: UUI
     customer = get_customer(db, context, quotation.customer_id)
     order = _new_order(db, context, customer, quotation_id=quotation.id, opportunity_id=quotation.opportunity_id,
                        approved_by=quotation.approved_by)
-    lines = [{"item": l.item, "qty": float(l.qty), "unit_price": float(l.unit_price)} for l in quotation.lines]
+    lines = [{"item": l.item, "qty": float(l.qty), "unit_price": float(l.unit_price),
+              "discount_pct": float(l.discount_pct or 0)} for l in quotation.lines]
     warnings = price_lines(db, context, order, customer, lines, float(quotation.discount_pct))
     # The quote's discount was within policy (or approved) when it was made.
     if float(quotation.discount_pct) <= DISCOUNT_AUTO_APPROVE_LIMIT_PCT and not order.approved_by:
@@ -229,8 +239,9 @@ def update_order(db: Session, context: RequestContext, order_id: UUID, body: Ord
     warnings: list[str] = []
     if body.lines is not None or body.discount_pct is not None:
         lines = (
-            _lines_from(db, context, body.lines) if body.lines is not None
-            else [{"item": l.item, "qty": float(l.qty), "unit_price": float(l.unit_price)} for l in order.lines]
+            _lines_from(db, context, body.lines, order.customer) if body.lines is not None
+            else [{"item": l.item, "qty": float(l.qty), "unit_price": float(l.unit_price),
+                   "discount_pct": float(l.discount_pct or 0), "list_price": float(l.list_price)} for l in order.lines]
         )
         discount = float(order.discount_pct) if body.discount_pct is None else body.discount_pct
         warnings = price_lines(db, context, order, order.customer, lines, discount)

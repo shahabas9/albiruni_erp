@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import tax
+from app.domain import price_lists, tax
 from app.models.sales import Customer, DocumentCounter, Item, Quotation, QuotationLine
 from app.models.tenant import Company
 
@@ -35,6 +35,7 @@ class PricedLine:
     unit_price: float
     line_total: float  # qty × price, before discount
     gst_rate: float = 0
+    discount_pct: float = 0  # this line's own discount
     taxable_value: float = 0  # after discount
     tax_amount: float = 0
 
@@ -84,7 +85,8 @@ def apply_tax(
     warnings.extend(notes)
     rates = [item_rate(line.item, warnings, required=rates_required) for line in lines]
     result = tax.compute(
-        [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), r) for l, r in zip(lines, rates)],
+        [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), r, Decimal(str(l.discount_pct or 0)))
+         for l, r in zip(lines, rates)],
         discount_pct, interstate,
     )
     for line, rate, worked in zip(lines, rates, result.lines):
@@ -105,6 +107,12 @@ def find_customer_by_name(db: Session, context: RequestContext, name: str) -> Cu
     if customer is None:
         raise DomainValidationError(f"No active customer matches '{name}'.")
     return customer
+
+
+def effective_discount(line_pct: float, doc_pct: float) -> float:
+    """A line discount and the document's together: 10% then 5% is 14.5%."""
+
+    return 100 - (100 - float(line_pct or 0)) * (100 - float(doc_pct or 0)) / 100
 
 
 def find_customer_by_id(db: Session, context: RequestContext, customer_id) -> Customer:
@@ -164,12 +172,15 @@ def price_quotation(
             raise DomainValidationError(f"Quantity for '{item.name}' must be positive.")
         if item.kind != "service" and float(item.stock_qty) < qty:
             warnings.append(f"{item.name}: only {item.stock_qty} {item.uom} in stock, {qty} requested.")
-        unit_price = float(item.unit_price) if raw.get("unit_price") is None else float(raw["unit_price"])
-        if unit_price < 0:
-            raise DomainValidationError("A price can't be negative.")
-        if unit_price < float(item.unit_price):
+        agreed = price_lists.price_for(db, context, customer, item, qty)
+        unit_price = agreed if raw.get("unit_price") is None else float(raw["unit_price"])
+        line_discount = float(raw.get("discount_pct") or 0)
+        if unit_price < 0 or not 0 <= line_discount <= 100:
+            raise DomainValidationError("A price can't be negative, and a line discount must be 0–100%.")
+        if unit_price < agreed or effective_discount(line_discount, discount_pct) > DISCOUNT_AUTO_APPROVE_LIMIT_PCT:
             below_list = True
-        priced_lines.append(PricedLine(item=item, qty=qty, unit_price=unit_price, line_total=float(tax.money(qty * unit_price))))
+        priced_lines.append(PricedLine(item=item, qty=qty, unit_price=unit_price, discount_pct=line_discount,
+                                       line_total=float(tax.money(qty * unit_price))))
 
     if not priced_lines:
         raise DomainValidationError("A quotation needs at least one line item.")
@@ -187,7 +198,8 @@ def price_quotation(
             "auto-approve limit — this will route to the Sales Manager for approval."
         )
     if below_list:
-        warnings.append("A price is below the list price — this will route to the Sales Manager for approval.")
+        warnings.append("A price is below the agreed price, or a line's discount takes it over the limit — this "
+                        "will route to the Sales Manager for approval.")
 
     if float(customer.credit_limit) and grand_total > float(customer.credit_limit):
         warnings.append(
@@ -306,6 +318,7 @@ def replace_lines(quotation: Quotation, pricing: QuotationPricing) -> None:
                 line_total=line.line_total,
                 hsn_code=line.item.hsn_code or "",
                 gst_rate=line.gst_rate,
+                discount_pct=line.discount_pct,
                 taxable_value=line.taxable_value,
                 tax_amount=line.tax_amount,
             )
