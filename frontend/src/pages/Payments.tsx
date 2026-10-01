@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { allocatePayment, fetchPayments, voidPayment, type Receipt } from "../api/sales";
+import { allocatePayment, fetchPayments, setTdsCertificate, voidPayment, type Receipt } from "../api/sales";
 import { Drawer, ErrorNote, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, docStatusClass, inr } from "../lib/format";
@@ -153,11 +153,37 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
           <dt>Applied to invoices</dt>
           <dd className="num">{inr(r.allocated)}</dd>
         </div>
+        {r.tds_amount > 0 && (
+          <div>
+            <dt>TDS deducted ({r.tds_section})</dt>
+            <dd className="num">{inr(r.tds_amount)}</dd>
+          </div>
+        )}
         <div className="grand">
           <dt>Advance left</dt>
           <dd className="num">{inr(r.unallocated)}</dd>
         </div>
       </dl>
+      {r.tds_amount > 0 && (
+        <label className="field checkbox-field" style={{ marginTop: 12 }}>
+          <input
+            type="checkbox"
+            checked={r.tds_certificate_received}
+            disabled={!can("sales.payment.write") || busy}
+            onChange={async (e) => {
+              setBusy(true);
+              try {
+                onChanged(await setTdsCertificate(r.id, e.target.checked));
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : "Couldn't save.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
+          <span>TDS certificate (Form 16A) received</span>
+        </label>
+      )}
       {r.allocations.length > 0 && (
         <div className="mini-docs" style={{ marginTop: 16 }}>
           {r.allocations.map((a) => (
@@ -165,7 +191,10 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
               <Link className="mono" to={`/sales/invoices/${a.invoice_id}`}>
                 {a.invoice_number}
               </Link>
-              <span className="num">{inr(a.amount)}</span>
+              <span className="num">
+                {inr(a.amount)}
+                {a.tds_amount > 0 && <small> + {inr(a.tds_amount)} TDS</small>}
+              </span>
             </div>
           ))}
         </div>

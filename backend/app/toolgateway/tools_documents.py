@@ -88,6 +88,7 @@ def record_payment(db: Session, context: RequestContext, args: dict[str, Any]) -
         db, context, customer_id=UUID(str(args["customer_id"])), amount=float(args["amount"]), mode=args["mode"],
         receipt_date=date.fromisoformat(args["receipt_date"]) if args.get("receipt_date") else None,
         reference=args.get("reference", ""), notes=args.get("notes", ""), allocations=args.get("allocations"),
+        tds_section=args.get("tds_section", ""),
     )
     left = payment_service.unallocated(receipt)
     return {"receipt_id": str(receipt.id), "number": receipt.number,
@@ -139,6 +140,8 @@ def export_report(db: Session, context: RequestContext, args: dict[str, Any]) ->
     start, end = date.fromisoformat(args["date_from"]), date.fromisoformat(args["date_to"])
     if kind == "register":
         rows = sales_reports.sales_register(db, context, start, end)["rows"]
+    elif kind == "tds":
+        rows = sales_reports.tds_report(db, context, start, end)["rows"]
     elif kind in sales_reports.SECTIONS:
         rows = sales_reports.gstr1(db, context, start, end)[kind]
     else:

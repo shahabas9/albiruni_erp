@@ -31,7 +31,7 @@ from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
 from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.items import ItemIn, ItemUpdate
-from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn
+from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn, TdsCertificateIn
 from app.schemas.orders import (
     QuickPaymentIn, QuickSaleIn,
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
@@ -1040,6 +1040,43 @@ class ShareTests(SalesTestCase):
         with self.assertRaises(HTTPException) as denied:
             routes_share.share_document(routes_share.ShareIn(kind="quotation", id=quote.id), clerk, self.db)
         self.assertEqual(denied.exception.status_code, 403)
+
+
+
+class TdsTests(SalesTestCase):
+    def test_tds_deducted_settles_the_invoice_and_is_reported(self):
+        customer = self.customer(gstin=KARNATAKA_GSTIN)
+        invoice = self.invoice_for(customer, 20)  # 9,912 with GST
+        with self.assertRaises(HTTPException) as no_section:
+            self.pay(customer, 9744, allocations=[AllocationIn(invoice_id=invoice.id, amount=9744, tds_amount=168)])
+        self.assertIn("section", no_section.exception.detail)
+        with self.assertRaises(HTTPException) as too_much:
+            self.pay(customer, 9744, tds_section="194Q",
+                     allocations=[AllocationIn(invoice_id=invoice.id, amount=9744, tds_amount=200)])
+        self.assertIn("more", too_much.exception.detail)
+
+        receipt = self.pay(customer, 9744, tds_section="194q",
+                           allocations=[AllocationIn(invoice_id=invoice.id, amount=9744, tds_amount=168)])
+        self.assertEqual((receipt.tds_amount, receipt.tds_section, receipt.unallocated), (168.0, "194Q", 0))
+        paid = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((paid.amount_paid, paid.amount_tds, paid.balance, paid.payment_status),
+                         (9744.0, 168.0, 0.0, "Paid"))
+        self.assertEqual(float(receivables.net_owed(self.db, self.context, customer.id)), 0)
+
+        today = date.today()
+        report = routes_reports.tds(today, today, self.context, self.db)
+        row = next(r for r in report["rows"] if r["receipt_number"] == receipt.number)
+        self.assertEqual((row["customer_pan"], row["section"], row["tds_amount"], row["certificate_received"]),
+                         (KARNATAKA_GSTIN[2:12], "194Q", 168.0, "No"))
+        routes_payments.tds_certificate(receipt.id, TdsCertificateIn(received=True), self.context, self.db)
+        row = next(r for r in routes_reports.tds(today, today, self.context, self.db)["rows"]
+                   if r["receipt_number"] == receipt.number)
+        self.assertEqual(row["certificate_received"], "Yes")
+
+        # Voiding takes the TDS back off too.
+        routes_payments.void_payment(receipt.id, ReasonIn(reason="Wrong customer"), self.context, self.db)
+        again = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((again.amount_tds, again.balance), (0.0, 9912.0))
 
 
 if __name__ == "__main__":

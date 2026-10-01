@@ -319,7 +319,9 @@ export interface Invoice extends TaxTotals {
   amount_in_words: string;
   amount_paid: number;
   amount_credited: number;
-  /** Still owed: total − paid − credited. */
+  /** TDS the customer deducted; settles the invoice like a payment. */
+  amount_tds: number;
+  /** Still owed: total − paid − credited − TDS. */
   balance: number;
   notes: string;
   terms: string;
@@ -330,7 +332,7 @@ export interface Invoice extends TaxTotals {
   lines: InvoiceLine[];
   hsn_summary: HsnRow[];
   /** Single-invoice endpoint only: receipts applied to it. */
-  payments: { receipt_id: string; number: string; receipt_date: string; mode: string; reference: string; amount: number }[];
+  payments: { receipt_id: string; number: string; receipt_date: string; mode: string; reference: string; amount: number; tds_amount: number }[];
 }
 
 export interface InvoiceQuery {
@@ -439,14 +441,20 @@ export interface Receipt {
   notes: string;
   status: "Received" | "Voided";
   void_reason: string;
+  /** TDS the customer deducted on top of `amount`. */
+  tds_amount: number;
+  tds_section: string;
+  tds_certificate_received: boolean;
   allocated: number;
   /** Advance: received and not yet applied to an invoice. */
   unallocated: number;
   amount_in_words: string;
   created_by_name: string | null;
   created_at: string;
-  allocations: { invoice_id: string; invoice_number: string | null; amount: number }[];
+  allocations: { invoice_id: string; invoice_number: string | null; amount: number; tds_amount: number }[];
 }
+
+export const TDS_SECTIONS = ["194Q", "194C", "194J", "194H", "194I", "194O", "Other"];
 
 export interface ReceiptInput {
   customer_id: string;
@@ -456,7 +464,23 @@ export interface ReceiptInput {
   reference: string;
   notes: string;
   /** Omit: oldest unpaid invoices first. []: keep it all as an advance. */
-  allocations?: { invoice_id: string; amount: number }[];
+  allocations?: { invoice_id: string; amount: number; tds_amount?: number }[];
+  /** Needed when an allocation has tds_amount. */
+  tds_section?: string;
+}
+
+export function setTdsCertificate(id: string, received: boolean): Promise<Receipt> {
+  return request<Receipt>(`/api/sales/payments/${id}/tds-certificate`, { method: "POST", body: JSON.stringify({ received }) });
+}
+
+export interface TdsReport {
+  rows: { date: string; receipt_number: string; receipt_id: string; customer: string; customer_pan: string; section: string; invoice_number: string; invoice_value: number; amount_received: number; tds_amount: number; certificate_received: "Yes" | "No" }[];
+  total_tds: number;
+  certificates_missing: number;
+}
+
+export function fetchTdsReport(dateFrom: string, dateTo: string): Promise<TdsReport> {
+  return request<TdsReport>(`/api/sales/reports/tds?date_from=${dateFrom}&date_to=${dateTo}`);
 }
 
 export function fetchPayments(params: { customer_id?: string; invoice_id?: string; q?: string; with_advance?: boolean; limit?: number; offset?: number } = {}): Promise<Page<Receipt>> {
@@ -598,7 +622,7 @@ export function fetchGstr1(dateFrom: string, dateTo: string): Promise<Gstr1> {
   return request<Gstr1>(`/api/sales/reports/gstr1?date_from=${dateFrom}&date_to=${dateTo}`);
 }
 
-export function downloadReport(kind: "register" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
+export function downloadReport(kind: "register" | "tds" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
   return downloadFile(`/api/sales/reports/${kind}.csv?date_from=${dateFrom}&date_to=${dateTo}`, `${kind}.csv`);
 }
 

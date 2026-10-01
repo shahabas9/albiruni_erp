@@ -200,6 +200,8 @@ class Invoice(Base):
     # Running totals kept in step with receipts and credit notes.
     amount_paid: Mapped[float] = _money()
     amount_credited: Mapped[float] = _money()
+    # Tax the customer deducted at source (TDS) instead of paying it to us.
+    amount_tds: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     notes: Mapped[str] = mapped_column(Text, default="")
     terms: Mapped[str] = mapped_column(Text, default="")
     bank_details: Mapped[str] = mapped_column(Text, default="")
@@ -213,6 +215,12 @@ class Invoice(Base):
         back_populates="invoice", cascade="all, delete-orphan", order_by="InvoiceLine.position"
     )
     order: Mapped["SalesOrder"] = relationship()
+
+    @classmethod
+    def left_expr(cls):
+        """What's still owed, as SQL: total − paid − credited − TDS deducted."""
+
+        return cls.grand_total - cls.amount_paid - cls.amount_credited - cls.amount_tds
     customer: Mapped["Customer"] = relationship()  # noqa: F821
 
 
@@ -320,6 +328,11 @@ class Receipt(Base):
     # Received or Voided (a bounced cheque, a mistaken entry).
     status: Mapped[str] = mapped_column(String(12), default="Received")
     void_reason: Mapped[str] = mapped_column(String(200), default="")
+    # TDS the customer deducted from this payment (on top of `amount`), its section, and
+    # whether their TDS certificate (Form 16A) has come in.
+    tds_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
+    tds_section: Mapped[str] = mapped_column(String(10), default="", server_default="")
+    tds_certificate_received: Mapped[bool] = mapped_column(default=False, server_default="false")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -336,6 +349,7 @@ class ReceiptAllocation(Base):
     receipt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("receipts.id", ondelete="CASCADE"))
     invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id"), index=True)
     amount: Mapped[float] = _money()
+    tds_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     receipt: Mapped["Receipt"] = relationship(back_populates="allocations")

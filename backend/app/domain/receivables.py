@@ -17,7 +17,7 @@ def invoices_owed(db: Session, context: RequestContext, customer_id: UUID) -> De
     """Sum of issued invoices' balances (a credited-back invoice can count below zero)."""
 
     total = db.execute(select(func.coalesce(
-        func.sum(Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited), 0,
+        func.sum(Invoice.left_expr()), 0,
     )).where(
         Invoice.tenant_id == context.tenant_id, Invoice.company_id == context.company_id,
         Invoice.customer_id == customer_id, Invoice.status == "Issued",
@@ -52,7 +52,7 @@ def ageing(db: Session, context: RequestContext, *, as_of: date | None = None, q
     Customers owing nothing and holding no advance are left out."""
 
     day = as_of or date.today()
-    left = Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited
+    left = Invoice.left_expr()
     late = func.greatest(0, literal(day) - Invoice.due_date)
 
     def bucket(condition):

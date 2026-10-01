@@ -88,6 +88,8 @@ class InvoiceOut(BaseModel):
     amount_in_words: str
     amount_paid: float
     amount_credited: float
+    # TDS the customer deducted (settles the invoice like a payment).
+    amount_tds: float = 0
     balance: float
     notes: str
     terms: str

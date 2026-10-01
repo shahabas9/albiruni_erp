@@ -9,7 +9,10 @@ Mode = Literal["Cash", "UPI", "Bank transfer", "Cheque", "Card", "Other"]
 
 class AllocationIn(BaseModel):
     invoice_id: UUID
-    amount: float = Field(gt=0, le=1_000_000_000)
+    # Money received against this invoice.
+    amount: float = Field(default=0, ge=0, le=1_000_000_000)
+    # TDS the customer deducted on this invoice instead of paying it.
+    tds_amount: float = Field(default=0, ge=0, le=1_000_000_000)
 
 
 class ReceiptIn(BaseModel):
@@ -22,6 +25,8 @@ class ReceiptIn(BaseModel):
     notes: str = Field(default="", max_length=2000)
     # Leave out to settle the oldest unpaid invoices first; [] keeps it all as an advance.
     allocations: list[AllocationIn] | None = Field(default=None, max_length=200)
+    # Needed when allocations deduct TDS: 194Q, 194C, 194J…
+    tds_section: str = Field(default="", max_length=10)
 
 
 class AllocateIn(BaseModel):
@@ -33,6 +38,7 @@ class AllocationOut(BaseModel):
     invoice_id: UUID
     invoice_number: str | None
     amount: float
+    tds_amount: float = 0
 
 
 class ReceiptOut(BaseModel):
@@ -47,6 +53,9 @@ class ReceiptOut(BaseModel):
     notes: str
     status: str
     void_reason: str
+    tds_amount: float = 0
+    tds_section: str = ""
+    tds_certificate_received: bool = False
     allocated: float
     unallocated: float
     amount_in_words: str
@@ -62,3 +71,8 @@ class InvoicePaymentOut(BaseModel):
     mode: str
     reference: str
     amount: float
+    tds_amount: float = 0
+
+
+class TdsCertificateIn(BaseModel):
+    received: bool

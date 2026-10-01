@@ -182,6 +182,12 @@ export function InvoicePage() {
                 <dt>Paid</dt>
                 <dd className="num">{inr(invoice.amount_paid)}</dd>
               </div>
+              {invoice.amount_tds > 0 && (
+                <div>
+                  <dt>TDS deducted by customer</dt>
+                  <dd className="num">{inr(invoice.amount_tds)}</dd>
+                </div>
+              )}
               {invoice.amount_credited > 0 && (
                 <div>
                   <dt>Credited</dt>
@@ -242,7 +248,10 @@ export function InvoicePage() {
                         {p.reference && ` ${p.reference}`}
                       </small>
                     </div>
-                    <span className="num">{inr(p.amount)}</span>
+                    <span className="num">
+                      {inr(p.amount)}
+                      {p.tds_amount > 0 && <small> + {inr(p.tds_amount)} TDS</small>}
+                    </span>
                   </div>
                 ))}
               </div>

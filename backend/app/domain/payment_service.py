@@ -84,7 +84,7 @@ def open_invoices(db: Session, context: RequestContext, customer_id: UUID, *, lo
     stmt = select(Invoice).where(
         Invoice.tenant_id == context.tenant_id, Invoice.company_id == context.company_id,
         Invoice.customer_id == customer_id, Invoice.status == "Issued",
-        Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited > 0,
+        Invoice.left_expr() > 0,
     )
     if lock:
         stmt = stmt.order_by(Invoice.id).with_for_update().execution_options(populate_existing=True)
@@ -106,13 +106,20 @@ def _apply(db: Session, context: RequestContext, receipt: Receipt, allocations: 
             plan.append((invoice, take))
             available -= take
         return [_allocate(db, receipt, inv, amt) for inv, amt in plan]
+    if any(Decimal(str(a.get("tds_amount") or 0)) > 0 for a in allocations) and not receipt.tds_section:
+        raise ConflictError("Say which TDS section the customer deducted under (e.g. 194Q, 194C, 194J).")
 
     wanted: dict[UUID, Decimal] = {}
+    tds: dict[UUID, Decimal] = {}
     for raw in allocations:
-        amount = Decimal(str(raw["amount"])).quantize(Decimal("0.01"))
-        if amount > 0:
+        amount = Decimal(str(raw.get("amount") or 0)).quantize(Decimal("0.01"))
+        deducted = Decimal(str(raw.get("tds_amount") or 0)).quantize(Decimal("0.01"))
+        if amount < 0 or deducted < 0:
+            raise ConflictError("Amounts can't be negative.")
+        if amount > 0 or deducted > 0:
             key = UUID(str(raw["invoice_id"]))
             wanted[key] = wanted.get(key, ZERO) + amount
+            tds[key] = tds.get(key, ZERO) + deducted
     if sum(wanted.values(), ZERO) > available:
         raise ConflictError(f"Only ₹{float(available):,.2f} of this payment is left to allocate.")
     invoices = db.execute(
@@ -130,27 +137,35 @@ def _apply(db: Session, context: RequestContext, receipt: Receipt, allocations: 
             raise ConflictError(f"{invoice.number} belongs to another customer.")
         if invoice.status != "Issued":
             raise ConflictError("Payments go against issued invoices, not drafts.")
-        if amount > balance(invoice):
-            raise ConflictError(f"{invoice.number} only has ₹{float(balance(invoice)):,.2f} left to pay.")
-        applied.append(_allocate(db, receipt, invoice, amount))
+        if amount + tds[invoice_id] > balance(invoice):
+            what = "paid and deducted" if tds[invoice_id] else "to pay"
+            raise ConflictError(f"{invoice.number} only has ₹{float(balance(invoice)):,.2f} left — "
+                                f"₹{float(amount + tds[invoice_id]):,.2f} {what} is more.")
+        if tds[invoice_id] > Decimal(str(invoice.grand_total)) * Decimal("0.2"):
+            raise ConflictError(f"₹{float(tds[invoice_id]):,.2f} TDS is more than 20% of {invoice.number} — check the figure.")
+        applied.append(_allocate(db, receipt, invoice, amount, tds[invoice_id]))
     return applied
 
 
-def _allocate(db: Session, receipt: Receipt, invoice: Invoice, amount: Decimal) -> tuple:
-    receipt.allocations.append(ReceiptAllocation(invoice_id=invoice.id, amount=amount))
+def _allocate(db: Session, receipt: Receipt, invoice: Invoice, amount: Decimal, tds: Decimal = ZERO) -> tuple:
+    receipt.allocations.append(ReceiptAllocation(invoice_id=invoice.id, amount=amount, tds_amount=tds))
     invoice.amount_paid = Decimal(str(invoice.amount_paid)) + amount
-    return invoice, amount
+    if tds:
+        invoice.amount_tds = Decimal(str(invoice.amount_tds or 0)) + tds
+        receipt.tds_amount = Decimal(str(receipt.tds_amount or 0)) + tds
+    return invoice, amount, tds
 
 
 def _record_history(db: Session, context: RequestContext, receipt: Receipt, applied: list[tuple]) -> None:
-    for invoice, amount in applied:
+    for invoice, amount, tds in applied:
         history.record(db, context, "invoice", invoice.id, "paid",
-                       f"₹{float(amount):,.2f} received on {receipt.number} ({receipt.mode})")
+                       f"₹{float(amount):,.2f} received on {receipt.number} ({receipt.mode})"
+                       + (f", ₹{float(tds):,.2f} TDS deducted ({receipt.tds_section})" if tds else ""))
 
 
 def record_receipt(
     db: Session, context: RequestContext, *, customer_id: UUID, amount: float, mode: str, receipt_date: date | None,
-    reference: str = "", notes: str = "", allocations: list[dict] | None = None,
+    reference: str = "", notes: str = "", allocations: list[dict] | None = None, tds_section: str = "",
 ) -> Receipt:
     customer = get_customer(db, context, customer_id)
     value = Decimal(str(amount)).quantize(Decimal("0.01"))
@@ -169,7 +184,7 @@ def record_receipt(
         tenant_id=context.tenant_id, company_id=context.company_id,
         number=next_document_number(db, context, "receipt", "RCT", day), customer_id=customer.id,
         receipt_date=day, amount=value, mode=mode, reference=reference.strip()[:60], notes=notes.strip(),
-        status="Received", created_by=context.user.id,
+        status="Received", created_by=context.user.id, tds_amount=0, tds_section=tds_section.strip().upper()[:10],
     )
     db.add(receipt)
     db.flush()
@@ -178,6 +193,7 @@ def record_receipt(
     left = unallocated(receipt)
     history.record(db, context, "customer", customer.id, "payment",
                    f"Payment {receipt.number}: ₹{float(value):,.2f} by {mode.lower()}"
+                   + (f" plus ₹{float(receipt.tds_amount):,.2f} TDS" if receipt.tds_amount else "")
                    + (f", ₹{float(left):,.2f} kept as advance" if left > 0 else ""))
     db.flush()
     return receipt
@@ -211,9 +227,12 @@ def void_receipt(db: Session, context: RequestContext, receipt_id: UUID, reason:
     for a in receipt.allocations:
         invoice = invoices[a.invoice_id]
         invoice.amount_paid = Decimal(str(invoice.amount_paid)) - Decimal(str(a.amount))
+        invoice.amount_tds = Decimal(str(invoice.amount_tds or 0)) - Decimal(str(a.tds_amount or 0))
+        back = Decimal(str(a.amount)) + Decimal(str(a.tds_amount or 0))
         history.record(db, context, "invoice", invoice.id, "payment_voided",
-                       f"Payment {receipt.number} voided — {reason}; ₹{float(a.amount):,.2f} owed again")
+                       f"Payment {receipt.number} voided — {reason}; ₹{float(back):,.2f} owed again")
     receipt.allocations.clear()
+    receipt.tds_amount = 0
     receipt.status, receipt.void_reason = "Voided", reason[:200]
     history.record(db, context, "customer", receipt.customer_id, "payment_voided",
                    f"Payment {receipt.number} (₹{float(receipt.amount):,.2f}) voided — {reason}")
@@ -226,3 +245,14 @@ def invoice_payments(db: Session, invoice_id: UUID) -> list[tuple[ReceiptAllocat
         select(ReceiptAllocation, Receipt).join(Receipt, Receipt.id == ReceiptAllocation.receipt_id)
         .where(ReceiptAllocation.invoice_id == invoice_id).order_by(Receipt.receipt_date, Receipt.number)
     ).all())
+
+
+def set_tds_certificate(db: Session, context: RequestContext, receipt_id: UUID, received: bool) -> Receipt:
+    receipt = get_receipt(db, context, receipt_id, lock=True)
+    if not receipt.tds_amount:
+        raise ConflictError(f"No TDS was deducted on {receipt.number}.")
+    receipt.tds_certificate_received = received
+    history.record(db, context, "customer", receipt.customer_id, "tds_certificate",
+                   f"TDS certificate for {receipt.number} {'received' if received else 'marked as not received'}")
+    db.commit()
+    return receipt

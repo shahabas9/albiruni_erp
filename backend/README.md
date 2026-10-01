@@ -637,3 +637,18 @@ invoice for printing.
   WhatsApp — no WhatsApp Business API provider is wired in.
   `GET /api/sales/share/recipients?customer_id=` lists the customer's
   contacts with an email or phone to pick from.
+
+### TDS deducted by customers
+
+- A payment's allocations can carry `tds_amount` alongside `amount`: tax the
+  customer deducted at source instead of paying it. It settles the invoice
+  like money received (`invoices.amount_tds`; balance = total − paid −
+  credited − TDS), so an invoice paid net of TDS shows as Paid. The receipt
+  records the section (`tds_section`, required with any TDS: 194Q, 194C,
+  194J…). TDS above 20% of an invoice is refused as a likely typo. Voiding the
+  payment takes the TDS back off too. Migration `0003`.
+- `POST /api/sales/payments/{id}/tds-certificate` marks the customer's Form
+  16A as received.
+- `GET /api/sales/reports/tds` (and `tds.csv`) lists TDS deducted per invoice
+  in a period with the customer's PAN (taken from their GSTIN), the section
+  and whether the certificate came in, to match against Form 26AS.

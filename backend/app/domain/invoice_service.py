@@ -26,7 +26,7 @@ from app.models.tenant import Company
 
 def balance(invoice: Invoice) -> Decimal:
     return (Decimal(str(invoice.grand_total)) - Decimal(str(invoice.amount_paid))
-            - Decimal(str(invoice.amount_credited)))
+            - Decimal(str(invoice.amount_credited)) - Decimal(str(invoice.amount_tds or 0)))
 
 
 def payment_status(invoice: Invoice, today: date | None = None) -> str:
@@ -60,7 +60,7 @@ def list_invoices(
 ):
     """status: Draft, Issued, or a payment state — unpaid (anything still owed), overdue, paid."""
 
-    left = Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited
+    left = Invoice.left_expr()
     stmt = (
         select(Invoice)
         .join(Customer, Customer.id == Invoice.customer_id)

@@ -121,7 +121,7 @@ def raise_overdue_invoice_alerts(db: Session) -> int:
     issued it and to the owner of the deal it came from."""
 
     today = crm_service.now_utc().date()
-    left = Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited
+    left = Invoice.left_expr()
     due = db.execute(
         select(Invoice)
         .where(Invoice.status == "Issued", Invoice.due_date < today, left > 0, Invoice.overdue_notified_at.is_(None))
@@ -138,7 +138,7 @@ def raise_overdue_invoice_alerts(db: Session) -> int:
             people.add(db.get(Opportunity, order.opportunity_id).owner_user_id)
         context = RequestContext(user=None, tenant_id=inv.tenant_id, company_id=inv.company_id, permissions=[],
                                  locale="en-IN")
-        owed = float(inv.grand_total) - float(inv.amount_paid) - float(inv.amount_credited)
+        owed = float(inv.grand_total) - float(inv.amount_paid) - float(inv.amount_credited) - float(inv.amount_tds)
         for user_id in people - {None}:
             notify(db, context, user_id, "invoice_overdue", f"Overdue: {inv.number} ({inv.buyer_name})",
                    f"₹{owed:,.2f} was due on {inv.due_date:%d %b %Y}.", f"/sales/invoices/{inv.id}")
