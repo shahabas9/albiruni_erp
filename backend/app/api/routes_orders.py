@@ -12,7 +12,7 @@ from app.domain.errors import ConflictError, NotFoundError
 from app.models.identity import User
 from app.models.documents import SalesOrder
 from app.models.sales import Quotation
-from app.schemas.orders import DocLineOut, OrderIn, OrderOut, OrderUpdate, ReasonIn
+from app.schemas.orders import DocLineOut, OrderIn, OrderOut, OrderUpdate, QuickSaleIn, QuickSaleOut, ReasonIn
 from app.toolgateway.executor import execute_tool
 
 router = APIRouter(prefix="/api/sales", tags=["sales orders"])
@@ -155,3 +155,21 @@ def confirm_order(order_id: UUID, context: RequestContext = Depends(require_perm
 def cancel_order(order_id: UUID, body: ReasonIn, context: RequestContext = Depends(require_permission(WRITE)),
                  db: Session = Depends(get_db)):
     return _run(db, context, "sales.cancel_order.v1", order_id, "[form] Cancel sales order", reason=body.reason)
+
+
+@router.post("/quick-sale", response_model=QuickSaleOut)
+def quick_sale(body: QuickSaleIn, context: RequestContext = Depends(require_permission("sales.invoice.write")),
+               db: Session = Depends(get_db)):
+    """Counter sale: order, delivery, issued invoice and payment in one go — all or nothing.
+    Needs the order, delivery and invoice permissions (and payment, when paid)."""
+
+    args = {
+        "customer_id": str(body.customer_id) if body.customer_id else None,
+        "lines": [{"item_id": str(l.item_id), "qty": l.qty, **({"unit_price": l.unit_price} if l.unit_price is not None else {})}
+                  for l in body.lines],
+        "discount_pct": body.discount_pct, "notes": body.notes,
+        "payment": body.payment.model_dump() if body.payment else None,
+    }
+    result = execute_tool(db, context, "sales.quick_sale.v1", args, request_text="[form] Counter sale",
+                          intent="quick_sale", correlation_id=new_correlation_id(), confirmed=True)
+    return QuickSaleOut(order_id=result["order_id"], invoice_id=result["invoice_id"], receipt_id=result["receipt_id"])

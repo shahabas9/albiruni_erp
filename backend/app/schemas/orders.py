@@ -147,3 +147,25 @@ class StockMovementOut(BaseModel):
 class StockAdjustIn(BaseModel):
     counted_qty: float = Field(ge=0, le=100_000_000)
     reason: str = Field(min_length=1, max_length=200)
+
+
+class QuickPaymentIn(BaseModel):
+    amount: float = Field(gt=0, le=1_000_000_000)
+    mode: str = Field(max_length=20)
+    reference: str = Field(default="", max_length=60)
+
+
+class QuickSaleIn(BaseModel):
+    # Leave out for the company's walk-in customer.
+    customer_id: UUID | None = None
+    lines: list[DocLineIn] = Field(min_length=1, max_length=200)
+    discount_pct: float = Field(default=0, ge=0, le=100)
+    notes: str = Field(default="", max_length=2000)
+    # Leave out when the customer pays later.
+    payment: QuickPaymentIn | None = None
+
+
+class QuickSaleOut(BaseModel):
+    order_id: UUID
+    invoice_id: UUID
+    receipt_id: UUID | None

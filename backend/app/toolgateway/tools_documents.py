@@ -217,3 +217,27 @@ register_tool(ToolDefinition(
     name="sales.draft_invoice.v1", purpose="Draft an invoice for what's delivered and not yet invoiced on an order.",
     permission="sales.invoice.write", risk_level="L2 Prepare", handler=draft_invoice,
 ))
+
+
+def quick_sale(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    from app.domain import quick_sale as qs
+
+    try:
+        order, invoice, receipt = qs.quick_sale(
+            db, context, customer_id=UUID(args["customer_id"]) if args.get("customer_id") else None,
+            lines=args["lines"], discount_pct=float(args.get("discount_pct") or 0), notes=args.get("notes", ""),
+            payment=args.get("payment"),
+        )
+    except (ConflictError, NotFoundError, PermissionError) as exc:
+        raise ToolValidationError(str(exc)) from exc
+    paid = f", ₹{float(receipt.amount):,.2f} received" if receipt else ", not paid yet"
+    return {"order_id": str(order.id), "invoice_id": str(invoice.id),
+            "receipt_id": str(receipt.id) if receipt else None,
+            "result_summary": f"Counter sale: {invoice.number} for {invoice.buyer_name} "
+                              f"(₹{float(invoice.grand_total):,.2f}){paid}"}
+
+
+register_tool(ToolDefinition(
+    name="sales.quick_sale.v1", purpose="Counter sale: order, delivery, invoice and payment in one step.",
+    permission="sales.invoice.write", risk_level="L3 Execute", handler=quick_sale,
+))

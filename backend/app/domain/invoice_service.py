@@ -113,7 +113,7 @@ def _price(invoice: Invoice, company: Company) -> None:
 
 
 def create_draft(db: Session, context: RequestContext, order_id: UUID, lines: list[dict] | None = None,
-                 notes: str = "") -> Invoice:
+                 notes: str = "", *, commit: bool = True) -> Invoice:
     """lines: [{order_line_id, qty}]; leave out for the default quantities."""
 
     order = get_order(db, context, order_id, lock=True)
@@ -161,7 +161,8 @@ def create_draft(db: Session, context: RequestContext, order_id: UUID, lines: li
     db.add(invoice)
     db.flush()
     history.record(db, context, "invoice", invoice.id, "created", f"Draft invoice for order {order.number}")
-    db.commit()
+    if commit:
+        db.commit()
     return invoice
 
 

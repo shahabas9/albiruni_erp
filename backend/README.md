@@ -593,3 +593,15 @@ Schema changes are Alembic migrations in `backend/alembic/versions`
 MIGRATION_TEST_DB=postgresql+psycopg://USER:PASS@localhost/EMPTY_DB \
   .venv/bin/python -m unittest tests.test_migrations -v
 ```
+
+### Quick sale (counter sales)
+
+`POST /api/sales/quick-sale` (audited tool `sales.quick_sale.v1`) does a
+counter sale in one transaction: a confirmed order, delivery of the goods,
+an issued tax invoice and, when `payment` is given, a receipt against it.
+The usual rules still apply at each step (manager approval for big
+discounts, credit limit, stock, GST rates); any refusal saves nothing. With
+no `customer_id` the sale goes on the company's "Walk-in customer". It needs
+the order, delivery and invoice write permissions, plus payments when paid.
+The Quick sale page shows the change to give back for cash and opens the
+invoice for printing.

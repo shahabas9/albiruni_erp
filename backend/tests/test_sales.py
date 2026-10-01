@@ -33,6 +33,7 @@ from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.items import ItemIn, ItemUpdate
 from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn
 from app.schemas.orders import (
+    QuickPaymentIn, QuickSaleIn,
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
 )
 from app.schemas.sales import CompanyProfileUpdate, QuotationActionIn
@@ -911,6 +912,49 @@ class AskAndAlertTests(SalesTestCase):
             Notification.tenant_id == self.context.tenant_id, Notification.kind == "invoice_overdue",
         )).scalars().all()
         self.assertEqual([(a.user_id, a.link) for a in alerts], [(issuer.user.id, f"/sales/invoices/{invoice.id}")])
+
+
+
+class QuickSaleTests(SalesTestCase):
+    def sell(self, lines, context=None, **fields):
+        body = QuickSaleIn(lines=[DocLineIn(**l) for l in lines], **fields)
+        return routes_orders.quick_sale(body, context or self.context, self.db)
+
+    def test_counter_sale_does_everything_in_one_go(self):
+        goods, service = self.item(stock=20), self.item("Fitting", price=500, stock=0, kind="service")
+        out = self.sell([{"item_id": goods.id, "qty": 2}, {"item_id": service.id, "qty": 1}],
+                        payment=QuickPaymentIn(amount=1581, mode="Cash"))
+        invoice = routes_invoices.get_invoice(out.invoice_id, self.context, self.db)
+        self.assertEqual((invoice.status, invoice.customer_name, invoice.grand_total, invoice.payment_status),
+                         ("Issued", "Walk-in customer", 1581.0, "Paid"))
+        order = routes_orders.get_order(out.order_id, self.context, self.db)
+        self.assertEqual((order.status, order.invoice_status), ("Delivered", "Invoiced"))
+        self.db.refresh(goods)
+        self.assertEqual(float(goods.stock_qty), 18)
+        again = self.sell([{"item_id": goods.id, "qty": 1}])  # same walk-in customer, paid later
+        self.assertIsNone(again.receipt_id)
+        self.assertEqual(routes_invoices.get_invoice(again.invoice_id, self.context, self.db).customer_name,
+                         "Walk-in customer")
+
+    def test_any_refusal_saves_nothing(self):
+        scarce = self.item(stock=1)
+        orders_before = len(routes_orders.list_orders(Response(), "", None, "", False, None, 0, self.context, self.db))
+        with self.assertRaises(HTTPException) as short:
+            self.sell([{"item_id": scarce.id, "qty": 3}])
+        self.assertIn("Only 1", short.exception.detail)
+        with self.assertRaises(HTTPException) as overpaid:
+            self.sell([{"item_id": scarce.id, "qty": 1}], payment=QuickPaymentIn(amount=10000, mode="Cash"))
+        self.assertIn("change", overpaid.exception.detail)
+        self.assertEqual(len(routes_orders.list_orders(Response(), "", None, "", False, None, 0, self.context,
+                                                       self.db)), orders_before)
+        self.db.refresh(scarce)
+        self.assertEqual(float(scarce.stock_qty), 1)
+        clerk = self.make_context(["sales.invoice.write", "sales.order.write"], self.context.tenant_id,
+                                  self.context.company_id)
+        self.db.commit()  # a refused sale rolls back; the user must already be saved
+        with self.assertRaises(HTTPException) as denied:
+            self.sell([{"item_id": scarce.id, "qty": 1}], clerk)
+        self.assertIn("sales.delivery.write", denied.exception.detail)
 
 
 if __name__ == "__main__":

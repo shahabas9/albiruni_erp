@@ -82,6 +82,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       label: "Sales",
       icon: "file",
       children: [
+        { to: "/sales/quick-sale", label: "Quick sale", permission: "sales.invoice.write" },
         { to: "/sales", label: "Quotations", permission: "sales.quotation.read" },
         { to: "/sales/orders", label: "Orders", permission: "sales.order.read" },
         { to: "/sales/deliveries", label: "Deliveries", permission: "sales.order.read" },

@@ -161,14 +161,17 @@ def _new_order(db: Session, context: RequestContext, customer: Customer, **field
     return order
 
 
-def create_order(db: Session, context: RequestContext, body: OrderIn) -> tuple[SalesOrder, list[str]]:
+def create_order(
+    db: Session, context: RequestContext, body: OrderIn, *, commit: bool = True,
+) -> tuple[SalesOrder, list[str]]:
     customer = get_customer(db, context, body.customer_id)
     order = _new_order(db, context, customer, order_date=body.order_date, customer_po=body.customer_po.strip(),
                        notes=body.notes.strip())
     warnings = price_lines(db, context, order, customer, _lines_from(db, context, body.lines), body.discount_pct)
     db.flush()
     history.record(db, context, "sales_order", order.id, "created", f"Order {order.number} drafted")
-    db.commit()
+    if commit:
+        db.commit()
     return order, warnings
 
 

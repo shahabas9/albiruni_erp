@@ -584,3 +584,19 @@ export function fetchGstr1(dateFrom: string, dateTo: string): Promise<Gstr1> {
 export function downloadReport(kind: "register" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
   return downloadFile(`/api/sales/reports/${kind}.csv?date_from=${dateFrom}&date_to=${dateTo}`, `${kind}.csv`);
 }
+
+// --- Counter sale ----------------------------------------------------------------------
+
+export interface QuickSaleInput {
+  /** Omit for the company's walk-in customer. */
+  customer_id?: string;
+  lines: DocLineInput[];
+  discount_pct: number;
+  notes: string;
+  /** Omit when the customer pays later. */
+  payment?: { amount: number; mode: PaymentMode; reference: string };
+}
+
+export function quickSale(body: QuickSaleInput): Promise<{ order_id: string; invoice_id: string; receipt_id: string | null }> {
+  return request(`/api/sales/quick-sale`, { method: "POST", body: JSON.stringify(body) });
+}
