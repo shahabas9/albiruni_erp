@@ -1278,5 +1278,49 @@ class RefundTests(SalesTestCase):
         self.assertEqual(denied.exception.status_code, 403)
 
 
+class SalesListToolsTests(SalesTestCase):
+    def export(self, kind, context=None, **params):
+        import csv as csvlib
+        from starlette.requests import Request
+        from app.api import routes_exports
+
+        query = "&".join(f"{k}={v}" for k, v in params.items()).encode()
+        request = Request({"type": "http", "method": "GET", "path": f"/api/exports/{kind}.csv",
+                           "query_string": query, "headers": []})
+        response = routes_exports.export_csv(kind, request, context or self.context, self.db)
+        return list(csvlib.reader(response.body.decode("utf-8")[1:].splitlines()))
+
+    def test_orders_invoices_and_payments_export_with_their_filters(self):
+        customer = self.customer(gstin=KERALA_CUSTOMER_GSTIN)
+        paid = self.invoice_for(customer, 1)  # 496
+        self.invoice_for(customer, 2)  # 991, left unpaid
+        self.pay(customer, 496 + 100, allocations=[AllocationIn(invoice_id=paid.id, amount=496)])
+        self.order(customer, [{"item_id": self.item(name="Extra").id, "qty": 1}])  # a draft
+
+        orders = self.export("orders", status="Draft")
+        self.assertEqual(orders[0][:3], ["Order", "Date", "Customer"])
+        self.assertEqual([r[5] for r in orders[1:]], ["Draft"])
+        invoices = self.export("invoices", status="unpaid")
+        self.assertEqual(len(invoices), 2)
+        self.assertEqual((invoices[1][4], invoices[1][10], invoices[1][15], invoices[1][16]),
+                         (KERALA_CUSTOMER_GSTIN, "991.0", "991.0", "Unpaid"))
+        self.assertEqual(len(self.export("invoices")), 3)
+        payments = self.export("payments", with_advance="true")
+        self.assertEqual((len(payments), payments[1][8], payments[1][11]), (2, paid.number, "100.0"))
+
+        seller = self.make_context(["sales.order.read", "crm.export"], self.context.tenant_id, self.context.company_id)
+        self.assertEqual(len(self.export("orders", seller)), 4)
+        with self.assertRaises(HTTPException) as denied:
+            self.export("invoices", seller)
+        self.assertEqual(denied.exception.status_code, 403)
+
+    def test_sales_lists_have_saved_views(self):
+        from app.api import routes_views
+
+        view = routes_views.create_view(routes_views.ViewIn(page="invoices", name="Overdue", filters={"status": "overdue"}),
+                                        self.context, self.db)
+        self.assertEqual([v.name for v in routes_views.list_views("invoices", self.context, self.db)], [view.name])
+
+
 if __name__ == "__main__":
     unittest.main()

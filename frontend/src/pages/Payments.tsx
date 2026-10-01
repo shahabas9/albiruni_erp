@@ -2,6 +2,9 @@ import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { allocatePayment, fetchPayment, fetchPayments, setTdsCertificate, voidPayment, type Receipt } from "../api/sales";
+import { ExportButton } from "../components/ExportButton";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { Drawer, ErrorNote, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, docStatusClass, inr } from "../lib/format";
@@ -13,9 +16,10 @@ import { SendModal } from "../sales/SendModal";
 
 export function Payments() {
   const { can, version } = useAppData();
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => String(recallFilters("payments").search ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
-  const [advancesOnly, setAdvancesOnly] = useState(false);
+  const [advancesOnly, setAdvancesOnly] = useState(() => recallFilters("payments").advance === "yes");
+  const [error, setError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [opened, setOpened] = useState<Receipt | null>(null);
   const list = usePaged(
@@ -40,14 +44,20 @@ export function Payments() {
             With advance left
           </button>
         </div>
+        <SavedViews
+          page="payments"
+          filters={{ advance: advancesOnly ? "yes" : "", search }}
+          onApply={(f) => (setAdvancesOnly(f.advance === "yes"), setSearch(String(f.search ?? "")))}
+        />
         <SearchBox value={search} onChange={onSearch} placeholder="Receipt no., customer or reference" />
+        <ExportButton kind="payments" filters={{ q: search, with_advance: advancesOnly || undefined }} onError={setError} />
         {can("sales.payment.write") && (
           <button className="primary-btn" onClick={() => setRecording(true)}>
             + Record payment
           </button>
         )}
       </div>
-      {list.error && <div className="error-banner">{list.error}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
       {!list.loading && list.total === 0 && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {search || advancesOnly ? "No payments match." : "No payments recorded yet."}

@@ -1,6 +1,9 @@
 import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { fetchOrders } from "../api/sales";
+import { ExportButton } from "../components/ExportButton";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, docStatusClass, inr } from "../lib/format";
@@ -17,8 +20,9 @@ const FILTERS = [
 export function Orders() {
   const { can, version } = useAppData();
   const navigate = useNavigate();
-  const [status, setStatus] = useState("");
-  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState(() => String(recallFilters("orders").status ?? ""));
+  const [search, setSearch] = useState(() => String(recallFilters("orders").search ?? ""));
+  const [error, setError] = useState<string | null>(null);
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const list = usePaged((limit, offset) => fetchOrders({ status, q: search, limit, offset }), `${status}|${search}`, version);
 
@@ -38,7 +42,13 @@ export function Orders() {
             </button>
           ))}
         </div>
+        <SavedViews
+          page="orders"
+          filters={{ status, search }}
+          onApply={(f) => (setStatus(String(f.status ?? "")), setSearch(String(f.search ?? "")))}
+        />
         <SearchBox value={search} onChange={onSearch} placeholder="Order no., customer or PO" />
+        <ExportButton kind="orders" filters={{ status, q: search }} onError={setError} />
         {can("sales.order.write") && (
           <button className="primary-btn" onClick={() => navigate("/sales/orders/new")}>
             + New order
@@ -46,7 +56,7 @@ export function Orders() {
         )}
       </div>
 
-      {list.error && <div className="error-banner">{list.error}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
       {!list.loading && list.total === 0 && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {status || search ? "No orders match this filter." : "No orders yet. Turn an accepted quotation into one, or add one directly."}

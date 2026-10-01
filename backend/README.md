@@ -697,3 +697,12 @@ invoice for printing.
   statement. A payment with a refund on it can't be voided until the refund
   is (`POST /api/sales/refunds/{id}/void`). `GET /api/sales/refundable?customer_id=`
   lists what could be paid back. Migration `0006`.
+
+### Sales lists: export and saved views
+
+- Orders, Invoices and Payments have "Export CSV" (`/api/exports/orders.csv`,
+  `invoices.csv`, `payments.csv`) with the list's current filters (`status`,
+  `q`, `customer_id`, `with_advance`), and saved views like the CRM lists.
+  Exports need `crm.export` plus the list's read permission and are audited
+  (`crm.export_records.v1`). The invoice export carries the GST split,
+  paid/credited/TDS/refunded and balance per invoice.

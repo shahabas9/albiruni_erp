@@ -1211,7 +1211,7 @@ export function fetchCustomerTimeline(id: string): Promise<TimelineEntry[]> {
 
 // --- Export ----------------------------------------------------------------------
 
-export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities" | "orders" | "invoices" | "payments";
 
 /** Downloads a list as CSV with the given filters (same as the list's query parameters). */
 export function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
@@ -1249,7 +1249,7 @@ export function bulkAction(
 
 // --- Saved views ------------------------------------------------------------------
 
-export type ViewPage = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+export type ViewPage = "leads" | "opportunities" | "customers" | "contacts" | "activities" | "orders" | "invoices" | "payments";
 export type ViewFilters = Record<string, string | boolean | number | null>;
 
 export interface SavedView {

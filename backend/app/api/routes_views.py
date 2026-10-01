@@ -15,7 +15,7 @@ from app.models.identity import User
 
 router = APIRouter(prefix="/api/views", tags=["crm"])
 
-PAGES = ("leads", "opportunities", "customers", "contacts", "activities")
+PAGES = ("leads", "opportunities", "customers", "contacts", "activities", "orders", "invoices", "payments")
 MAX_VIEWS_PER_PAGE = 30
 
 
