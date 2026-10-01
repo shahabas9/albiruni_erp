@@ -89,6 +89,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         { to: "/sales/invoices", label: "Invoices", permission: "sales.invoice.read" },
         { to: "/sales/credit-notes", label: "Credit notes", permission: "sales.invoice.read" },
         { to: "/sales/payments", label: "Payments", permission: "sales.payment.read" },
+        { to: "/sales/refunds", label: "Refunds", permission: "sales.payment.read" },
         { to: "/sales/receivables", label: "Receivables", permission: "sales.invoice.read" },
         { to: "/sales/reports", label: "Reports", permission: "sales.reports.read" },
         { to: "/customers", label: "Customers", permission: "sales.customer.read" },

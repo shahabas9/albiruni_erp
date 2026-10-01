@@ -19,7 +19,7 @@ from app.api import routes_price_lists, routes_ask, routes_share, routes_custome
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
-from app.domain import price_lists, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import price_lists, refund_service, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -31,7 +31,7 @@ from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
 from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.items import ItemIn, ItemUpdate
-from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn, TdsCertificateIn
+from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn, RefundIn, TdsCertificateIn
 from app.schemas.orders import (
     QuickPaymentIn, QuickSaleIn,
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
@@ -1205,6 +1205,77 @@ class PricingTests(SalesTestCase):
         order = routes_orders.order_from_quotation(quote.id, Response(), self.context, self.db)
         self.assertEqual((order.lines[0].discount_pct, order.lines[0].list_price, order.grand_total, order.needs_approval),
                          (1, 400, quote.grand_total, False))
+
+
+class RefundTests(SalesTestCase):
+    def refund(self, amount, context=None, **fields):
+        body = RefundIn(amount=amount, mode=fields.pop("mode", "UPI"), reference=fields.pop("reference", "UTR9"),
+                        reason=fields.pop("reason", "Order cancelled"), **fields)
+        return routes_payments.create_refund(body, context or self.context, self.db)
+
+    def test_advances_are_paid_back_and_can_be_voided(self):
+        customer = self.customer()
+        receipt = self.pay(customer, 1000)  # no invoices: all advance
+        self.assertEqual(refund_service.refundable(self.db, self.context, customer.id)["total"], 1000)
+        refund = self.refund(400, receipt_id=receipt.id)
+        self.assertRegex(refund.number, r"^RFD/\d\d-\d\d/00001$")
+        self.assertEqual((refund.source_number, refund.status), (receipt.number, "Paid"))
+        after = routes_payments.get_payment(receipt.id, self.context, self.db)
+        self.assertEqual((after.unallocated, after.refunded), (600, 400))
+        self.assertEqual(receivables.advances(self.db, self.context, customer.id), 600)
+        with self.assertRaises(HTTPException) as too_much:
+            self.refund(700, receipt_id=receipt.id)
+        self.assertIn("600", too_much.exception.detail)
+        with self.assertRaises(HTTPException) as void_payment:  # the refund depends on it
+            routes_payments.void_payment(receipt.id, ReasonIn(reason="Bounced"), self.context, self.db)
+        self.assertIn("refund", void_payment.exception.detail)
+
+        statement = receivables.statement(self.db, self.context, customer.id, date.today(), date.today())
+        self.assertEqual([l["kind"] for l in statement["lines"]], ["Payment", "Refund"])
+        self.assertEqual(statement["closing_balance"], -600)
+
+        routes_payments.void_refund(refund.id, ReasonIn(reason="Typed twice"), self.context, self.db)
+        self.assertEqual(routes_payments.get_payment(receipt.id, self.context, self.db).unallocated, 1000)
+        with self.assertRaises(HTTPException):
+            routes_payments.void_refund(refund.id, ReasonIn(reason="Again"), self.context, self.db)
+
+    def test_a_paid_invoice_credited_later_is_refunded_from_its_credit_balance(self):
+        customer = self.customer()
+        item = self.item()
+        order = self.confirmed_order([{"item_id": item.id, "qty": 2}], customer)
+        self.deliver(order, {0: 2})
+        invoice = self.issue(self.draft(order))  # 2 × 420 + 18% = 991
+        self.pay(customer, 991)
+        self.credit(invoice, "Return", {0: {"qty": 1}})  # 496 back
+        self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).balance, -496)
+        self.assertEqual(refund_service.refundable(self.db, self.context, customer.id)["credits"][0]["available"], 496)
+
+        self.refund(496, invoice_id=invoice.id, mode="Cash", reference="")
+        cleared = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((cleared.balance, cleared.amount_refunded, cleared.payment_status), (0, 496, "Paid"))
+        self.assertEqual(receivables.net_owed(self.db, self.context, customer.id), 0)
+        with self.assertRaises(HTTPException) as nothing:
+            self.refund(1, invoice_id=invoice.id)
+        self.assertIn("Nothing is owed back", nothing.exception.detail)
+
+    def test_refund_rules(self):
+        customer = self.customer()
+        receipt = self.pay(customer, 500)
+        invoice = self.invoice_for(customer, 1)
+        for fields, message in [
+            ({}, "either"),
+            ({"receipt_id": receipt.id, "invoice_id": invoice.id}, "either"),
+            ({"receipt_id": receipt.id, "reference": ""}, "UTR"),
+            ({"receipt_id": receipt.id, "refund_date": date.today() + timedelta(days=1)}, "future"),
+            ({"invoice_id": invoice.id}, "Nothing is owed back"),
+        ]:
+            with self.assertRaises(HTTPException) as refused:
+                self.refund(10, **fields)
+            self.assertIn(message, refused.exception.detail)
+        clerk = self.make_context(["sales.payment.read"], self.context.tenant_id, self.context.company_id)
+        with self.assertRaises(HTTPException) as denied:
+            self.refund(10, clerk, receipt_id=receipt.id)
+        self.assertEqual(denied.exception.status_code, 403)
 
 
 if __name__ == "__main__":

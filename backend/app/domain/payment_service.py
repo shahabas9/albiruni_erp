@@ -37,7 +37,9 @@ def allocated(receipt: Receipt) -> Decimal:
 
 
 def unallocated(receipt: Receipt) -> Decimal:
-    return ZERO if receipt.status == "Voided" else Decimal(str(receipt.amount)) - allocated(receipt)
+    if receipt.status == "Voided":
+        return ZERO
+    return Decimal(str(receipt.amount)) - allocated(receipt) - Decimal(str(receipt.amount_refunded or 0))
 
 
 def get_receipt(db: Session, context: RequestContext, receipt_id: UUID, *, lock: bool = False) -> Receipt:
@@ -71,7 +73,7 @@ def list_receipts(
     if with_advance:
         used = (select(func.coalesce(func.sum(ReceiptAllocation.amount), 0))
                 .where(ReceiptAllocation.receipt_id == Receipt.id).scalar_subquery())
-        stmt = stmt.where(Receipt.status == "Received", Receipt.amount > used)
+        stmt = stmt.where(Receipt.status == "Received", Receipt.amount - Receipt.amount_refunded > used)
     if q.strip():
         stmt = stmt.where(crm_service.search(q, Receipt.number, Customer.name, Receipt.reference))
     return crm_service.page(db, stmt.order_by(Receipt.receipt_date.desc(), Receipt.number.desc()), limit, offset)
@@ -220,6 +222,8 @@ def void_receipt(db: Session, context: RequestContext, receipt_id: UUID, reason:
     receipt = get_receipt(db, context, receipt_id, lock=True)
     if receipt.status == "Voided":
         raise ConflictError(f"{receipt.number} is already voided.")
+    if Decimal(str(receipt.amount_refunded or 0)) > 0:
+        raise ConflictError(f"Part of {receipt.number} was refunded — void the refund first.")
     ids = sorted({a.invoice_id for a in receipt.allocations})
     invoices = {i.id: i for i in db.execute(
         select(Invoice).where(Invoice.id.in_(ids)).order_by(Invoice.id).with_for_update()

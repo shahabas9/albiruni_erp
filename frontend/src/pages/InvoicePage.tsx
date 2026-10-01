@@ -16,6 +16,7 @@ import { useAppData } from "../data/AppDataProvider";
 import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format";
 import { CreditNoteModal } from "../sales/CreditNoteModal";
 import { PaymentModal } from "../sales/PaymentModal";
+import { RefundModal } from "../sales/RefundModal";
 import { SendModal } from "../sales/SendModal";
 import { DocTotals } from "../sales/DocTotals";
 
@@ -30,6 +31,7 @@ export function InvoicePage() {
   const [issueDate, setIssueDate] = useState(todayIso());
   const [notes, setNotes] = useState<CreditNote[]>([]);
   const [crediting, setCrediting] = useState(false);
+  const [refunding, setRefunding] = useState(false);
   const [paying, setPaying] = useState(false);
   const [sending, setSending] = useState<{ kind: "invoice" | "credit_note"; id: string; title: string; reminder?: boolean } | null>(null);
 
@@ -111,6 +113,11 @@ export function InvoicePage() {
           {!draft && can("sales.payment.write") && invoice.balance > 0 && (
             <button className="primary-btn" onClick={() => setPaying(true)}>
               Record payment
+            </button>
+          )}
+          {!draft && can("sales.payment.write") && invoice.balance < 0 && (
+            <button className="primary-btn" onClick={() => setRefunding(true)}>
+              Refund {inr(-invoice.balance)}
             </button>
           )}
           {!draft && can("sales.credit_note.write") && invoice.amount_credited < invoice.grand_total && (
@@ -199,9 +206,15 @@ export function InvoicePage() {
                   <dd className="num">{inr(invoice.amount_credited)}</dd>
                 </div>
               )}
+              {invoice.amount_refunded > 0 && (
+                <div>
+                  <dt>Refunded to customer</dt>
+                  <dd className="num">{inr(invoice.amount_refunded)}</dd>
+                </div>
+              )}
               <div className="grand">
-                <dt>Balance due</dt>
-                <dd className="num">{inr(invoice.balance)}</dd>
+                <dt>{invoice.balance < 0 ? "We owe the customer" : "Balance due"}</dt>
+                <dd className="num">{inr(Math.abs(invoice.balance))}</dd>
               </div>
             </dl>
           )}
@@ -315,6 +328,16 @@ export function InvoicePage() {
           onClose={() => setPaying(false)}
           onDone={() => {
             setPaying(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
+      {refunding && (
+        <RefundModal
+          source={{ invoice_id: invoice.id, number: invoice.number ?? "", customer_name: invoice.customer_name, available: -invoice.balance }}
+          onClose={() => setRefunding(false)}
+          onDone={() => {
+            setRefunding(false);
             setChanges((n) => n + 1);
           }}
         />

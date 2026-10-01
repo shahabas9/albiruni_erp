@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
 from app.domain import (
-    credit_note_service, delivery_service, invoice_service, order_service, payment_service, sales_reports,
-    share_service,
+    credit_note_service, delivery_service, invoice_service, order_service, payment_service, refund_service,
+    sales_reports, share_service,
 )
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
@@ -111,7 +111,31 @@ def void_payment(db: Session, context: RequestContext, args: dict[str, Any]) -> 
             "result_summary": f"Voided payment {receipt.number}: {receipt.void_reason}"}
 
 
+@_guard
+def create_refund(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    refund = refund_service.create_refund(
+        db, context, amount=float(args["amount"]), mode=args["mode"], reason=str(args.get("reason", "")),
+        reference=args.get("reference", ""),
+        refund_date=date.fromisoformat(args["refund_date"]) if args.get("refund_date") else None,
+        receipt_id=UUID(str(args["receipt_id"])) if args.get("receipt_id") else None,
+        invoice_id=UUID(str(args["invoice_id"])) if args.get("invoice_id") else None,
+    )
+    return {"refund_id": str(refund.id), "number": refund.number,
+            "result_summary": f"Refunded ₹{float(refund.amount):,.2f} to {refund.customer.name} ({refund.number})"}
+
+
+@_guard
+def void_refund(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    refund = refund_service.void_refund(db, context, UUID(str(args["refund_id"])), str(args.get("reason", "")))
+    return {"refund_id": str(refund.id), "number": refund.number,
+            "result_summary": f"Voided refund {refund.number}: {refund.void_reason}"}
+
+
 for name, purpose, permission, handler in [
+    ("sales.create_refund.v1", "Pay a customer back from an advance or an invoice's credit balance.",
+     "sales.payment.write", create_refund),
+    ("sales.void_refund.v1", "Void a refund entered by mistake; the amount is owed back again.",
+     "sales.payment.write", void_refund),
     ("sales.record_payment.v1", "Record money received and apply it to invoices.", "sales.payment.write",
      record_payment),
     ("sales.allocate_payment.v1", "Apply an advance payment to invoices.", "sales.payment.write", allocate_payment),

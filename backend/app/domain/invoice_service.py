@@ -26,7 +26,8 @@ from app.models.tenant import Company
 
 def balance(invoice: Invoice) -> Decimal:
     return (Decimal(str(invoice.grand_total)) - Decimal(str(invoice.amount_paid))
-            - Decimal(str(invoice.amount_credited)) - Decimal(str(invoice.amount_tds or 0)))
+            - Decimal(str(invoice.amount_credited)) - Decimal(str(invoice.amount_tds or 0))
+            + Decimal(str(invoice.amount_refunded or 0)))
 
 
 def payment_status(invoice: Invoice, today: date | None = None) -> str:

@@ -682,3 +682,18 @@ invoice for printing.
   document's discount (10% then 5% is 14.5%). Combined over 2% needs
   approval, like the document discount. It carries from quotation to order
   to invoice and shows on prints. Migration `0005`.
+
+### Refunds
+
+- Money paid back to a customer comes from one of two places: a payment's
+  advance (the part not applied to invoices — "Refund advance" on the
+  payment), or an invoice's credit balance (a credit note after it was paid
+  takes the balance below zero — "Refund ₹…" on the invoice).
+  `POST /api/sales/refunds` with exactly one of `receipt_id`/`invoice_id`;
+  numbered RFD/26-27/00001, needs `sales.payment.write`, goes through the
+  `sales.create_refund.v1` tool.
+- `receipts.amount_refunded` lowers the advance left; `invoices.amount_refunded`
+  brings a negative balance back to zero. Refunds are debits on the customer
+  statement. A payment with a refund on it can't be voided until the refund
+  is (`POST /api/sales/refunds/{id}/void`). `GET /api/sales/refundable?customer_id=`
+  lists what could be paid back. Migration `0006`.

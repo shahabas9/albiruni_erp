@@ -1,13 +1,14 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { allocatePayment, fetchPayments, setTdsCertificate, voidPayment, type Receipt } from "../api/sales";
+import { allocatePayment, fetchPayment, fetchPayments, setTdsCertificate, voidPayment, type Receipt } from "../api/sales";
 import { Drawer, ErrorNote, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, docStatusClass, inr } from "../lib/format";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 import { PaymentModal } from "../sales/PaymentModal";
 import { ReasonModal } from "../sales/ReasonModal";
+import { RefundModal } from "../sales/RefundModal";
 import { SendModal } from "../sales/SendModal";
 
 export function Payments() {
@@ -120,6 +121,7 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
   const [error, setError] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
   const [sending, setSending] = useState(false);
+  const [refunding, setRefunding] = useState(false);
   const canWrite = can("sales.payment.write") && r.status === "Received";
 
   async function applyAdvance() {
@@ -157,6 +159,12 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
           <div>
             <dt>TDS deducted ({r.tds_section})</dt>
             <dd className="num">{inr(r.tds_amount)}</dd>
+          </div>
+        )}
+        {r.refunded > 0 && (
+          <div>
+            <dt>Refunded</dt>
+            <dd className="num">{inr(r.refunded)}</dd>
           </div>
         )}
         <div className="grand">
@@ -214,6 +222,11 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
             Apply advance to unpaid invoices
           </button>
         )}
+        {canWrite && r.unallocated > 0 && (
+          <button className="ghost-btn" disabled={busy} onClick={() => setRefunding(true)}>
+            Refund advance
+          </button>
+        )}
         {canWrite && (
           <button className="danger-btn" disabled={busy} onClick={() => setVoiding(true)}>
             Void
@@ -221,6 +234,16 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
         )}
       </div>
       {sending && <SendModal kind="receipt" id={r.id} customerId={r.customer_id} title={`receipt ${r.number}`} onClose={() => setSending(false)} />}
+      {refunding && (
+        <RefundModal
+          source={{ receipt_id: r.id, number: r.number, customer_name: r.customer_name, available: r.unallocated }}
+          onClose={() => setRefunding(false)}
+          onDone={async () => {
+            setRefunding(false);
+            onChanged(await fetchPayment(r.id));
+          }}
+        />
+      )}
       {voiding && (
         <ReasonModal
           title={`Void ${r.number}?`}

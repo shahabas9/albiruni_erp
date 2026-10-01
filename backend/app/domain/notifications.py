@@ -138,7 +138,8 @@ def raise_overdue_invoice_alerts(db: Session) -> int:
             people.add(db.get(Opportunity, order.opportunity_id).owner_user_id)
         context = RequestContext(user=None, tenant_id=inv.tenant_id, company_id=inv.company_id, permissions=[],
                                  locale="en-IN")
-        owed = float(inv.grand_total) - float(inv.amount_paid) - float(inv.amount_credited) - float(inv.amount_tds)
+        owed = float(inv.grand_total) - float(inv.amount_paid) - float(inv.amount_credited) - float(inv.amount_tds) \
+            + float(inv.amount_refunded)
         for user_id in people - {None}:
             notify(db, context, user_id, "invoice_overdue", f"Overdue: {inv.number} ({inv.buyer_name})",
                    f"₹{owed:,.2f} was due on {inv.due_date:%d %b %Y}.", f"/sales/invoices/{inv.id}")

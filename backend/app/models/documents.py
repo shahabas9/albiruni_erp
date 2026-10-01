@@ -204,6 +204,8 @@ class Invoice(Base):
     amount_credited: Mapped[float] = _money()
     # Tax the customer deducted at source (TDS) instead of paying it to us.
     amount_tds: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
+    # Credit balance paid back to the customer (after a credit note on a paid invoice).
+    amount_refunded: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     notes: Mapped[str] = mapped_column(Text, default="")
     terms: Mapped[str] = mapped_column(Text, default="")
     bank_details: Mapped[str] = mapped_column(Text, default="")
@@ -223,9 +225,10 @@ class Invoice(Base):
 
     @classmethod
     def left_expr(cls):
-        """What's still owed, as SQL: total − paid − credited − TDS deducted."""
+        """What's still owed, as SQL: total − paid − credited − TDS deducted + refunded.
+        Below zero, we owe the customer."""
 
-        return cls.grand_total - cls.amount_paid - cls.amount_credited - cls.amount_tds
+        return cls.grand_total - cls.amount_paid - cls.amount_credited - cls.amount_tds + cls.amount_refunded
     customer: Mapped["Customer"] = relationship()  # noqa: F821
 
 
@@ -339,6 +342,8 @@ class Receipt(Base):
     tds_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     tds_section: Mapped[str] = mapped_column(String(10), default="", server_default="")
     tds_certificate_received: Mapped[bool] = mapped_column(default=False, server_default="false")
+    # Part of the advance paid back to the customer.
+    amount_refunded: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -346,6 +351,37 @@ class Receipt(Base):
         back_populates="receipt", cascade="all, delete-orphan"
     )
     customer: Mapped["Customer"] = relationship()  # noqa: F821
+
+
+class Refund(Base):
+    """Money paid back to a customer: from an advance (a receipt's unapplied
+    part) or an invoice's credit balance (credited after it was paid)."""
+
+    __tablename__ = "refunds"
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_refunds_tenant_number"),)
+
+    id: Mapped[uuid.UUID] = _id()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    number: Mapped[str] = mapped_column(String(16))
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
+    # Exactly one of these: where the money owed back came from.
+    receipt_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("receipts.id"), nullable=True)
+    invoice_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=True)
+    refund_date: Mapped[date] = mapped_column(Date)
+    amount: Mapped[float] = _money()
+    mode: Mapped[str] = mapped_column(String(20))
+    reference: Mapped[str] = mapped_column(String(60), default="")
+    reason: Mapped[str] = mapped_column(String(200))
+    # Paid or Voided (entered by mistake).
+    status: Mapped[str] = mapped_column(String(12), default="Paid")
+    void_reason: Mapped[str] = mapped_column(String(200), default="")
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    customer: Mapped["Customer"] = relationship()  # noqa: F821
+    receipt: Mapped["Receipt | None"] = relationship()
+    invoice: Mapped["Invoice | None"] = relationship()
 
 
 class ReceiptAllocation(Base):

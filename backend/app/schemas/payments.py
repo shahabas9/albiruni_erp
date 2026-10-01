@@ -58,6 +58,7 @@ class ReceiptOut(BaseModel):
     tds_certificate_received: bool = False
     allocated: float
     unallocated: float
+    refunded: float = 0
     amount_in_words: str
     created_by_name: str | None
     created_at: datetime
@@ -76,3 +77,34 @@ class InvoicePaymentOut(BaseModel):
 
 class TdsCertificateIn(BaseModel):
     received: bool
+
+
+class RefundIn(BaseModel):
+    # One of these: an advance payment, or an invoice with a credit balance.
+    receipt_id: UUID | None = None
+    invoice_id: UUID | None = None
+    amount: float = Field(gt=0)
+    mode: Mode
+    reference: str = Field(default="", max_length=60)
+    reason: str = Field(min_length=1, max_length=200)
+    refund_date: date | None = None
+
+
+class RefundOut(BaseModel):
+    id: UUID
+    number: str
+    customer_id: UUID
+    customer_name: str
+    refund_date: date
+    amount: float
+    mode: str
+    reference: str
+    reason: str
+    status: str
+    void_reason: str
+    receipt_id: UUID | None
+    invoice_id: UUID | None
+    # The receipt or invoice number it was paid from.
+    source_number: str
+    created_by_name: str | None
+    created_at: datetime

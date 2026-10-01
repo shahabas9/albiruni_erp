@@ -91,6 +91,7 @@ class InvoiceOut(BaseModel):
     amount_credited: float
     # TDS the customer deducted (settles the invoice like a payment).
     amount_tds: float = 0
+    amount_refunded: float = 0
     balance: float
     notes: str
     terms: str

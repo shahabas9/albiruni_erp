@@ -381,6 +381,8 @@ export interface Invoice extends TaxTotals {
   amount_credited: number;
   /** TDS the customer deducted; settles the invoice like a payment. */
   amount_tds: number;
+  /** Credit balance paid back to the customer. */
+  amount_refunded: number;
   /** Still owed: total − paid − credited − TDS. */
   balance: number;
   notes: string;
@@ -508,6 +510,8 @@ export interface Receipt {
   allocated: number;
   /** Advance: received and not yet applied to an invoice. */
   unallocated: number;
+  /** Part of the advance paid back to the customer. */
+  refunded: number;
   amount_in_words: string;
   created_by_name: string | null;
   created_at: string;
@@ -515,6 +519,48 @@ export interface Receipt {
 }
 
 export const TDS_SECTIONS = ["194Q", "194C", "194J", "194H", "194I", "194O", "Other"];
+
+export interface Refund {
+  id: string;
+  number: string;
+  customer_id: string;
+  customer_name: string;
+  refund_date: string;
+  amount: number;
+  mode: PaymentMode;
+  reference: string;
+  reason: string;
+  status: "Paid" | "Voided";
+  void_reason: string;
+  receipt_id: string | null;
+  invoice_id: string | null;
+  /** The receipt or invoice it was paid from. */
+  source_number: string;
+  created_by_name: string | null;
+  created_at: string;
+}
+
+export interface RefundInput {
+  receipt_id?: string;
+  invoice_id?: string;
+  amount: number;
+  mode: PaymentMode;
+  reference: string;
+  reason: string;
+  refund_date?: string;
+}
+
+export function fetchRefunds(params: { customer_id?: string; q?: string; limit?: number; offset?: number } = {}): Promise<Page<Refund>> {
+  return requestPage<Refund>("/api/sales/refunds", { ...params });
+}
+
+export function createRefund(body: RefundInput): Promise<Refund> {
+  return request<Refund>("/api/sales/refunds", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function voidRefund(id: string, reason: string): Promise<Refund> {
+  return request<Refund>(`/api/sales/refunds/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
+}
 
 export interface ReceiptInput {
   customer_id: string;

@@ -47,7 +47,8 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
         discount_pct=float(inv.discount_pct), total=float(inv.total), cgst=float(inv.cgst), sgst=float(inv.sgst),
         igst=float(inv.igst), round_off=float(inv.round_off), grand_total=float(inv.grand_total),
         amount_in_words=tax.amount_in_words(inv.grand_total), amount_paid=float(inv.amount_paid),
-        amount_credited=float(inv.amount_credited), amount_tds=float(inv.amount_tds or 0), balance=float(invoice_service.balance(inv)), notes=inv.notes,
+        amount_credited=float(inv.amount_credited), amount_tds=float(inv.amount_tds or 0),
+        amount_refunded=float(inv.amount_refunded or 0), balance=float(invoice_service.balance(inv)), notes=inv.notes,
         terms=inv.terms, bank_details=inv.bank_details, created_at=inv.created_at, issued_at=inv.issued_at,
         issued_by_name=issued_by.display_name if issued_by else None,
         lines=[InvoiceLineOut(
