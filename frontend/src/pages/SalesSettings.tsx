@@ -122,6 +122,17 @@ export function SalesSettings() {
               onChange={(e) => set("payment_terms_days", Number(e.target.value))}
             />
           </label>
+          <label className="field">
+            <span>Quotations valid for (days)</span>
+            <input
+              type="number"
+              min={0}
+              max={365}
+              value={draft.quotation_validity_days}
+              disabled={!canEdit}
+              onChange={(e) => set("quotation_validity_days", Number(e.target.value))}
+            />
+          </label>
           <label className="field checkbox-field">
             <input
               type="checkbox"

@@ -25,7 +25,7 @@ from app.models.audit import AuditEvent
 from app.models.documents import Invoice
 from app.models.crm import Opportunity
 from app.models.identity import Role, User
-from app.models.sales import Item
+from app.models.sales import Item, Quotation
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
 from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
@@ -36,7 +36,9 @@ from app.schemas.orders import (
     QuickPaymentIn, QuickSaleIn,
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
 )
-from app.schemas.sales import CompanyProfileUpdate, QuotationActionIn
+from app.schemas.sales import (
+    CompanyProfileUpdate, CreateQuotationIn, QuotationActionIn, QuotationLineIn, QuotationUpdate,
+)
 from app.toolgateway import tools_crm, tools_documents, tools_sales  # noqa: F401 — registers the tools
 
 KERALA_GSTIN = "32AABCA1234F1ZI"
@@ -955,6 +957,48 @@ class QuickSaleTests(SalesTestCase):
         with self.assertRaises(HTTPException) as denied:
             self.sell([{"item_id": scarce.id, "qty": 1}], clerk)
         self.assertIn("sales.delivery.write", denied.exception.detail)
+
+
+
+class QuotationFormTests(SalesTestCase):
+    def create(self, customer, lines, **fields):
+        body = CreateQuotationIn(customer_id=customer.id, lines=[QuotationLineIn(**l) for l in lines], **fields)
+        result = routes_sales.create_quotation(body, self.context, self.db)
+        return routes_sales.get_quotation(UUID(result["quotation_id"]), self.context, self.db)
+
+    def test_form_quotes_pick_items_set_prices_and_expire(self):
+        item = self.item()
+        customer = self.customer()
+        quote = self.create(customer, [{"item_id": item.id, "qty": 10}], notes="Delivery in a week")
+        self.assertEqual((quote.status, quote.grand_total, quote.notes), ("Draft", 4956.0, "Delivery in a week"))
+        self.assertEqual(quote.valid_until, date.today() + timedelta(days=15))
+        cheap = self.create(customer, [{"item_id": item.id, "qty": 10, "unit_price": 400}])
+        self.assertEqual(cheap.status, "Pending approval")  # below list price
+
+        # Editing a draft re-prices it; a bigger discount sends it for approval.
+        edited = routes_sales.update_quotation(quote.id, QuotationUpdate(
+            lines=[QuotationLineIn(item_id=item.id, qty=20)], discount_pct=5), self.context, self.db)
+        self.assertEqual((edited.status, edited.total), ("Pending approval", 7980.0))
+        back = routes_sales.update_quotation(quote.id, QuotationUpdate(discount_pct=1), self.context, self.db)
+        self.assertEqual((back.status, back.total), ("Draft", 8316.0))
+
+        sent = routes_sales.quotation_action(quote.id, "send", QuotationActionIn(), self.context, self.db)
+        with self.assertRaises(HTTPException):  # a sent quote's content is fixed
+            routes_sales.update_quotation(quote.id, QuotationUpdate(discount_pct=0), self.context, self.db)
+        row = self.db.get(Quotation, sent.id)
+        row.valid_until = date.today() - timedelta(days=1)
+        self.db.commit()
+        self.assertTrue(routes_sales.get_quotation(sent.id, self.context, self.db).is_expired)
+        with self.assertRaises(HTTPException) as expired:
+            routes_sales.quotation_action(quote.id, "accept", QuotationActionIn(), self.context, self.db)
+        self.assertIn("expired", expired.exception.detail)
+        with self.assertRaises(ConflictError):
+            order_service.order_from_quotation(self.db, self.context, quote.id)
+        extended = routes_sales.update_quotation(
+            quote.id, QuotationUpdate(valid_until=date.today() + timedelta(days=7)), self.context, self.db)
+        self.assertFalse(extended.is_expired)
+        self.assertEqual(routes_sales.quotation_action(quote.id, "accept", QuotationActionIn(), self.context,
+                                                       self.db).status, "Accepted")
 
 
 if __name__ == "__main__":

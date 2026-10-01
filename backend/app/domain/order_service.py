@@ -184,6 +184,9 @@ def order_from_quotation(db: Session, context: RequestContext, quotation_id: UUI
         raise NotFoundError(f"No quotation with id {quotation_id}")
     if quotation.status in ("Pending approval", "Rejected"):
         raise ConflictError(f"{quotation.number} is {quotation.status.lower()} — it can't become an order.")
+    if quotation.status != "Accepted" and quotation.valid_until and quotation.valid_until < date.today():
+        raise ConflictError(f"{quotation.number} expired on {quotation.valid_until:%d %b %Y} — extend its validity "
+                            "or re-quote.")
     existing = db.execute(select(SalesOrder.number).where(
         SalesOrder.quotation_id == quotation.id, SalesOrder.status != "Cancelled",
     )).scalar_one_or_none()

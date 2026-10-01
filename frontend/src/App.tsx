@@ -29,6 +29,7 @@ import { Receivables } from "./pages/Receivables";
 import { StatementPage } from "./pages/StatementPage";
 import { SalesReports } from "./pages/SalesReports";
 import { QuickSale } from "./pages/QuickSale";
+import { QuotationEditor } from "./pages/QuotationEditor";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -75,6 +76,7 @@ export default function App() {
         <Route path="/print/invoice/:id" element={<PrintDocument kind="invoice" />} />
         <Route path="/print/delivery/:id" element={<PrintDocument kind="delivery" />} />
         <Route path="/print/credit-note/:id" element={<PrintDocument kind="credit-note" />} />
+        <Route path="/print/quotation/:id" element={<PrintDocument kind="quotation" />} />
         <Route path="/print/receipt/:id" element={<PrintDocument kind="receipt" />} />
         <Route path="/print/statement/:id" element={<PrintDocument kind="statement" />} />
       </Routes>
@@ -104,6 +106,8 @@ export default function App() {
             <Route path="/sales/payments" element={<div className="management-page"><Payments /></div>} />
             <Route path="/sales/receivables" element={<div className="management-page"><Receivables /></div>} />
             <Route path="/sales/receivables/:customerId" element={<div className="management-page"><StatementPage /></div>} />
+            <Route path="/sales/quotations/new" element={<div className="management-page"><QuotationEditor /></div>} />
+            <Route path="/sales/quotations/:id/edit" element={<div className="management-page"><QuotationEditor /></div>} />
             <Route path="/sales/quick-sale" element={<div className="management-page"><QuickSale /></div>} />
             <Route path="/sales/reports" element={<div className="management-page"><SalesReports /></div>} />
             <Route path="/sales/settings" element={<div className="management-page"><SalesSettings /></div>} />

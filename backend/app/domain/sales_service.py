@@ -7,7 +7,7 @@ neither can bypass pricing, stock or discount-policy rules.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -107,6 +107,22 @@ def find_customer_by_name(db: Session, context: RequestContext, name: str) -> Cu
     return customer
 
 
+def find_customer_by_id(db: Session, context: RequestContext, customer_id) -> Customer:
+    customer = db.get(Customer, UUID(str(customer_id)))
+    if customer is None or customer.tenant_id != context.tenant_id or customer.company_id != context.company_id:
+        raise DomainValidationError("That customer doesn't exist.")
+    if not customer.active:
+        raise DomainValidationError(f"{customer.name} is inactive.")
+    return customer
+
+
+def find_item_by_id(db: Session, context: RequestContext, item_id) -> Item:
+    item = db.get(Item, UUID(str(item_id)))
+    if item is None or item.tenant_id != context.tenant_id or item.company_id != context.company_id:
+        raise DomainValidationError("That item doesn't exist.")
+    return item
+
+
 def find_item_by_name(db: Session, context: RequestContext, name: str) -> Item:
     stmt = select(Item).where(
         Item.tenant_id == context.tenant_id,
@@ -122,26 +138,37 @@ def find_item_by_name(db: Session, context: RequestContext, name: str) -> Item:
 def price_quotation(
     db: Session,
     context: RequestContext,
-    customer_name: str,
+    customer_name: str | None,
     requested_lines: list[dict],
     discount_pct: float,
+    *,
+    customer_id: UUID | None = None,
 ) -> QuotationPricing:
     """Resolve + enrich + validate — steps 2, 4 and 5 of the Appendix A flow.
-    Pure computation: nothing is written to the database yet.
+    Pure computation: nothing is written to the database yet. Lines name an
+    item (item_name, as Ask ERP does) or pick one (item_id), and may set
+    their own unit_price; below the list price needs approval.
     """
 
-    customer = find_customer_by_name(db, context, customer_name)
+    customer = find_customer_by_id(db, context, customer_id) if customer_id else find_customer_by_name(
+        db, context, customer_name or "")
 
     warnings: list[str] = []
     priced_lines: list[PricedLine] = []
+    below_list = False
     for raw in requested_lines:
-        item = find_item_by_name(db, context, raw["item_name"])
+        item = (find_item_by_id(db, context, raw["item_id"]) if raw.get("item_id")
+                else find_item_by_name(db, context, raw["item_name"]))
         qty = float(raw["qty"])
         if qty <= 0:
             raise DomainValidationError(f"Quantity for '{item.name}' must be positive.")
-        if float(item.stock_qty) < qty:
+        if item.kind != "service" and float(item.stock_qty) < qty:
             warnings.append(f"{item.name}: only {item.stock_qty} {item.uom} in stock, {qty} requested.")
-        unit_price = float(item.unit_price)
+        unit_price = float(item.unit_price) if raw.get("unit_price") is None else float(raw["unit_price"])
+        if unit_price < 0:
+            raise DomainValidationError("A price can't be negative.")
+        if unit_price < float(item.unit_price):
+            below_list = True
         priced_lines.append(PricedLine(item=item, qty=qty, unit_price=unit_price, line_total=float(tax.money(qty * unit_price))))
 
     if not priced_lines:
@@ -153,12 +180,14 @@ def price_quotation(
     total = float(worked.taxable)
     grand_total = float(worked.grand_total)
 
-    requires_approval = discount_pct > DISCOUNT_AUTO_APPROVE_LIMIT_PCT
-    if requires_approval:
+    requires_approval = discount_pct > DISCOUNT_AUTO_APPROVE_LIMIT_PCT or below_list
+    if discount_pct > DISCOUNT_AUTO_APPROVE_LIMIT_PCT:
         warnings.append(
             f"Discount {discount_pct:g}% exceeds the {DISCOUNT_AUTO_APPROVE_LIMIT_PCT:g}% "
             "auto-approve limit — this will route to the Sales Manager for approval."
         )
+    if below_list:
+        warnings.append("A price is below the list price — this will route to the Sales Manager for approval.")
 
     if float(customer.credit_limit) and grand_total > float(customer.credit_limit):
         warnings.append(
@@ -231,7 +260,11 @@ def persist_quotation(
     context: RequestContext,
     pricing: QuotationPricing,
     created_by: UUID,
+    *,
+    valid_until=None,
+    notes: str = "",
 ) -> Quotation:
+    days = company_of(db, context).quotation_validity_days or 0
     quotation = Quotation(
         tenant_id=context.tenant_id,
         company_id=context.company_id,
@@ -248,7 +281,22 @@ def persist_quotation(
         grand_total=pricing.grand_total,
         status="Pending approval" if pricing.requires_approval else "Draft",
         created_by=created_by,
+        valid_until=valid_until or (date.today() + timedelta(days=days) if days else None),
+        notes=notes.strip(),
     )
+    replace_lines(quotation, pricing)
+    db.add(quotation)
+    db.flush()
+    return quotation
+
+
+def replace_lines(quotation: Quotation, pricing: QuotationPricing) -> None:
+    """Puts pricing's lines and totals on a quotation (new or being edited)."""
+
+    quotation.lines.clear()
+    for field in ("subtotal", "discount_pct", "total", "place_of_supply", "cgst", "sgst", "igst", "round_off",
+                  "grand_total"):
+        setattr(quotation, field, getattr(pricing, field))
     for line in pricing.lines:
         quotation.lines.append(
             QuotationLine(
@@ -262,6 +310,3 @@ def persist_quotation(
                 tax_amount=line.tax_amount,
             )
         )
-    db.add(quotation)
-    db.flush()
-    return quotation

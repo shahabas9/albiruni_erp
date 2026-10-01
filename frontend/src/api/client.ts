@@ -148,7 +148,9 @@ export function bootstrap(body: BootstrapRequest): Promise<LoginResponse> {
 // --- Sales ----------------------------------------------------------------
 
 export interface QuotationLine {
+  item_id?: string | null;
   item_name: string;
+  uom?: string;
   qty: number;
   unit_price: number;
   line_total: number;
@@ -181,6 +183,13 @@ export interface Quotation extends TaxTotals {
   place_of_supply: string;
   status: "Draft" | "Pending approval" | "Sent" | "Accepted" | "Rejected";
   status_note: string;
+  valid_until: string | null;
+  /** Draft or sent, past valid_until. */
+  is_expired: boolean;
+  notes: string;
+  customer_gstin: string;
+  billing_address: string;
+  created_by_name: string | null;
   customer_id: string | null;
   /** The order this quotation became (not cancelled), if any. */
   order_id: string | null;

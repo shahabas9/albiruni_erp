@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import { ApiError } from "../api/client";
+import { ApiError, type Quotation } from "../api/client";
 import {
   fetchCompanyProfile,
   fetchCreditNote,
@@ -8,6 +8,7 @@ import {
   fetchInvoice,
   fetchOrder,
   fetchPayment,
+  fetchQuotation,
   fetchStatement,
   type CompanyProfile,
   type CreditNote,
@@ -23,9 +24,10 @@ import { StatementTable } from "./StatementPage";
 const money = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Print-ready documents at /print/invoice/:id and /print/delivery/:id — no app chrome; use the browser's Print / Save as PDF. */
-export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" | "receipt" | "statement" }) {
+export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" | "receipt" | "statement" | "quotation" }) {
   const { id = "" } = useParams();
   const [search] = useSearchParams();
+  const [quote, setQuote] = useState<{ q: Quotation; company: CompanyProfile } | null>(null);
   const [statement, setStatement] = useState<{ data: Statement; company: CompanyProfile } | null>(null);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [delivery, setDelivery] = useState<{ note: DeliveryNote; order: SalesOrder; company: CompanyProfile } | null>(null);
@@ -41,6 +43,8 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
           ? fetchCreditNote(id).then(setCredit)
           : kind === "receipt"
             ? Promise.all([fetchPayment(id), fetchCompanyProfile()]).then(([r, company]) => setReceipt({ receipt: r, company }))
+            : kind === "quotation"
+              ? Promise.all([fetchQuotation(id), fetchCompanyProfile()]).then(([q, company]) => setQuote({ q, company }))
             : kind === "statement"
               ? Promise.all([fetchStatement(id, search.get("from") ?? undefined, search.get("to") ?? undefined), fetchCompanyProfile()]).then(
                   ([data, company]) => setStatement({ data, company }),
@@ -54,12 +58,12 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
 
   useEffect(() => {
     const title =
-      invoice?.number ?? delivery?.note.number ?? credit?.number ?? receipt?.receipt.number ?? (statement && `Statement ${statement.data.customer_name}`);
+      invoice?.number ?? delivery?.note.number ?? credit?.number ?? receipt?.receipt.number ?? quote?.q.number ?? (statement && `Statement ${statement.data.customer_name}`);
     if (title) document.title = title.replace(/\//g, "-");
-  }, [invoice, delivery, credit, receipt, statement]);
+  }, [invoice, delivery, credit, receipt, statement, quote]);
 
   if (error) return <p className="print-error">{error}</p>;
-  if (!invoice && !delivery && !credit && !receipt && !statement) return <p className="print-error">Loading…</p>;
+  if (!invoice && !delivery && !credit && !receipt && !statement && !quote) return <p className="print-error">Loading…</p>;
 
   return (
     <div className="print-shell">
@@ -77,6 +81,8 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
         <CreditSheet note={credit} />
       ) : receipt ? (
         <ReceiptSheet {...receipt} />
+      ) : quote ? (
+        <QuotationSheet {...quote} />
       ) : statement ? (
         <StatementSheet {...statement} />
       ) : (
@@ -632,6 +638,133 @@ function StatementSheet({ data, company }: { data: Statement; company: CompanyPr
           </div>
         </footer>
       )}
+    </article>
+  );
+}
+
+function QuotationSheet({ q, company }: { q: Quotation; company: CompanyProfile }) {
+  const interstate = q.igst > 0;
+  return (
+    <article className="print-doc">
+      <header className="pd-head">
+        <div>
+          <h1>{company.legal_name || company.name}</h1>
+          <p className="pre">{company.address}</p>
+          {company.gstin && (
+            <p>
+              GSTIN <b className="mono">{company.gstin}</b>
+            </p>
+          )}
+          {(company.phone || company.email) && <p>{[company.phone, company.email].filter(Boolean).join(" · ")}</p>}
+        </div>
+        <div className="pd-title">
+          <h2>QUOTATION</h2>
+          {q.status === "Pending approval" && <small>DRAFT — awaiting approval</small>}
+        </div>
+      </header>
+      <section className="pd-meta">
+        <div>
+          <h3>For</h3>
+          <p>
+            <b>{q.customer_name}</b>
+          </p>
+          <p className="pre">{q.billing_address}</p>
+          {q.customer_gstin && (
+            <p>
+              GSTIN <b className="mono">{q.customer_gstin}</b>
+            </p>
+          )}
+        </div>
+        <dl>
+          <dt>Quotation no.</dt>
+          <dd className="mono">{q.number}</dd>
+          <dt>Date</dt>
+          <dd>{dayDate(q.created_at)}</dd>
+          {q.valid_until && (
+            <>
+              <dt>Valid until</dt>
+              <dd>{dayDate(q.valid_until)}</dd>
+            </>
+          )}
+          {q.created_by_name && (
+            <>
+              <dt>Prepared by</dt>
+              <dd>{q.created_by_name}</dd>
+            </>
+          )}
+        </dl>
+      </section>
+      <table className="pd-lines">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Description</th>
+            <th>HSN/SAC</th>
+            <th className="num">Qty</th>
+            <th className="num">Rate</th>
+            <th className="num">Amount</th>
+            <th className="num">GST</th>
+          </tr>
+        </thead>
+        <tbody>
+          {q.lines.map((l, i) => (
+            <tr key={i}>
+              <td>{i + 1}</td>
+              <td>{l.item_name}</td>
+              <td className="mono">{l.hsn_code}</td>
+              <td className="num">
+                {l.qty} {l.uom}
+              </td>
+              <td className="num">{money(l.unit_price)}</td>
+              <td className="num">{money(l.line_total)}</td>
+              <td className="num">{l.gst_rate ?? 0}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <section className="pd-sum">
+        <div>{q.notes && <p className="pre">{q.notes}</p>}</div>
+        <dl>
+          {q.discount_pct > 0 && (
+            <>
+              <dt>Gross</dt>
+              <dd>{money(q.subtotal)}</dd>
+              <dt>Discount {q.discount_pct}%</dt>
+              <dd>−{money(q.subtotal - q.total)}</dd>
+            </>
+          )}
+          <dt>Taxable value</dt>
+          <dd>{money(q.total)}</dd>
+          {interstate ? (
+            <>
+              <dt>IGST</dt>
+              <dd>{money(q.igst)}</dd>
+            </>
+          ) : (
+            <>
+              <dt>CGST</dt>
+              <dd>{money(q.cgst)}</dd>
+              <dt>SGST</dt>
+              <dd>{money(q.sgst)}</dd>
+            </>
+          )}
+          {q.round_off !== 0 && (
+            <>
+              <dt>Round off</dt>
+              <dd>{money(q.round_off)}</dd>
+            </>
+          )}
+          <dt className="grand">Total</dt>
+          <dd className="grand">₹{money(q.grand_total)}</dd>
+        </dl>
+      </section>
+      <footer className="pd-foot">
+        <div>{company.invoice_terms && <p className="pre">{company.invoice_terms}</p>}</div>
+        <div className="pd-sign">
+          <p>For {company.legal_name || company.name}</p>
+          <p className="sig">Authorised signatory</p>
+        </div>
+      </footer>
     </article>
   );
 }

@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -79,12 +79,16 @@ class Quotation(Base):
     status: Mapped[str] = mapped_column(String(24), default="Draft")
     # Why it was rejected, or who approved the discount.
     status_note: Mapped[str] = mapped_column(String(200), default="")
+    # Prices hold until this day; None for quotations from before validity existed.
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
     lines: Mapped[list["QuotationLine"]] = relationship(back_populates="quotation", cascade="all, delete-orphan")
     customer: Mapped["Customer"] = relationship()
+    creator: Mapped["User"] = relationship(foreign_keys=[created_by])  # noqa: F821 — app.models.identity
     opportunity: Mapped["Opportunity | None"] = relationship()  # noqa: F821 — app.models.crm
 
 

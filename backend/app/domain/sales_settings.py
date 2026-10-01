@@ -11,7 +11,7 @@ from app.schemas.sales import CompanyProfile, CompanyProfileUpdate
 
 FIELDS = (
     "legal_name", "gstin", "state_code", "address", "phone", "email", "bank_details", "invoice_terms",
-    "payment_terms_days", "allow_negative_stock",
+    "payment_terms_days", "quotation_validity_days", "allow_negative_stock",
 )
 
 

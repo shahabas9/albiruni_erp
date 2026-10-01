@@ -40,5 +40,7 @@ class Company(Base):
     invoice_terms: Mapped[str] = mapped_column(Text, default="")
     # Days until an invoice falls due when the customer has no terms of their own.
     payment_terms_days: Mapped[int] = mapped_column(Integer, default=30)
+    # How long a quotation's prices hold.
+    quotation_validity_days: Mapped[int] = mapped_column(Integer, default=15, server_default="15")
     # Whether a delivery may take stock below zero.
     allow_negative_stock: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -30,6 +30,7 @@ export interface CompanyProfile {
   bank_details: string;
   invoice_terms: string;
   payment_terms_days: number;
+  quotation_validity_days: number;
   allow_negative_stock: boolean;
 }
 
@@ -47,6 +48,22 @@ export type QuotationAction = "approve" | "send" | "accept" | "reject" | "reopen
 
 export function fetchQuotation(id: string): Promise<Quotation> {
   return request<Quotation>(`/api/sales/quotations/${id}`);
+}
+
+export interface QuotationInput {
+  customer_id?: string;
+  lines: DocLineInput[];
+  discount_pct: number;
+  valid_until?: string;
+  notes: string;
+}
+
+export function createQuotation(body: QuotationInput): Promise<{ quotation_id: string; number: string; status: string; warnings: string[] }> {
+  return request(`/api/sales/quotations`, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateQuotation(id: string, body: Partial<Omit<QuotationInput, "customer_id">>): Promise<Quotation> {
+  return request<Quotation>(`/api/sales/quotations/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
 export function quotationAction(id: string, action: QuotationAction, note = ""): Promise<Quotation> {

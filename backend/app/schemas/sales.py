@@ -1,12 +1,22 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class QuotationLineIn(BaseModel):
-    item_name: str
+    # One of: item_name (Ask ERP, typed names) or item_id (forms).
+    item_name: str | None = None
+    item_id: UUID | None = None
     qty: float = Field(gt=0)
+    # Leave out for the list price; below it needs approval.
+    unit_price: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_item(self):
+        if not self.item_name and not self.item_id:
+            raise ValueError("Each line needs an item.")
+        return self
 
 
 class CreateQuotationIn(BaseModel):
@@ -14,13 +24,35 @@ class CreateQuotationIn(BaseModel):
     the exact same tool as the Ask ERP path, just with confirmation implicit
     in the button the user clicked."""
 
-    customer_name: str
-    lines: list[QuotationLineIn]
-    discount_pct: float = 0
+    customer_name: str | None = None
+    customer_id: UUID | None = None
+    lines: list[QuotationLineIn] = Field(min_length=1, max_length=200)
+    discount_pct: float = Field(default=0, ge=0, le=100)
+    # Defaults to today + the company's quotation validity.
+    valid_until: date | None = None
+    notes: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def _one_customer(self):
+        if not self.customer_name and not self.customer_id:
+            raise ValueError("Choose a customer.")
+        return self
+
+
+class QuotationUpdate(BaseModel):
+    """Drafts (and ones awaiting approval) only; lines, when sent, replace all lines.
+    valid_until can also be extended on a sent quotation."""
+
+    lines: list[QuotationLineIn] | None = Field(default=None, min_length=1, max_length=200)
+    discount_pct: float | None = Field(default=None, ge=0, le=100)
+    valid_until: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
 
 
 class QuotationLineOut(BaseModel):
+    item_id: UUID | None = None
     item_name: str
+    uom: str = ""
     qty: float
     unit_price: float
     line_total: float
@@ -48,6 +80,13 @@ class QuotationOut(BaseModel):
     grand_total: float = 0
     status: str
     status_note: str = ""
+    valid_until: date | None = None
+    # Draft or sent, and past valid_until.
+    is_expired: bool = False
+    notes: str = ""
+    customer_gstin: str = ""
+    billing_address: str = ""
+    created_by_name: str | None = None
     created_at: datetime
     lines: list[QuotationLineOut]
     order_id: UUID | None = None
@@ -83,6 +122,7 @@ class CompanyProfile(BaseModel):
     bank_details: str = Field(default="", max_length=600)
     invoice_terms: str = Field(default="", max_length=1500)
     payment_terms_days: int = Field(default=30, ge=0, le=365)
+    quotation_validity_days: int = Field(default=15, ge=0, le=365)
     allow_negative_stock: bool = False
 
 
@@ -96,6 +136,7 @@ class CompanyProfileUpdate(BaseModel):
     bank_details: str | None = Field(default=None, max_length=600)
     invoice_terms: str | None = Field(default=None, max_length=1500)
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
+    quotation_validity_days: int | None = Field(default=None, ge=0, le=365)
     allow_negative_stock: bool | None = None
 
 

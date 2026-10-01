@@ -605,3 +605,18 @@ no `customer_id` the sale goes on the company's "Walk-in customer". It needs
 the order, delivery and invoice write permissions, plus payments when paid.
 The Quick sale page shows the change to give back for cash and opens the
 invoice for printing.
+
+### Quotations: form, editing, validity, print
+
+- `POST /api/sales/quotations` takes a `customer_id` and lines by `item_id`
+  (Ask ERP still uses names), an optional `unit_price` per line (below list
+  price needs approval, like a big discount), `valid_until` (default: today
+  plus the company's `quotation_validity_days`, 15 unless changed) and
+  printed `notes`. Migration `0002` adds these columns.
+- `PATCH /api/sales/quotations/{id}` edits a draft or one awaiting approval
+  and re-prices it; the status follows the new prices (approval needed again
+  if the discount or prices call for it). A sent quotation can only have its
+  validity extended.
+- Past `valid_until`, a draft or sent quotation shows `is_expired`; it can't be
+  sent, accepted or turned into an order until its validity is extended.
+- Quotations print at `/print/quotation/{id}`.

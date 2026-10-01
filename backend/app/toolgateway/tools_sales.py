@@ -3,6 +3,7 @@ domain. Each wraps app.domain.sales_service and declares its own permission
 and risk level, per the "Tool & API Contract Blueprint" (Section 12).
 """
 
+from datetime import date
 from typing import Any
 
 from uuid import UUID
@@ -25,9 +26,10 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
         pricing = price_quotation(
             db,
             context,
-            customer_name=args["customer_name"],
+            customer_name=args.get("customer_name"),
             requested_lines=args["lines"],
             discount_pct=float(args.get("discount_pct", 0)),
+            customer_id=args.get("customer_id"),
         )
     except (DomainValidationError, NotFoundError, ConflictError) as exc:
         raise ToolValidationError(str(exc)) from exc
@@ -43,7 +45,11 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
             f"This opportunity is for {opportunity.customer.name}, not {pricing.customer.name}."
         )
 
-    quotation = persist_quotation(db, context, pricing, created_by=context.user.id)
+    quotation = persist_quotation(
+        db, context, pricing, created_by=context.user.id,
+        valid_until=date.fromisoformat(args["valid_until"]) if args.get("valid_until") else None,
+        notes=args.get("notes", ""),
+    )
     if opportunity is not None:
         quotation.opportunity_id = opportunity.id
         stage_before = opportunity.stage
