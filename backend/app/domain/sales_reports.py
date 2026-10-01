@@ -26,21 +26,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.deps import RequestContext
 from app.domain import tax
 from app.domain.errors import ConflictError
+from app.domain.gst_portal import uqc
 from app.models.documents import CreditNote, Invoice
 
 B2CL_LIMIT = Decimal("100000")
-UQC = {
-    "box": "BOX", "boxes": "BOX", "nos": "NOS", "no": "NOS", "pcs": "PCS", "pc": "PCS", "piece": "PCS",
-    "pieces": "PCS", "kg": "KGS", "kgs": "KGS", "g": "GMS", "gm": "GMS", "ltr": "LTR", "l": "LTR", "litre": "LTR",
-    "m": "MTR", "mtr": "MTR", "metre": "MTR", "sqm": "SQM", "sqft": "SQF", "set": "SET", "sets": "SET",
-    "pair": "PRS", "roll": "ROL", "bag": "BAG", "dozen": "DOZ", "ton": "TON", "tonne": "TON", "can": "CAN",
-    "bottle": "BTL", "pack": "PAC", "carton": "CTN", "unit": "UNT", "units": "UNT",
-}
 SECTIONS = ("b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs")
-
-
-def uqc(uom: str) -> str:
-    return UQC.get((uom or "").strip().lower(), "OTH")
 
 
 def _pos(code: str) -> str:
@@ -187,6 +177,36 @@ def gstr1(db: Session, context: RequestContext, date_from: date, date_to: date) 
             "b2cs": b2cs_rows, "cdnr": cdnr, "cdnur": cdnur, "hsn": hsn_rows, "docs": docs}
 
 
+def tds_report(db: Session, context: RequestContext, date_from: date, date_to: date) -> dict:
+    """TDS customers deducted on payments dated in the period, one row per invoice, to
+    reconcile with Form 26AS and chase missing TDS certificates (Form 16A)."""
+
+    from app.models.documents import Receipt, ReceiptAllocation
+    from app.models.sales import Customer
+
+    _period(date_from, date_to)
+    rows = db.execute(
+        select(ReceiptAllocation, Receipt, Invoice, Customer)
+        .join(Receipt, Receipt.id == ReceiptAllocation.receipt_id)
+        .join(Invoice, Invoice.id == ReceiptAllocation.invoice_id)
+        .join(Customer, Customer.id == Receipt.customer_id)
+        .where(Receipt.tenant_id == context.tenant_id, Receipt.company_id == context.company_id,
+               Receipt.status == "Received", ReceiptAllocation.tds_amount > 0,
+               Receipt.receipt_date >= date_from, Receipt.receipt_date <= date_to)
+        .order_by(Receipt.receipt_date, Receipt.number)
+    ).all()
+    out = [{
+        "date": r.receipt_date, "receipt_number": r.number, "receipt_id": r.id, "customer": c.name,
+        # A GSTIN's characters 3–12 are the holder's PAN, which the TDS return quotes.
+        "customer_pan": (c.gstin or "")[2:12], "section": r.tds_section, "invoice_number": i.number,
+        "invoice_value": _f(i.grand_total), "amount_received": _f(a.amount), "tds_amount": _f(a.tds_amount),
+        "certificate_received": "Yes" if r.tds_certificate_received else "No",
+    } for a, r, i, c in rows]
+    missing = round(sum(row["tds_amount"] for row in out if row["certificate_received"] == "No"), 2)
+    return {"date_from": date_from, "date_to": date_to, "rows": out,
+            "total_tds": round(sum(row["tds_amount"] for row in out), 2), "certificates_missing": missing}
+
+
 COLUMNS = {
     "register": [("date", "Date"), ("type", "Type"), ("number", "Number"), ("customer", "Customer"),
                  ("gstin", "GSTIN"), ("place_of_supply", "Place of supply"), ("taxable_value", "Taxable value"),
@@ -218,6 +238,10 @@ COLUMNS = {
     "hsn": [("type", "B2B/B2C"), ("hsn_code", "HSN"), ("description", "Description"), ("uqc", "UQC"),
             ("qty", "Total Quantity"), ("gst_rate", "Rate"), ("taxable_value", "Taxable Value"),
             ("igst", "Integrated Tax Amount"), ("cgst", "Central Tax Amount"), ("sgst", "State/UT Tax Amount")],
+    "tds": [("date", "Payment date"), ("receipt_number", "Receipt"), ("customer", "Customer"),
+            ("customer_pan", "Customer PAN"), ("section", "Section"), ("invoice_number", "Invoice"),
+            ("invoice_value", "Invoice value"), ("amount_received", "Received"), ("tds_amount", "TDS deducted"),
+            ("certificate_received", "Form 16A received")],
     "docs": [("nature", "Nature of Document"), ("from", "Sr. No. From"), ("to", "Sr. No. To"),
              ("total", "Total Number"), ("cancelled", "Cancelled"), ("net_issued", "Net Issued")],
 }

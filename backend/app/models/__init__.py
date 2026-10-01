@@ -3,11 +3,11 @@
 from app.models.audit import AuditEvent
 from app.models.crm import Activity, Attachment, Notification, Contact, CrmEvent, CrmSettings, CustomField, Lead, Opportunity, SalesTarget, SavedView
 from app.models.documents import (
-    CreditNote, CreditNoteLine, DeliveryNote, DeliveryNoteLine, Invoice, InvoiceLine, Receipt, ReceiptAllocation,
+    CreditNote, CreditNoteLine, DeliveryNote, DeliveryNoteLine, Invoice, InvoiceLine, Receipt, ReceiptAllocation, Refund,
     SalesOrder, SalesOrderLine, StockMovement,
 )
 from app.models.identity import Role, User
-from app.models.sales import Customer, DocumentCounter, Item, Quotation, QuotationLine
+from app.models.sales import Customer, DocumentCounter, Item, PriceList, PriceListItem, Quotation, QuotationLine
 from app.models.tenant import Company, Tenant
 
 __all__ = [
@@ -19,6 +19,8 @@ __all__ = [
     "DocumentCounter",
     "Quotation",
     "QuotationLine",
+    "PriceList",
+    "PriceListItem",
     "SalesOrder",
     "SalesOrderLine",
     "DeliveryNote",
@@ -30,6 +32,7 @@ __all__ = [
     "CreditNoteLine",
     "Receipt",
     "ReceiptAllocation",
+    "Refund",
     "Company",
     "Tenant",
     "Lead",

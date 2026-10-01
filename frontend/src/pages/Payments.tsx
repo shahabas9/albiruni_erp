@@ -1,19 +1,25 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { allocatePayment, fetchPayments, voidPayment, type Receipt } from "../api/sales";
+import { allocatePayment, fetchPayment, fetchPayments, setTdsCertificate, voidPayment, type Receipt } from "../api/sales";
+import { ExportButton } from "../components/ExportButton";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { Drawer, ErrorNote, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, docStatusClass, inr } from "../lib/format";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 import { PaymentModal } from "../sales/PaymentModal";
 import { ReasonModal } from "../sales/ReasonModal";
+import { RefundModal } from "../sales/RefundModal";
+import { SendModal } from "../sales/SendModal";
 
 export function Payments() {
   const { can, version } = useAppData();
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => String(recallFilters("payments").search ?? ""));
   const onSearch = useCallback((q: string) => setSearch(q), []);
-  const [advancesOnly, setAdvancesOnly] = useState(false);
+  const [advancesOnly, setAdvancesOnly] = useState(() => recallFilters("payments").advance === "yes");
+  const [error, setError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [opened, setOpened] = useState<Receipt | null>(null);
   const list = usePaged(
@@ -38,14 +44,20 @@ export function Payments() {
             With advance left
           </button>
         </div>
+        <SavedViews
+          page="payments"
+          filters={{ advance: advancesOnly ? "yes" : "", search }}
+          onApply={(f) => (setAdvancesOnly(f.advance === "yes"), setSearch(String(f.search ?? "")))}
+        />
         <SearchBox value={search} onChange={onSearch} placeholder="Receipt no., customer or reference" />
+        <ExportButton kind="payments" filters={{ q: search, with_advance: advancesOnly || undefined }} onError={setError} />
         {can("sales.payment.write") && (
           <button className="primary-btn" onClick={() => setRecording(true)}>
             + Record payment
           </button>
         )}
       </div>
-      {list.error && <div className="error-banner">{list.error}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
       {!list.loading && list.total === 0 && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {search || advancesOnly ? "No payments match." : "No payments recorded yet."}
@@ -118,6 +130,8 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [refunding, setRefunding] = useState(false);
   const canWrite = can("sales.payment.write") && r.status === "Received";
 
   async function applyAdvance() {
@@ -151,11 +165,43 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
           <dt>Applied to invoices</dt>
           <dd className="num">{inr(r.allocated)}</dd>
         </div>
+        {r.tds_amount > 0 && (
+          <div>
+            <dt>TDS deducted ({r.tds_section})</dt>
+            <dd className="num">{inr(r.tds_amount)}</dd>
+          </div>
+        )}
+        {r.refunded > 0 && (
+          <div>
+            <dt>Refunded</dt>
+            <dd className="num">{inr(r.refunded)}</dd>
+          </div>
+        )}
         <div className="grand">
           <dt>Advance left</dt>
           <dd className="num">{inr(r.unallocated)}</dd>
         </div>
       </dl>
+      {r.tds_amount > 0 && (
+        <label className="field checkbox-field" style={{ marginTop: 12 }}>
+          <input
+            type="checkbox"
+            checked={r.tds_certificate_received}
+            disabled={!can("sales.payment.write") || busy}
+            onChange={async (e) => {
+              setBusy(true);
+              try {
+                onChanged(await setTdsCertificate(r.id, e.target.checked));
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : "Couldn't save.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
+          <span>TDS certificate (Form 16A) received</span>
+        </label>
+      )}
       {r.allocations.length > 0 && (
         <div className="mini-docs" style={{ marginTop: 16 }}>
           {r.allocations.map((a) => (
@@ -163,7 +209,10 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
               <Link className="mono" to={`/sales/invoices/${a.invoice_id}`}>
                 {a.invoice_number}
               </Link>
-              <span className="num">{inr(a.amount)}</span>
+              <span className="num">
+                {inr(a.amount)}
+                {a.tds_amount > 0 && <small> + {inr(a.tds_amount)} TDS</small>}
+              </span>
             </div>
           ))}
         </div>
@@ -173,9 +222,19 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
         <a className="ghost-btn" href={`/print/receipt/${r.id}`} target="_blank" rel="noreferrer">
           Print receipt
         </a>
+        {r.status === "Received" && (
+          <button className="ghost-btn" onClick={() => setSending(true)}>
+            Send receipt
+          </button>
+        )}
         {canWrite && r.unallocated > 0 && (
           <button className="primary-btn" disabled={busy} onClick={applyAdvance}>
             Apply advance to unpaid invoices
+          </button>
+        )}
+        {canWrite && r.unallocated > 0 && (
+          <button className="ghost-btn" disabled={busy} onClick={() => setRefunding(true)}>
+            Refund advance
           </button>
         )}
         {canWrite && (
@@ -184,6 +243,17 @@ function ReceiptDrawer({ receipt: r, onClose, onChanged }: { receipt: Receipt; o
           </button>
         )}
       </div>
+      {sending && <SendModal kind="receipt" id={r.id} customerId={r.customer_id} title={`receipt ${r.number}`} onClose={() => setSending(false)} />}
+      {refunding && (
+        <RefundModal
+          source={{ receipt_id: r.id, number: r.number, customer_name: r.customer_name, available: r.unallocated }}
+          onClose={() => setRefunding(false)}
+          onDone={async () => {
+            setRefunding(false);
+            onChanged(await fetchPayment(r.id));
+          }}
+        />
+      )}
       {voiding && (
         <ReasonModal
           title={`Void ${r.number}?`}

@@ -11,7 +11,8 @@ from app.schemas.sales import CompanyProfile, CompanyProfileUpdate
 
 FIELDS = (
     "legal_name", "gstin", "state_code", "address", "phone", "email", "bank_details", "invoice_terms",
-    "payment_terms_days", "allow_negative_stock",
+    "payment_terms_days", "quotation_validity_days", "allow_negative_stock", "reminders_enabled",
+    "reminder_before_days", "reminder_after_days",
 )
 
 
@@ -28,6 +29,10 @@ def update_profile(db: Session, context: RequestContext, body: CompanyProfileUpd
             data["gstin"] = normalize_gstin(data["gstin"])
         if "state_code" in data:
             data["state_code"] = tax.clean_state(data["state_code"])
+        if "reminder_after_days" in data:
+            from app.domain.reminder_service import parse_days
+
+            data["reminder_after_days"] = ",".join(str(d) for d in parse_days(data["reminder_after_days"]))
     except ValueError as exc:
         raise ConflictError(str(exc)) from exc
     for key in ("legal_name", "address", "phone", "email", "bank_details", "invoice_terms"):

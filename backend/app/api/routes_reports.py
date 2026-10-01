@@ -39,9 +39,35 @@ def gstr1(date_from: date, date_to: date, context: RequestContext = Depends(requ
     return _run(lambda: sales_reports.gstr1(db, context, date_from, date_to))
 
 
+@router.get("/tds")
+def tds(date_from: date, date_to: date, context: RequestContext = Depends(require_permission(READ)),
+        db: Session = Depends(get_db)):
+    """TDS customers deducted, per invoice, with whether the certificate came in."""
+
+    return _run(lambda: sales_reports.tds_report(db, context, date_from, date_to))
+
+
+@router.get("/tally.xml")
+def tally_xml(date_from: date, date_to: date, context: RequestContext = Depends(require_permission(READ)),
+              db: Session = Depends(get_db)):
+    """Vouchers for TallyPrime's Import → Transactions: sales, credit notes, receipts and refunds,
+    with customer ledgers. Audited like the CSV downloads."""
+
+    result = execute_tool(
+        db, context, "sales.export_tally.v1", {"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
+        request_text="[form] Download Tally XML", intent="export_tally", correlation_id=new_correlation_id(),
+        confirmed=True,
+    )
+    return Response(
+        content=result["xml"], media_type="application/xml; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="tally-{date_from}-to-{date_to}.xml"',
+                 "X-Voucher-Counts": ",".join(f"{k}={v}" for k, v in result["counts"].items())},
+    )
+
+
 @router.get("/{kind}.csv")
 def report_csv(
-    kind: Literal["register", "b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs"],
+    kind: Literal["register", "tds", "b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs"],
     date_from: date,
     date_to: date,
     context: RequestContext = Depends(require_permission(READ)),
@@ -55,7 +81,8 @@ def report_csv(
         request_text=f"[form] Download {kind} report", intent="export_report",
         correlation_id=new_correlation_id(), confirmed=True,
     )
-    name = f"{'sales-register' if kind == 'register' else 'gstr1-' + kind}-{date_from}-to-{date_to}.csv"
+    prefix = {"register": "sales-register", "tds": "tds-deducted"}.get(kind, f"gstr1-{kind}")
+    name = f"{prefix}-{date_from}-to-{date_to}.csv"
     return Response(
         content=result["csv"], media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{name}"', "X-Row-Count": str(result["rows"])},

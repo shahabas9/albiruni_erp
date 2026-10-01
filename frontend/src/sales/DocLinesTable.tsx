@@ -30,7 +30,10 @@ export function DocLinesTable({ lines, progress = false }: { lines: DocLine[]; p
               <td className="num">
                 {l.qty} {l.uom}
               </td>
-              <td className="num">{inr(l.unit_price)}</td>
+              <td className="num">
+                {inr(l.unit_price)}
+                {l.discount_pct > 0 && <small className="card-note"> less {l.discount_pct}%</small>}
+              </td>
               <td className="num">{l.gst_rate}%</td>
               <td className="num">{inr(l.taxable_value)}</td>
               <td className="num">{inr(l.cgst + l.sgst + l.igst)}</td>

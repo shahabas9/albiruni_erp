@@ -24,6 +24,11 @@ class CustomerIn(BaseModel):
     # Taken from the GSTIN when there is one.
     state_code: str = ""
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
+    # Billing contact: where invoices, statements and payment reminders go.
+    email: str = Field(default="", max_length=160)
+    phone: str = Field(default="", max_length=40)
+    # Agreed prices; none means the company's default list, else item prices.
+    price_list_id: UUID | None = None
 
     _gstin = field_validator("gstin")(normalize_gstin)
     _state = field_validator("state_code")(_state)
@@ -41,6 +46,10 @@ class CustomerUpdate(BaseModel):
     shipping_address: str | None = Field(default=None, max_length=600)
     state_code: str | None = None
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
+    email: str | None = Field(default=None, max_length=160)
+    phone: str | None = Field(default=None, max_length=40)
+    # Sending null takes the customer off their list.
+    price_list_id: UUID | None = None
 
     _state = field_validator("state_code")(_state)
 
@@ -62,3 +71,6 @@ class CustomerOut(BaseModel):
     shipping_address: str = ""
     state_code: str = ""
     payment_terms_days: int | None = None
+    email: str = ""
+    phone: str = ""
+    price_list_id: UUID | None = None

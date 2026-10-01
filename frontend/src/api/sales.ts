@@ -30,7 +30,12 @@ export interface CompanyProfile {
   bank_details: string;
   invoice_terms: string;
   payment_terms_days: number;
+  quotation_validity_days: number;
   allow_negative_stock: boolean;
+  reminders_enabled: boolean;
+  reminder_before_days: number;
+  /** "1,7,15,30": days after the due date. */
+  reminder_after_days: string;
 }
 
 export function fetchCompanyProfile(): Promise<CompanyProfile> {
@@ -47,6 +52,74 @@ export type QuotationAction = "approve" | "send" | "accept" | "reject" | "reopen
 
 export function fetchQuotation(id: string): Promise<Quotation> {
   return request<Quotation>(`/api/sales/quotations/${id}`);
+}
+
+// --- Price lists ----------------------------------------------------------
+
+export interface PriceRow {
+  item_id: string;
+  item_name: string;
+  sku: string;
+  /** The item's own price, for comparison. */
+  item_price: number;
+  min_qty: number;
+  unit_price: number;
+}
+
+export interface PriceList {
+  id: string;
+  name: string;
+  active: boolean;
+  /** Applies to customers without a list of their own. */
+  is_default: boolean;
+  /** Customers on this list. */
+  customers: number;
+  rows: PriceRow[];
+}
+
+export interface PriceListInput {
+  name: string;
+  active: boolean;
+  is_default: boolean;
+  rows: { item_id: string; min_qty: number; unit_price: number }[];
+}
+
+export function fetchPriceLists(): Promise<PriceList[]> {
+  return request<PriceList[]>("/api/sales/price-lists");
+}
+
+export function savePriceList(id: string | null, body: PriceListInput): Promise<PriceList> {
+  return request<PriceList>(id ? `/api/sales/price-lists/${id}` : "/api/sales/price-lists", {
+    method: id ? "PUT" : "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deletePriceList(id: string): Promise<void> {
+  return request<void>(`/api/sales/price-lists/${id}`, { method: "DELETE" });
+}
+
+/** Quantity breaks per item id, lowest first. */
+export type AgreedPrices = Record<string, { min_qty: number; unit_price: number }[]>;
+
+export function fetchAgreedPrices(customerId?: string): Promise<{ price_list_id: string | null; prices: AgreedPrices }> {
+  return request(`/api/sales/prices${customerId ? `?customer_id=${customerId}` : ""}`);
+}
+
+export interface QuotationInput {
+  customer_id?: string;
+  lines: DocLineInput[];
+  discount_pct: number;
+  valid_until?: string;
+  notes: string;
+}
+
+export function createQuotation(body: QuotationInput): Promise<{ quotation_id: string; number: string; status: string; warnings: string[] }> {
+  return request(`/api/sales/quotations`, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function updateQuotation(id: string, body: Partial<Omit<QuotationInput, "customer_id">>): Promise<Quotation> {
+  return request<Quotation>(`/api/sales/quotations/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
 export function quotationAction(id: string, action: QuotationAction, note = ""): Promise<Quotation> {
@@ -67,6 +140,8 @@ export interface DocLine {
   unit_price: number;
   list_price: number;
   gst_rate: number;
+  /** This line's own discount, before the document's. */
+  discount_pct: number;
   amount: number;
   taxable_value: number;
   cgst: number;
@@ -101,6 +176,9 @@ export interface SalesOrder extends TaxTotals {
   /** A discount over the limit or a price below list, not yet approved. */
   needs_approval: boolean;
   approved_by_name: string | null;
+  /** Who the sale counts for in targets. */
+  salesperson_id: string | null;
+  salesperson_name: string | null;
   cancel_reason: string;
   created_by_name: string | null;
   created_at: string;
@@ -113,8 +191,9 @@ export interface SalesOrder extends TaxTotals {
 export interface DocLineInput {
   item_id: string;
   qty: number;
-  /** Omit for the item's list price. */
+  /** Omit for the customer's agreed price (their price list, else the item's price). */
   unit_price?: number;
+  discount_pct?: number;
 }
 
 export interface OrderInput {
@@ -250,6 +329,7 @@ export interface InvoiceLine {
   qty: number;
   unit_price: number;
   gst_rate: number;
+  discount_pct: number;
   amount: number;
   taxable_value: number;
   cgst: number;
@@ -302,7 +382,17 @@ export interface Invoice extends TaxTotals {
   amount_in_words: string;
   amount_paid: number;
   amount_credited: number;
-  /** Still owed: total − paid − credited. */
+  /** TDS the customer deducted; settles the invoice like a payment. */
+  amount_tds: number;
+  /** Credit balance paid back to the customer. */
+  amount_refunded: number;
+  /** Recorded from the GST portals after upload. */
+  irn: string;
+  irn_ack_no: string;
+  irn_ack_date: string | null;
+  eway_bill_no: string;
+  eway_bill_date: string | null;
+  /** Still owed: total − paid − credited − TDS. */
   balance: number;
   notes: string;
   terms: string;
@@ -310,10 +400,12 @@ export interface Invoice extends TaxTotals {
   created_at: string;
   issued_at: string | null;
   issued_by_name: string | null;
+  salesperson_id: string | null;
+  salesperson_name: string | null;
   lines: InvoiceLine[];
   hsn_summary: HsnRow[];
   /** Single-invoice endpoint only: receipts applied to it. */
-  payments: { receipt_id: string; number: string; receipt_date: string; mode: string; reference: string; amount: number }[];
+  payments: { receipt_id: string; number: string; receipt_date: string; mode: string; reference: string; amount: number; tds_amount: number }[];
 }
 
 export interface InvoiceQuery {
@@ -422,13 +514,63 @@ export interface Receipt {
   notes: string;
   status: "Received" | "Voided";
   void_reason: string;
+  /** TDS the customer deducted on top of `amount`. */
+  tds_amount: number;
+  tds_section: string;
+  tds_certificate_received: boolean;
   allocated: number;
   /** Advance: received and not yet applied to an invoice. */
   unallocated: number;
+  /** Part of the advance paid back to the customer. */
+  refunded: number;
   amount_in_words: string;
   created_by_name: string | null;
   created_at: string;
-  allocations: { invoice_id: string; invoice_number: string | null; amount: number }[];
+  allocations: { invoice_id: string; invoice_number: string | null; amount: number; tds_amount: number }[];
+}
+
+export const TDS_SECTIONS = ["194Q", "194C", "194J", "194H", "194I", "194O", "Other"];
+
+export interface Refund {
+  id: string;
+  number: string;
+  customer_id: string;
+  customer_name: string;
+  refund_date: string;
+  amount: number;
+  mode: PaymentMode;
+  reference: string;
+  reason: string;
+  status: "Paid" | "Voided";
+  void_reason: string;
+  receipt_id: string | null;
+  invoice_id: string | null;
+  /** The receipt or invoice it was paid from. */
+  source_number: string;
+  created_by_name: string | null;
+  created_at: string;
+}
+
+export interface RefundInput {
+  receipt_id?: string;
+  invoice_id?: string;
+  amount: number;
+  mode: PaymentMode;
+  reference: string;
+  reason: string;
+  refund_date?: string;
+}
+
+export function fetchRefunds(params: { customer_id?: string; q?: string; limit?: number; offset?: number } = {}): Promise<Page<Refund>> {
+  return requestPage<Refund>("/api/sales/refunds", { ...params });
+}
+
+export function createRefund(body: RefundInput): Promise<Refund> {
+  return request<Refund>("/api/sales/refunds", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function voidRefund(id: string, reason: string): Promise<Refund> {
+  return request<Refund>(`/api/sales/refunds/${id}/void`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
 export interface ReceiptInput {
@@ -439,7 +581,23 @@ export interface ReceiptInput {
   reference: string;
   notes: string;
   /** Omit: oldest unpaid invoices first. []: keep it all as an advance. */
-  allocations?: { invoice_id: string; amount: number }[];
+  allocations?: { invoice_id: string; amount: number; tds_amount?: number }[];
+  /** Needed when an allocation has tds_amount. */
+  tds_section?: string;
+}
+
+export function setTdsCertificate(id: string, received: boolean): Promise<Receipt> {
+  return request<Receipt>(`/api/sales/payments/${id}/tds-certificate`, { method: "POST", body: JSON.stringify({ received }) });
+}
+
+export interface TdsReport {
+  rows: { date: string; receipt_number: string; receipt_id: string; customer: string; customer_pan: string; section: string; invoice_number: string; invoice_value: number; amount_received: number; tds_amount: number; certificate_received: "Yes" | "No" }[];
+  total_tds: number;
+  certificates_missing: number;
+}
+
+export function fetchTdsReport(dateFrom: string, dateTo: string): Promise<TdsReport> {
+  return request<TdsReport>(`/api/sales/reports/tds?date_from=${dateFrom}&date_to=${dateTo}`);
 }
 
 export function fetchPayments(params: { customer_id?: string; invoice_id?: string; q?: string; with_advance?: boolean; limit?: number; offset?: number } = {}): Promise<Page<Receipt>> {
@@ -581,6 +739,131 @@ export function fetchGstr1(dateFrom: string, dateTo: string): Promise<Gstr1> {
   return request<Gstr1>(`/api/sales/reports/gstr1?date_from=${dateFrom}&date_to=${dateTo}`);
 }
 
-export function downloadReport(kind: "register" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
+export function downloadReport(kind: "register" | "tds" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
   return downloadFile(`/api/sales/reports/${kind}.csv?date_from=${dateFrom}&date_to=${dateTo}`, `${kind}.csv`);
+}
+
+/** Vouchers for TallyPrime (Import → Transactions). */
+export function downloadTally(dateFrom: string, dateTo: string): Promise<number> {
+  return downloadFile(`/api/sales/reports/tally.xml?date_from=${dateFrom}&date_to=${dateTo}`, "tally.xml");
+}
+
+// --- Counter sale ----------------------------------------------------------------------
+
+export interface QuickSaleInput {
+  /** Omit for the company's walk-in customer. */
+  customer_id?: string;
+  lines: DocLineInput[];
+  discount_pct: number;
+  notes: string;
+  /** Omit when the customer pays later. */
+  payment?: { amount: number; mode: PaymentMode; reference: string };
+}
+
+export function quickSale(body: QuickSaleInput): Promise<{ order_id: string; invoice_id: string; receipt_id: string | null }> {
+  return request(`/api/sales/quick-sale`, { method: "POST", body: JSON.stringify(body) });
+}
+
+// --- Sending documents ---------------------------------------------------------------
+
+export type ShareKind = "invoice" | "quotation" | "credit_note" | "receipt" | "statement";
+
+export interface ShareResult {
+  url: string;
+  message: string;
+  subject: string;
+  /** The message, URL-encoded for a wa.me link. */
+  whatsapp_text: string;
+  emailed_to: string | null;
+  expires: string;
+}
+
+export function shareDocument(body: { kind: ShareKind; id: string; email?: string; date_from?: string; date_to?: string; reminder?: boolean }): Promise<ShareResult> {
+  return request<ShareResult>("/api/sales/share", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function fetchShareRecipients(customerId: string): Promise<{ name: string; email: string; phone: string }[]> {
+  return request(`/api/sales/share/recipients?customer_id=${customerId}`);
+}
+
+export interface PublicDocument {
+  kind: ShareKind;
+  document: unknown;
+  company: Pick<CompanyProfile, "name" | "legal_name" | "gstin" | "state_code" | "address" | "phone" | "email" | "bank_details" | "invoice_terms">;
+  expires: number;
+}
+
+export function fetchPublicDocument(token: string): Promise<PublicDocument> {
+  return request<PublicDocument>(`/api/public/documents/${encodeURIComponent(token)}`);
+}
+
+// --- Dashboard ------------------------------------------------------------
+
+export interface SalesDashboard {
+  as_of: string;
+  /** Needs sales.invoice.read. */
+  money?: {
+    invoiced_this_month: number;
+    invoiced_last_month: number;
+    /** Payments received less refunds paid, this month. */
+    collected_this_month: number;
+    outstanding: number;
+    overdue: number;
+    advances: number;
+    overdue_customers: { customer_id: string; name: string; overdue: number }[];
+    /** Invoiced less credit notes per month, oldest first. */
+    monthly: { month: string; label: string; value: number }[];
+    top_customers: { customer_id: string; name: string; value: number }[];
+    fy_label: string;
+  };
+  orders?: { to_invoice: number; drafts: number };
+  quotations?: { awaiting_reply: number; awaiting_value: number };
+}
+
+export function fetchSalesDashboard(): Promise<SalesDashboard> {
+  return request<SalesDashboard>("/api/sales/dashboard");
+}
+
+// --- GST portals ----------------------------------------------------------
+
+export interface PortalJson {
+  filename: string;
+  payload: unknown;
+  /** What the portal would reject; fix before uploading. */
+  problems: string[];
+}
+
+export function fetchEinvoice(kind: "invoices" | "credit-notes", id: string): Promise<PortalJson> {
+  return request<PortalJson>(`/api/sales/${kind}/${id}/einvoice`);
+}
+
+export function fetchEwayBill(id: string, params: { distance_km: number; vehicle_no: string; transporter_id: string }): Promise<PortalJson> {
+  const q = new URLSearchParams({ distance_km: String(params.distance_km), vehicle_no: params.vehicle_no, transporter_id: params.transporter_id });
+  return request<PortalJson>(`/api/sales/invoices/${id}/ewaybill?${q}`);
+}
+
+export function recordGstRefs(
+  id: string,
+  body: Partial<{ irn: string; irn_ack_no: string; irn_ack_date: string; eway_bill_no: string; eway_bill_date: string }>,
+): Promise<Invoice> {
+  return request<Invoice>(`/api/sales/invoices/${id}/gst-refs`, { method: "PUT", body: JSON.stringify(body) });
+}
+
+/** Saves the JSON as a file for the portal's upload. */
+export function saveJson(file: PortalJson) {
+  const blob = new Blob([JSON.stringify(file.payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file.filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function setOrderSalesperson(id: string, userId: string | null): Promise<SalesOrder> {
+  return request<SalesOrder>(`/api/sales/orders/${id}/salesperson`, { method: "PUT", body: JSON.stringify({ user_id: userId }) });
+}
+
+export function setInvoiceSalesperson(id: string, userId: string | null): Promise<Invoice> {
+  return request<Invoice>(`/api/sales/invoices/${id}/salesperson`, { method: "PUT", body: JSON.stringify({ user_id: userId }) });
 }

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
-from app.core.dev_schema import ensure_dev_schema
+from app.core.migrations import upgrade_database
 from app.core.security import hash_password
 from app.domain import activity_service, crm_service, lead_service, opportunity_service
 from app.domain.sales_service import persist_quotation, price_quotation
@@ -134,7 +134,7 @@ def seed_crm(db: Session, tenant: Tenant) -> None:
 
 
 def run() -> None:
-    ensure_dev_schema()
+    upgrade_database()
     db: Session = SessionLocal()
     try:
         existing = db.execute(select(Tenant).where(Tenant.code == "tenant_018")).scalar_one_or_none()

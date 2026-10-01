@@ -26,7 +26,8 @@ from app.models.tenant import Company
 
 def balance(invoice: Invoice) -> Decimal:
     return (Decimal(str(invoice.grand_total)) - Decimal(str(invoice.amount_paid))
-            - Decimal(str(invoice.amount_credited)))
+            - Decimal(str(invoice.amount_credited)) - Decimal(str(invoice.amount_tds or 0))
+            + Decimal(str(invoice.amount_refunded or 0)))
 
 
 def payment_status(invoice: Invoice, today: date | None = None) -> str:
@@ -60,7 +61,7 @@ def list_invoices(
 ):
     """status: Draft, Issued, or a payment state — unpaid (anything still owed), overdue, paid."""
 
-    left = Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited
+    left = Invoice.left_expr()
     stmt = (
         select(Invoice)
         .join(Customer, Customer.id == Invoice.customer_id)
@@ -101,7 +102,8 @@ def _price(invoice: Invoice, company: Company) -> None:
         invoice.place_of_supply != company.state_code
     )
     worked = tax.compute(
-        [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), Decimal(str(l.gst_rate))) for l in invoice.lines],
+        [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), Decimal(str(l.gst_rate)),
+                    Decimal(str(l.discount_pct or 0))) for l in invoice.lines],
         invoice.discount_pct, interstate,
     )
     for line, parts in zip(invoice.lines, worked.lines):
@@ -113,7 +115,7 @@ def _price(invoice: Invoice, company: Company) -> None:
 
 
 def create_draft(db: Session, context: RequestContext, order_id: UUID, lines: list[dict] | None = None,
-                 notes: str = "") -> Invoice:
+                 notes: str = "", *, commit: bool = True) -> Invoice:
     """lines: [{order_line_id, qty}]; leave out for the default quantities."""
 
     order = get_order(db, context, order_id, lock=True)
@@ -148,20 +150,21 @@ def create_draft(db: Session, context: RequestContext, order_id: UUID, lines: li
         status="Draft", invoice_date=today, due_date=today + timedelta(days=terms or 0),
         place_of_supply=order.place_of_supply, customer_po=order.customer_po, discount_pct=order.discount_pct,
         billing_address=order.billing_address, shipping_address=order.shipping_address, notes=notes.strip(),
-        created_by=context.user.id,
+        salesperson_id=order.salesperson_id, created_by=context.user.id,
     )
     for position, (line_id, qty) in enumerate(sorted(wanted.items(), key=lambda kv: by_id[kv[0]].position)):
         line = by_id[line_id]
         invoice.lines.append(InvoiceLine(
             position=position, order_line_id=line.id, item_id=line.item_id, description=line.description,
             hsn_code=line.hsn_code, uom=line.uom, qty=qty, unit_price=line.unit_price, gst_rate=line.gst_rate,
-            credited_qty=0,
+            discount_pct=line.discount_pct, credited_qty=0,
         ))
     _price(invoice, company)
     db.add(invoice)
     db.flush()
     history.record(db, context, "invoice", invoice.id, "created", f"Draft invoice for order {order.number}")
-    db.commit()
+    if commit:
+        db.commit()
     return invoice
 
 

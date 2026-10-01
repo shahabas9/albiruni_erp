@@ -21,6 +21,7 @@ from app.api import (
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext, require_any_permission, require_permission
 from app.core.dev_schema import ensure_dev_schema
+from app.core.migrations import upgrade_database
 from app.domain import activity_service, crm_service, customer_service, lead_service, opportunity_service, sales_service
 from app.domain.duplicates import DuplicateError
 from app.domain.errors import ConflictError, NotFoundError
@@ -40,8 +41,8 @@ from app.toolgateway import tools_crm, tools_sales  # noqa: F401 — registers t
 class CrmTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        ensure_dev_schema()
-        ensure_dev_schema()  # Upgrades must remain safe to repeat.
+        upgrade_database()
+        upgrade_database()  # Upgrades must remain safe to repeat.
 
     def setUp(self):
         self.db = SessionLocal()
@@ -753,10 +754,14 @@ class CrmTests(unittest.TestCase):
         settings.smtp_host, settings.smtp_from = "smtp.test", "crm@example.test"
         routes_notifications.put_preferences(routes_notifications.PreferencesIn(email="asha@example.test"),
                                              asha_ctx, self.db)
-        sent = []
-        outcome = notifications.send_pending_emails(self.db, send=lambda to, subject, text: sent.append((to, subject)))
+        sent, skipped = [], 0
+        while True:  # the worker sends 100 at a time; other tests may have queued plenty
+            outcome = notifications.send_pending_emails(self.db, send=lambda to, subject, text: sent.append((to, subject)))
+            skipped += outcome["skipped"]
+            if not sum(outcome.values()):
+                break
         self.assertTrue(all(to == "asha@example.test" for to, _ in sent) and len(sent) == 7)
-        self.assertGreaterEqual(outcome["skipped"], 1)  # my own notifications: no address
+        self.assertGreaterEqual(skipped, 1)  # my own notifications: no address
         self.assertEqual(notifications.send_pending_emails(self.db, send=lambda *a: sent.append(a))["sent"], 0)
         with self.assertRaises(ValidationError):
             routes_notifications.PreferencesIn(email="not an email")

@@ -16,6 +16,8 @@ import { CrmSettings } from "./pages/CrmSettings";
 import { Targets } from "./pages/Targets";
 import { CustomerPage } from "./pages/CustomerPage";
 import { SalesSettings } from "./pages/SalesSettings";
+import { PriceLists } from "./pages/PriceLists";
+import { Refunds } from "./pages/Refunds";
 import { Orders } from "./pages/Orders";
 import { OrderEditor } from "./pages/OrderEditor";
 import { OrderPage } from "./pages/OrderPage";
@@ -28,6 +30,9 @@ import { Payments } from "./pages/Payments";
 import { Receivables } from "./pages/Receivables";
 import { StatementPage } from "./pages/StatementPage";
 import { SalesReports } from "./pages/SalesReports";
+import { QuickSale } from "./pages/QuickSale";
+import { QuotationEditor } from "./pages/QuotationEditor";
+import { PublicDocumentPage } from "./pages/PublicDocumentPage";
 import { Admin } from "./pages/Admin";
 import { Login } from "./pages/Login";
 import { Setup } from "./pages/Setup";
@@ -50,6 +55,15 @@ export default function App() {
   }, [pathname, status, refresh]);
   const { isOpen } = useAskErp();
   const [navOpen, setNavOpen] = useState(false);
+
+  // Share links: customers open these without an account.
+  if (pathname.startsWith("/d/")) {
+    return (
+      <Routes>
+        <Route path="/d/:token" element={<PublicDocumentPage />} />
+      </Routes>
+    );
+  }
 
   if (status === "checking") {
     return (
@@ -74,6 +88,7 @@ export default function App() {
         <Route path="/print/invoice/:id" element={<PrintDocument kind="invoice" />} />
         <Route path="/print/delivery/:id" element={<PrintDocument kind="delivery" />} />
         <Route path="/print/credit-note/:id" element={<PrintDocument kind="credit-note" />} />
+        <Route path="/print/quotation/:id" element={<PrintDocument kind="quotation" />} />
         <Route path="/print/receipt/:id" element={<PrintDocument kind="receipt" />} />
         <Route path="/print/statement/:id" element={<PrintDocument kind="statement" />} />
       </Routes>
@@ -103,7 +118,12 @@ export default function App() {
             <Route path="/sales/payments" element={<div className="management-page"><Payments /></div>} />
             <Route path="/sales/receivables" element={<div className="management-page"><Receivables /></div>} />
             <Route path="/sales/receivables/:customerId" element={<div className="management-page"><StatementPage /></div>} />
+            <Route path="/sales/quotations/new" element={<div className="management-page"><QuotationEditor /></div>} />
+            <Route path="/sales/quotations/:id/edit" element={<div className="management-page"><QuotationEditor /></div>} />
+            <Route path="/sales/quick-sale" element={<div className="management-page"><QuickSale /></div>} />
             <Route path="/sales/reports" element={<div className="management-page"><SalesReports /></div>} />
+            <Route path="/sales/refunds" element={<div className="management-page"><Refunds /></div>} />
+            <Route path="/sales/price-lists" element={<div className="management-page"><PriceLists /></div>} />
             <Route path="/sales/settings" element={<div className="management-page"><SalesSettings /></div>} />
             <Route path="/items" element={<div className="management-page"><Items /></div>} />
             <Route path="/leads" element={<div className="management-page"><Leads /></div>} />

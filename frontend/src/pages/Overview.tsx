@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAskErp } from "../askerp/AskErpContext";
 import { useAuth } from "../auth/AuthProvider";
@@ -6,6 +6,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { useAppData } from "../data/AppDataProvider";
 import { inrShort } from "../lib/format";
 import { fetchTargets, type OpportunityStage, type Quotation, type TargetRow } from "../api/client";
+import { fetchSalesDashboard, type SalesDashboard } from "../api/sales";
 
 const OPEN_STAGES: OpportunityStage[] = ["New", "Qualified", "Proposal", "Negotiation"];
 
@@ -37,17 +38,32 @@ export function Overview() {
   const navigate = useNavigate();
   const { quotes, crm, loading, can, version } = useAppData();
   // Your own target this month, if one is set.
-  const [myTarget, setMyTarget] = useState<TargetRow | null>(null);
+  const [myTarget, setMyTarget] = useState<(TargetRow & { basis: string }) | null>(null);
   useEffect(() => {
     if (!can("crm.opportunity.read") || !user) return;
     let current = true;
     fetchTargets()
-      .then((r) => current && setMyTarget(r.rows.find((row) => row.user_id === user.id && row.target > 0) ?? null))
+      .then((r) => {
+        const mine = r.rows.find((row) => row.user_id === user.id && row.target > 0);
+        if (current) setMyTarget(mine ? { ...mine, basis: r.basis } : null);
+      })
       .catch(() => current && setMyTarget(null));
     return () => {
       current = false;
     };
   }, [can, user, version]);
+
+  const [sales, setSales] = useState<SalesDashboard | null>(null);
+  useEffect(() => {
+    if (!can("sales.invoice.read") && !can("sales.order.read")) return;
+    let current = true;
+    fetchSalesDashboard()
+      .then((d) => current && setSales(d))
+      .catch(() => current && setSales(null));
+    return () => {
+      current = false;
+    };
+  }, [can, version]);
 
   const series = monthlyQuoted(quotes, 6);
   const thisMonth = series[series.length - 1]!.value;
@@ -128,6 +144,8 @@ export function Overview() {
         </div>
       </div>
 
+      {sales?.money && <SalesBlock sales={sales} />}
+
       <div className="overview-row even">
         <div className="card">
           <div className="card-head">
@@ -142,7 +160,11 @@ export function Overview() {
                 tone={(myTarget.pct ?? 0) >= 100 ? "ok" : "warn"}
                 icon="target"
                 title={`Your target: ${myTarget.pct}% reached`}
-                sub={`${inrShort(myTarget.won_value)} won of ${inrShort(myTarget.target)} this month · forecast ${inrShort(myTarget.forecast)}`}
+                sub={
+                  myTarget.basis === "invoiced"
+                    ? `${inrShort(myTarget.invoiced_value)} invoiced of ${inrShort(myTarget.target)} this month`
+                    : `${inrShort(myTarget.won_value)} won of ${inrShort(myTarget.target)} this month · forecast ${inrShort(myTarget.forecast)}`
+                }
                 onView={() => navigate("/crm/targets")}
               />
             )}
@@ -185,7 +207,37 @@ export function Overview() {
                 onView={() => navigate("/leads?owner=unassigned")}
               />
             )}
-            {overdueCount === 0 && pending.length === 0 && unassigned === 0 && staleCount === 0 && (
+            {(sales?.money?.overdue ?? 0) > 0 && (
+              <Attention
+                tone="bad"
+                icon="wallet"
+                title={`${inrShort(sales!.money!.overdue)} overdue from customers`}
+                sub={sales!.money!.overdue_customers
+                  .slice(0, 3)
+                  .map((c) => c.name)
+                  .join(", ")}
+                onView={() => navigate("/sales/receivables")}
+              />
+            )}
+            {(sales?.orders?.to_invoice ?? 0) > 0 && (
+              <Attention
+                tone="warn"
+                icon="file"
+                title={`${sales!.orders!.to_invoice} order${sales!.orders!.to_invoice === 1 ? "" : "s"} waiting to be invoiced`}
+                sub="Confirmed orders with goods or services not yet billed"
+                onView={() => navigate("/sales/orders")}
+              />
+            )}
+            {(sales?.money?.advances ?? 0) > 0 && (
+              <Attention
+                tone="warn"
+                icon="wallet"
+                title={`${inrShort(sales!.money!.advances)} in customer advances`}
+                sub="Apply them to invoices, or refund them"
+                onView={() => navigate("/sales/payments")}
+              />
+            )}
+            {overdueCount === 0 && pending.length === 0 && unassigned === 0 && staleCount === 0 && !sales?.money?.overdue && !sales?.orders?.to_invoice && (
               <Attention tone="ok" icon="check" title="All clear" sub="No overdue follow-ups, approvals, stale or unowned deals." />
             )}
           </div>
@@ -224,6 +276,66 @@ export function Overview() {
   );
 }
 
+/** Money: invoiced and collected this month, owed and overdue, six months of sales, top customers. */
+function SalesBlock({ sales }: { sales: SalesDashboard }) {
+  const navigate = useNavigate();
+  const m = sales.money!;
+  const delta = pctChange(m.invoiced_this_month, m.invoiced_last_month);
+  return (
+    <>
+      <div className="kpi-grid">
+        <Kpi icon="file" label="Invoiced this month" value={inrShort(m.invoiced_this_month)}>
+          {delta === null ? (
+            <span>Less credit notes</span>
+          ) : (
+            <>
+              <b className={delta >= 0 ? "up" : "down"}>
+                <Icon name="trend" size={14} />
+                {delta >= 0 ? "+" : ""}
+                {delta.toFixed(1)}%
+              </b>
+              <span>vs. last month</span>
+            </>
+          )}
+        </Kpi>
+        <Kpi icon="wallet" label="Collected this month" value={inrShort(m.collected_this_month)}>
+          <span>Payments received, less refunds</span>
+        </Kpi>
+        <Kpi icon="chart" label="Customers owe" value={inrShort(m.outstanding)}>
+          <span>{m.overdue > 0 ? `${inrShort(m.overdue)} overdue` : "Nothing overdue"}</span>
+        </Kpi>
+        <Kpi icon="clock" label="Orders to invoice" value={String(sales.orders?.to_invoice ?? 0)}>
+          <span>
+            {sales.quotations ? `${sales.quotations.awaiting_reply} quote${sales.quotations.awaiting_reply === 1 ? "" : "s"} awaiting a reply` : "Confirmed, not yet billed"}
+          </span>
+        </Kpi>
+      </div>
+      <div className="overview-row">
+        <div className="card">
+          <div className="card-head">
+            <span className="card-title">Sales invoiced</span>
+            <span className="card-note">₹ in Lakhs · last 6 months, less credit notes</span>
+          </div>
+          <AreaChart points={m.monthly} label="Sales invoiced by month" />
+        </div>
+        <div className="card">
+          <div className="card-head">
+            <span className="card-title">Top customers</span>
+            <button className="link-btn" onClick={() => navigate("/sales/reports")}>
+              FY {m.fy_label}
+            </button>
+          </div>
+          {m.top_customers.length === 0 ? (
+            <p className="card-note">No invoices this financial year yet.</p>
+          ) : (
+            <StageBars rows={m.top_customers.map((c) => ({ label: c.name, value: c.value }))} />
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function Kpi({ icon, label, value, children }: { icon: IconName; label: string; value: string; children: ReactNode }) {
   return (
     <div className="card kpi">
@@ -246,7 +358,8 @@ function niceMax(v: number): number {
   return (n <= 1.2 ? 1.2 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 4 : n <= 6 ? 6 : n <= 8 ? 8 : 12) * mag;
 }
 
-function AreaChart({ points }: { points: { label: string; value: number }[] }) {
+function AreaChart({ points, label = "Quotation value by month" }: { points: { label: string; value: number }[]; label?: string }) {
+  const fillId = useId();
   const W = 600;
   const H = 240;
   const pad = { l: 44, r: 16, t: 14, b: 30 };
@@ -260,9 +373,9 @@ function AreaChart({ points }: { points: { label: string; value: number }[] }) {
   const fmt = (v: number) => (v === 0 ? "0" : `${v % 1 === 0 ? v : v.toFixed(1)}L`);
 
   return (
-    <svg className="area-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Quotation value by month">
+    <svg className="area-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label}>
       <defs>
-        <linearGradient id="areaFill" x1="0" x2="0" y1="0" y2="1">
+        <linearGradient id={fillId} x1="0" x2="0" y1="0" y2="1">
           <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.35" />
           <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
         </linearGradient>
@@ -276,7 +389,7 @@ function AreaChart({ points }: { points: { label: string; value: number }[] }) {
         </g>
       ))}
       <line className="axis-line" x1={pad.l} x2={pad.l} y1={pad.t} y2={y(0)} />
-      <path d={area} fill="url(#areaFill)" />
+      <path d={area} fill={`url(#${fillId})`} />
       <path className="series" d={line} />
       {lakhs.map((v, i) => (
         <g key={i}>

@@ -84,9 +84,6 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
   `orchestrator.parse_quotation_request` extracts quotation lines. Swap them
   for a Claude tool-calling loop against `toolgateway.registry.list_tools()` —
   the tools, executor, audit trail and permission checks don't need to change.
-- **Alembic migrations.** Schema is created via `Base.metadata.create_all()`
-  at startup for dev convenience. Add real migrations before this touches a
-  shared environment.
 - **CRM writes go through plain routes, not the tool gateway.** They're
   permission-checked and every change lands in the record's history (see
   "Record history" below), but only Ask ERP actions and quotations write
@@ -571,3 +568,193 @@ functions with their own unit tests).
   | `sales.credit_note.write` | Issue credit notes |
   | `sales.payment.read` / `sales.payment.write` | See / record, apply and void payments |
   | `sales.reports.read` | Sales register and GSTR-1 (downloads audited) |
+
+
+## Database migrations
+
+Schema changes are Alembic migrations in `backend/alembic/versions`
+(`0001_baseline` is the schema as of the sales cycle).
+
+- The API applies them at startup (`app/core/migrations.py`); set
+  `AUTO_MIGRATE=0` where deploys run `.venv/bin/alembic upgrade head`
+  instead. `python -m app.seed` upgrades first too.
+- A database made before migrations existed (app tables, no
+  `alembic_version`) is brought to the baseline once by the frozen legacy
+  bootstrap in `app/core/dev_schema.py`, stamped `0001`, and handed to
+  Alembic. Never add new tables or columns there.
+- A change to the models: `.venv/bin/alembic revision --autogenerate -m
+  "what changed"`, read the generated file (data backfills and renames need
+  writing by hand), then `alembic upgrade head`. `alembic check` fails if the
+  models have changes no migration covers.
+- `tests/test_migrations.py` builds an empty database from the migrations,
+  checks it matches the models exactly, and downgrades it again:
+
+```bash
+MIGRATION_TEST_DB=postgresql+psycopg://USER:PASS@localhost/EMPTY_DB \
+  .venv/bin/python -m unittest tests.test_migrations -v
+```
+
+### Quick sale (counter sales)
+
+`POST /api/sales/quick-sale` (audited tool `sales.quick_sale.v1`) does a
+counter sale in one transaction: a confirmed order, delivery of the goods,
+an issued tax invoice and, when `payment` is given, a receipt against it.
+The usual rules still apply at each step (manager approval for big
+discounts, credit limit, stock, GST rates); any refusal saves nothing. With
+no `customer_id` the sale goes on the company's "Walk-in customer". It needs
+the order, delivery and invoice write permissions, plus payments when paid.
+The Quick sale page shows the change to give back for cash and opens the
+invoice for printing.
+
+### Quotations: form, editing, validity, print
+
+- `POST /api/sales/quotations` takes a `customer_id` and lines by `item_id`
+  (Ask ERP still uses names), an optional `unit_price` per line (below list
+  price needs approval, like a big discount), `valid_until` (default: today
+  plus the company's `quotation_validity_days`, 15 unless changed) and
+  printed `notes`. Migration `0002` adds these columns.
+- `PATCH /api/sales/quotations/{id}` edits a draft or one awaiting approval
+  and re-prices it; the status follows the new prices (approval needed again
+  if the discount or prices call for it). A sent quotation can only have its
+  validity extended.
+- Past `valid_until`, a draft or sent quotation shows `is_expired`; it can't be
+  sent, accepted or turned into an order until its validity is extended.
+- Quotations print at `/print/quotation/{id}`.
+
+### Sending documents to customers
+
+- `POST /api/sales/share` makes a signed link to an issued invoice, a
+  quotation, a credit note, a receipt or a statement (with its period) and a
+  ready-to-send message; with `email` it also emails it through the SMTP
+  settings. Each kind is its own audited tool (`sales.share_invoice.v1` …)
+  needing that document's read permission, and the document's history
+  notes it.
+- The link (`/d/<token>`, valid 30 days) opens a print-ready page with no
+  login, showing that one document only; `GET /api/public/documents/{token}`
+  serves it. Tokens are signed with `JWT_SECRET`: they can't be altered to
+  reach another document, and changing the secret revokes them all.
+- WhatsApp opens `wa.me/<number>?text=<message>` from the user's own
+  WhatsApp — no WhatsApp Business API provider is wired in.
+  `GET /api/sales/share/recipients?customer_id=` lists the customer's
+  contacts with an email or phone to pick from.
+
+### TDS deducted by customers
+
+- A payment's allocations can carry `tds_amount` alongside `amount`: tax the
+  customer deducted at source instead of paying it. It settles the invoice
+  like money received (`invoices.amount_tds`; balance = total − paid −
+  credited − TDS), so an invoice paid net of TDS shows as Paid. The receipt
+  records the section (`tds_section`, required with any TDS: 194Q, 194C,
+  194J…). TDS above 20% of an invoice is refused as a likely typo. Voiding the
+  payment takes the TDS back off too. Migration `0003`.
+- `POST /api/sales/payments/{id}/tds-certificate` marks the customer's Form
+  16A as received.
+- `GET /api/sales/reports/tds` (and `tds.csv`) lists TDS deducted per invoice
+  in a period with the customer's PAN (taken from their GSTIN), the section
+  and whether the certificate came in, to match against Form 26AS.
+
+### Payment reminders to customers
+
+- Company & GST → Payment reminders: when on, the background worker emails
+  each unpaid invoice's customer (their billing `email` on the customer) a
+  reminder with a share link `reminder_before_days` before the due date and
+  on each of `reminder_after_days` after it (default 3 before; 1, 7, 15, 30
+  after). Each stage goes once (`invoices.reminder_offsets_sent`); after a
+  gap only the latest stage due is sent; paid invoices stop. Needs SMTP.
+  Migration `0004` (also adds the customer's billing `email` and `phone`).
+- By hand: "Send reminder" on an invoice and "Remind" on Receivables (a
+  statement) send reminder wording by email or WhatsApp
+  (`POST /api/sales/share` with `reminder: true`). The customer's billing
+  contact is offered first.
+
+### Price lists, quantity breaks and line discounts
+
+- Sales → Price lists (`/api/sales/price-lists`, edit needs
+  `sales.settings.write`): named lists of agreed prices per item, with
+  quantity breaks — the same item again with a higher `min_qty`
+  (₹400 from 1 box, ₹380 from 100). One list can be the default.
+- A customer pays their own list (`customers.price_list_id`), else the
+  default list, else the item's price; a list switched off is skipped. Rates
+  left blank on quotations, orders and quick sales use that price, and it is
+  the order line's `list_price`: going below it needs a manager.
+  `GET /api/sales/prices?customer_id=` returns the breaks for line editors.
+- Each line can carry its own `discount_pct`, taken off before the
+  document's discount (10% then 5% is 14.5%). Combined over 2% needs
+  approval, like the document discount. It carries from quotation to order
+  to invoice and shows on prints. Migration `0005`.
+
+### Refunds
+
+- Money paid back to a customer comes from one of two places: a payment's
+  advance (the part not applied to invoices — "Refund advance" on the
+  payment), or an invoice's credit balance (a credit note after it was paid
+  takes the balance below zero — "Refund ₹…" on the invoice).
+  `POST /api/sales/refunds` with exactly one of `receipt_id`/`invoice_id`;
+  numbered RFD/26-27/00001, needs `sales.payment.write`, goes through the
+  `sales.create_refund.v1` tool.
+- `receipts.amount_refunded` lowers the advance left; `invoices.amount_refunded`
+  brings a negative balance back to zero. Refunds are debits on the customer
+  statement. A payment with a refund on it can't be voided until the refund
+  is (`POST /api/sales/refunds/{id}/void`). `GET /api/sales/refundable?customer_id=`
+  lists what could be paid back. Migration `0006`.
+
+### Sales lists: export and saved views
+
+- Orders, Invoices and Payments have "Export CSV" (`/api/exports/orders.csv`,
+  `invoices.csv`, `payments.csv`) with the list's current filters (`status`,
+  `q`, `customer_id`, `with_advance`), and saved views like the CRM lists.
+  Exports need `crm.export` plus the list's read permission and are audited
+  (`crm.export_records.v1`). The invoice export carries the GST split,
+  paid/credited/TDS/refunded and balance per invoice.
+
+### Sales dashboard
+
+- Overview shows, for people who can read invoices: invoiced this month
+  (less credit notes) against last month, collected this month (payments
+  less refunds), what customers owe and how much is overdue, six months of
+  sales and the top customers this financial year; plus orders waiting to be
+  invoiced, overdue customers and unapplied advances under "Needs your
+  attention". `GET /api/sales/dashboard`; each block appears only with the
+  permission to read what's behind it.
+
+### e-Invoice and e-way bill JSON
+
+- Invoice → "e-Invoice / e-Way bill": downloads the e-invoice JSON (NIC
+  schema 1.1, `GET /api/sales/invoices/{id}/einvoice`; credit notes at
+  `/credit-notes/{id}/einvoice` with the original invoice referenced) and
+  the e-way bill bulk-upload JSON (`/invoices/{id}/ewaybill?distance_km=`;
+  vehicle and transporter default to the order's latest delivery note).
+  Each comes with the problems the portal would reject — no buyer GSTIN
+  (e-invoices are B2B only), no 6-digit PIN in an address, missing HSN
+  codes, an e-way bill under ₹50,000 or with no vehicle.
+- Nothing is sent to the portals yet: upload the file (or hand it to a GST
+  Suvidha Provider), then record the IRN, acknowledgement and e-way bill
+  number (`PUT /api/sales/invoices/{id}/gst-refs`); they print on the
+  invoice. PIN codes are read from the free-text addresses. Migration `0007`.
+
+### Tally export
+
+- Sales → Reports → "Export to Tally" (`GET /api/sales/reports/tally.xml`)
+  downloads the period's invoices (Sales), credit notes (Credit Note),
+  receipts (Receipt, with TDS to "TDS Receivable") and refunds (Payment) as
+  TallyPrime import XML — Gateway of Tally → Import → Transactions. Customers
+  are created as ledgers under Sundry Debtors with GSTIN and state. The other
+  ledgers must exist in Tally with these names: Sales, Output CGST, Output
+  SGST, Output IGST, Round Off, Cash, Bank, TDS Receivable. Every voucher
+  balances; voided payments and refunds are left out; downloads are audited
+  (`sales.export_tally.v1`).
+
+### Salesperson and targets on invoiced sales
+
+- Orders and invoices carry a salesperson: the deal's owner for orders made
+  from a quotation on a deal, else whoever made the quote, else whoever
+  enters the order. Invoices copy it from their order when drafted. It can
+  be changed at any time (`PUT /api/sales/orders/{id}/salesperson`,
+  `/invoices/{id}/salesperson`) — it's attribution, not part of the tax
+  invoice — and is in the order and invoice CSV exports. Migration `0008`
+  backfills existing orders and invoices the same way.
+- Targets show, per person, deals won and sales invoiced (taxable value of
+  invoices issued in the month with them as salesperson, less that month's
+  credit notes on their invoices). The company chooses which one progress
+  is measured on (Targets → "On deals won" / "On sales invoiced",
+  `PUT /api/crm/targets/basis`, needs `crm.settings.write`).

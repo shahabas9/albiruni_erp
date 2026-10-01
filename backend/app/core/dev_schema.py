@@ -1,6 +1,10 @@
-"""Dev-only schema bootstrap, including upgrades from either CRM prototype.
+"""Legacy bootstrap for databases made before Alembic migrations existed.
 
-Production deployments should express these upgrades as Alembic migrations.
+Frozen at migration 0001 (the baseline): app.core.migrations runs this once
+on a database that has app tables but no alembic_version, then stamps it at
+0001 and lets Alembic take over. It must never learn about tables or columns
+added after the baseline — those belong in new migrations under
+backend/alembic/versions.
 """
 
 from sqlalchemy import inspect, text
@@ -18,8 +22,18 @@ LEGACY_CRM_PERMISSIONS = {
 }
 
 
+# Every table in the 0001 baseline. Tables added later come from migrations.
+BASELINE_TABLES = (
+    "activities", "attachments", "audit_events", "companies", "contacts", "credit_note_lines", "credit_notes",
+    "crm_events", "crm_settings", "custom_fields", "customers", "delivery_note_lines", "delivery_notes",
+    "document_counters", "invoice_lines", "invoices", "items", "leads", "notifications", "opportunities",
+    "quotation_lines", "quotations", "receipt_allocations", "receipts", "roles", "sales_order_lines",
+    "sales_orders", "sales_targets", "saved_views", "stock_movements", "tenants", "users",
+)
+
+
 def ensure_dev_schema() -> None:
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine, tables=[Base.metadata.tables[name] for name in BASELINE_TABLES])
     with engine.begin() as conn:
         def columns(table: str) -> set[str]:
             return {column["name"] for column in inspect(conn).get_columns(table)}
@@ -259,3 +273,10 @@ def ensure_dev_schema() -> None:
                 UPDATE roles SET permissions = array_append(permissions, 'sales.reports.read')
                 WHERE 'sales.invoice.write' = ANY(permissions) AND NOT 'sales.reports.read' = ANY(permissions)
             """))
+
+        # Bring prototype-era column types in line with the baseline.
+        conn.execute(text("ALTER TABLE activities ALTER COLUMN type TYPE VARCHAR(20)"))
+        conn.execute(text("ALTER TABLE leads ALTER COLUMN source TYPE VARCHAR(60)"))
+        conn.execute(text("ALTER TABLE leads ALTER COLUMN status TYPE VARCHAR(20)"))
+        conn.execute(text("ALTER TABLE opportunities ALTER COLUMN stage TYPE VARCHAR(20)"))
+        conn.execute(text("ALTER TABLE opportunities ALTER COLUMN stage_changed_at SET NOT NULL"))

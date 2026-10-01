@@ -5,6 +5,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://albiruni:albiruni@localhost:5432/albiruni_erp"
+    # Apply database migrations when the API starts. Turn off where deploys run `alembic upgrade head`.
+    auto_migrate: bool = True
     jwt_secret: str = "dev-only-secret-do-not-use-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480

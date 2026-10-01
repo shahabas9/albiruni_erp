@@ -148,12 +148,15 @@ export function bootstrap(body: BootstrapRequest): Promise<LoginResponse> {
 // --- Sales ----------------------------------------------------------------
 
 export interface QuotationLine {
+  item_id?: string | null;
   item_name: string;
+  uom?: string;
   qty: number;
   unit_price: number;
   line_total: number;
   hsn_code?: string;
   gst_rate?: number;
+  discount_pct?: number;
   taxable_value?: number;
   tax_amount?: number;
 }
@@ -181,6 +184,13 @@ export interface Quotation extends TaxTotals {
   place_of_supply: string;
   status: "Draft" | "Pending approval" | "Sent" | "Accepted" | "Rejected";
   status_note: string;
+  valid_until: string | null;
+  /** Draft or sent, past valid_until. */
+  is_expired: boolean;
+  notes: string;
+  customer_gstin: string;
+  billing_address: string;
+  created_by_name: string | null;
   customer_id: string | null;
   /** The order this quotation became (not cancelled), if any. */
   order_id: string | null;
@@ -304,6 +314,11 @@ export interface Customer {
   state_code: string;
   /** null: the company's default terms. */
   payment_terms_days: number | null;
+  /** Billing contact: invoices, statements and payment reminders go here. */
+  email: string;
+  phone: string;
+  /** null: the company's default price list, else item prices. */
+  price_list_id: string | null;
 }
 
 export interface CustomerInput {
@@ -319,6 +334,9 @@ export interface CustomerInput {
   shipping_address?: string;
   state_code?: string;
   payment_terms_days?: number | null;
+  email?: string;
+  phone?: string;
+  price_list_id?: string | null;
 }
 
 export interface CustomerQuery {
@@ -531,10 +549,6 @@ export interface LeadInput {
   tags?: string[];
   /** On update only the keys sent change; null or "" clears one. */
   custom?: CustomValues;
-  billing_address?: string;
-  shipping_address?: string;
-  state_code?: string;
-  payment_terms_days?: number | null;
 }
 
 /** owner: "me", "unassigned" or a user id. status: a status or "open". */
@@ -720,6 +734,8 @@ export interface OpportunityInput {
   shipping_address?: string;
   state_code?: string;
   payment_terms_days?: number | null;
+  email?: string;
+  phone?: string;
 }
 
 /** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */
@@ -946,6 +962,9 @@ export interface TargetRow {
   /** Value of deals this person moved to Won during the month. */
   won_value: number;
   won_count: number;
+  /** Taxable value invoiced with them as salesperson, less the month's credit notes on those invoices. */
+  invoiced_value: number;
+  invoiced_count: number;
   /** Their open deals expected to close this month, value × probability. */
   forecast: number;
   pct: number | null;
@@ -953,13 +972,21 @@ export interface TargetRow {
 
 export interface TargetReport {
   month: string;
+  /** What progress measures. */
+  basis: "won" | "invoiced";
   rows: TargetRow[];
   team_target: number;
   team_won: number;
+  team_invoiced: number;
   team_pct: number | null;
   /** Won by deals nobody owns — counted in the team total only. */
   unowned_won_value: number;
   unowned_won_count: number;
+}
+
+/** Measure targets on deals won or on sales invoiced. */
+export function setTargetBasis(basis: "won" | "invoiced", month: string): Promise<TargetReport> {
+  return request<TargetReport>(`/api/crm/targets/basis${query({ month })}`, { method: "PUT", body: JSON.stringify({ basis }) });
 }
 
 /** month: "YYYY-MM"; this month when omitted. */
@@ -1195,7 +1222,7 @@ export function fetchCustomerTimeline(id: string): Promise<TimelineEntry[]> {
 
 // --- Export ----------------------------------------------------------------------
 
-export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+export type ExportKind = "leads" | "opportunities" | "customers" | "contacts" | "activities" | "orders" | "invoices" | "payments";
 
 /** Downloads a list as CSV with the given filters (same as the list's query parameters). */
 export function downloadExport(kind: ExportKind, filters: Params = {}): Promise<number> {
@@ -1233,7 +1260,7 @@ export function bulkAction(
 
 // --- Saved views ------------------------------------------------------------------
 
-export type ViewPage = "leads" | "opportunities" | "customers" | "contacts" | "activities";
+export type ViewPage = "leads" | "opportunities" | "customers" | "contacts" | "activities" | "orders" | "invoices" | "payments";
 export type ViewFilters = Record<string, string | boolean | number | null>;
 
 export interface SavedView {

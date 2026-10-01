@@ -1,6 +1,9 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchInvoices } from "../api/sales";
+import { ExportButton } from "../components/ExportButton";
+import { SavedViews } from "../components/SavedViews";
+import { recallFilters } from "../lib/filterMemory";
 import { Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, docStatusClass, inr } from "../lib/format";
@@ -16,8 +19,9 @@ const FILTERS = [
 
 export function Invoices() {
   const { version } = useAppData();
-  const [status, setStatus] = useState("");
-  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState(() => String(recallFilters("invoices").status ?? ""));
+  const [search, setSearch] = useState(() => String(recallFilters("invoices").search ?? ""));
+  const [error, setError] = useState<string | null>(null);
   const onSearch = useCallback((q: string) => setSearch(q), []);
   const list = usePaged((limit, offset) => fetchInvoices({ status, q: search, limit, offset }), `${status}|${search}`, version);
 
@@ -36,9 +40,15 @@ export function Invoices() {
             </button>
           ))}
         </div>
+        <SavedViews
+          page="invoices"
+          filters={{ status, search }}
+          onApply={(f) => (setStatus(String(f.status ?? "")), setSearch(String(f.search ?? "")))}
+        />
         <SearchBox value={search} onChange={onSearch} placeholder="Invoice no., customer or PO" />
+        <ExportButton kind="invoices" filters={{ status, q: search }} onError={setError} />
       </div>
-      {list.error && <div className="error-banner">{list.error}</div>}
+      {(error ?? list.error) && <div className="error-banner">{error ?? list.error}</div>}
       {!list.loading && list.total === 0 && (
         <div className="card" style={{ textAlign: "center", color: "var(--ink-dim)" }}>
           {status || search ? "No invoices match this filter." : "No invoices yet. Open a confirmed order and choose Create invoice."}

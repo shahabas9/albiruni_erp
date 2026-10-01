@@ -7,8 +7,10 @@ from pydantic import BaseModel, Field
 class DocLineIn(BaseModel):
     item_id: UUID
     qty: float = Field(gt=0, le=10_000_000)
-    # Leave out to use the item's list price. Below list price needs approval.
+    # Leave out for the customer's agreed price (price list, else item price). Below it needs approval.
     unit_price: float | None = Field(default=None, ge=0)
+    # This line's own discount; with the document's, over the limit needs approval.
+    discount_pct: float = Field(default=0, ge=0, le=100)
 
 
 class OrderIn(BaseModel):
@@ -18,6 +20,8 @@ class OrderIn(BaseModel):
     customer_po: str = Field(default="", max_length=60)
     notes: str = Field(default="", max_length=2000)
     order_date: date | None = None
+    # Who the sale counts for; the person entering it when left out.
+    salesperson_id: UUID | None = None
 
 
 class OrderUpdate(BaseModel):
@@ -46,6 +50,7 @@ class DocLineOut(BaseModel):
     unit_price: float
     list_price: float
     gst_rate: float
+    discount_pct: float = 0
     amount: float
     taxable_value: float
     cgst: float
@@ -84,6 +89,8 @@ class OrderOut(BaseModel):
     needs_approval: bool
     approved_by_name: str | None
     cancel_reason: str
+    salesperson_id: UUID | None = None
+    salesperson_name: str | None = None
     created_by_name: str | None
     created_at: datetime
     confirmed_at: datetime | None
@@ -147,3 +154,30 @@ class StockMovementOut(BaseModel):
 class StockAdjustIn(BaseModel):
     counted_qty: float = Field(ge=0, le=100_000_000)
     reason: str = Field(min_length=1, max_length=200)
+
+
+class QuickPaymentIn(BaseModel):
+    amount: float = Field(gt=0, le=1_000_000_000)
+    mode: str = Field(max_length=20)
+    reference: str = Field(default="", max_length=60)
+
+
+class QuickSaleIn(BaseModel):
+    # Leave out for the company's walk-in customer.
+    customer_id: UUID | None = None
+    lines: list[DocLineIn] = Field(min_length=1, max_length=200)
+    discount_pct: float = Field(default=0, ge=0, le=100)
+    notes: str = Field(default="", max_length=2000)
+    # Leave out when the customer pays later.
+    payment: QuickPaymentIn | None = None
+
+
+class QuickSaleOut(BaseModel):
+    order_id: UUID
+    invoice_id: UUID
+    receipt_id: UUID | None
+
+
+class SalespersonIn(BaseModel):
+    # null: counts for nobody.
+    user_id: UUID | None = None

@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -57,6 +57,10 @@ class SalesOrder(Base):
     cancel_reason: Mapped[str] = mapped_column(String(200), default="")
     # Set when a manager approved the discount (here or on the quotation).
     approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    # Who the sale counts for (targets, commission). Follows the deal owner when there is one.
+    salesperson_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     confirmed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -83,6 +87,8 @@ class SalesOrderLine(Base):
     # The item's list price when the line was made; a lower unit price needs approval.
     list_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    # This line's own discount, before the order's.
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     amount: Mapped[float] = _money()  # qty × price
     taxable_value: Mapped[float] = _money()  # after discount
     cgst: Mapped[float] = _money()
@@ -200,19 +206,43 @@ class Invoice(Base):
     # Running totals kept in step with receipts and credit notes.
     amount_paid: Mapped[float] = _money()
     amount_credited: Mapped[float] = _money()
+    # Tax the customer deducted at source (TDS) instead of paying it to us.
+    amount_tds: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
+    # From the GST portals, recorded after uploading: e-invoice IRN and acknowledgement, e-way bill.
+    irn: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    irn_ack_no: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    irn_ack_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    eway_bill_no: Mapped[str] = mapped_column(String(12), default="", server_default="")
+    eway_bill_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Credit balance paid back to the customer (after a credit note on a paid invoice).
+    amount_refunded: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     notes: Mapped[str] = mapped_column(Text, default="")
     terms: Mapped[str] = mapped_column(Text, default="")
     bank_details: Mapped[str] = mapped_column(Text, default="")
+    # Copied from the order; who the sale counts for.
+    salesperson_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     issued_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Reminder stages already sent to the customer, as days from the due date (−3, 1, 7…).
+    reminder_offsets_sent: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list, server_default="{}")
+    last_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     lines: Mapped[list["InvoiceLine"]] = relationship(
         back_populates="invoice", cascade="all, delete-orphan", order_by="InvoiceLine.position"
     )
     order: Mapped["SalesOrder"] = relationship()
+
+    @classmethod
+    def left_expr(cls):
+        """What's still owed, as SQL: total − paid − credited − TDS deducted + refunded.
+        Below zero, we owe the customer."""
+
+        return cls.grand_total - cls.amount_paid - cls.amount_credited - cls.amount_tds + cls.amount_refunded
     customer: Mapped["Customer"] = relationship()  # noqa: F821
 
 
@@ -230,6 +260,7 @@ class InvoiceLine(Base):
     qty: Mapped[float] = mapped_column(Numeric(14, 2))
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     amount: Mapped[float] = _money()
     taxable_value: Mapped[float] = _money()
     cgst: Mapped[float] = _money()
@@ -320,6 +351,13 @@ class Receipt(Base):
     # Received or Voided (a bounced cheque, a mistaken entry).
     status: Mapped[str] = mapped_column(String(12), default="Received")
     void_reason: Mapped[str] = mapped_column(String(200), default="")
+    # TDS the customer deducted from this payment (on top of `amount`), its section, and
+    # whether their TDS certificate (Form 16A) has come in.
+    tds_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
+    tds_section: Mapped[str] = mapped_column(String(10), default="", server_default="")
+    tds_certificate_received: Mapped[bool] = mapped_column(default=False, server_default="false")
+    # Part of the advance paid back to the customer.
+    amount_refunded: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -329,6 +367,37 @@ class Receipt(Base):
     customer: Mapped["Customer"] = relationship()  # noqa: F821
 
 
+class Refund(Base):
+    """Money paid back to a customer: from an advance (a receipt's unapplied
+    part) or an invoice's credit balance (credited after it was paid)."""
+
+    __tablename__ = "refunds"
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_refunds_tenant_number"),)
+
+    id: Mapped[uuid.UUID] = _id()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    number: Mapped[str] = mapped_column(String(16))
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), index=True)
+    # Exactly one of these: where the money owed back came from.
+    receipt_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("receipts.id"), nullable=True)
+    invoice_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=True)
+    refund_date: Mapped[date] = mapped_column(Date)
+    amount: Mapped[float] = _money()
+    mode: Mapped[str] = mapped_column(String(20))
+    reference: Mapped[str] = mapped_column(String(60), default="")
+    reason: Mapped[str] = mapped_column(String(200))
+    # Paid or Voided (entered by mistake).
+    status: Mapped[str] = mapped_column(String(12), default="Paid")
+    void_reason: Mapped[str] = mapped_column(String(200), default="")
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    customer: Mapped["Customer"] = relationship()  # noqa: F821
+    receipt: Mapped["Receipt | None"] = relationship()
+    invoice: Mapped["Invoice | None"] = relationship()
+
+
 class ReceiptAllocation(Base):
     __tablename__ = "receipt_allocations"
 
@@ -336,6 +405,7 @@ class ReceiptAllocation(Base):
     receipt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("receipts.id", ondelete="CASCADE"))
     invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id"), index=True)
     amount: Mapped[float] = _money()
+    tds_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     receipt: Mapped["Receipt"] = relationship(back_populates="allocations")

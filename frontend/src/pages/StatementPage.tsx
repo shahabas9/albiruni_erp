@@ -6,6 +6,7 @@ import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, inr, todayIso } from "../lib/format";
 import { PaymentModal } from "../sales/PaymentModal";
+import { SendModal } from "../sales/SendModal";
 
 function fyStart(): string {
   const d = new Date();
@@ -23,6 +24,7 @@ export function StatementPage() {
   const [data, setData] = useState<Statement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
+  const [sending, setSending] = useState(false);
   const [changes, setChanges] = useState(0);
 
   useEffect(() => {
@@ -63,6 +65,9 @@ export function StatementPage() {
           <a className="ghost-btn" href={`/print/statement/${customerId}?from=${from}&to=${to}`} target="_blank" rel="noreferrer">
             Print / PDF
           </a>
+          <button className="ghost-btn" onClick={() => setSending(true)}>
+            Send
+          </button>
           {can("sales.payment.write") && data && (
             <button className="primary-btn" onClick={() => setPaying(true)}>
               Record payment
@@ -75,6 +80,16 @@ export function StatementPage() {
         <div className="card">
           <StatementTable data={data} />
         </div>
+      )}
+      {sending && (
+        <SendModal
+          kind="statement"
+          id={customerId}
+          customerId={customerId}
+          title="the statement"
+          period={{ date_from: from, date_to: to }}
+          onClose={() => setSending(false)}
+        />
       )}
       {paying && data && (
         <PaymentModal

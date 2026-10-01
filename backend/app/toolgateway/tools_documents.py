@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
 from app.domain import (
-    credit_note_service, delivery_service, invoice_service, order_service, payment_service, sales_reports,
+    credit_note_service, delivery_service, invoice_service, order_service, payment_service, refund_service,
+    sales_reports, share_service, tally_export,
 )
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
@@ -87,6 +88,7 @@ def record_payment(db: Session, context: RequestContext, args: dict[str, Any]) -
         db, context, customer_id=UUID(str(args["customer_id"])), amount=float(args["amount"]), mode=args["mode"],
         receipt_date=date.fromisoformat(args["receipt_date"]) if args.get("receipt_date") else None,
         reference=args.get("reference", ""), notes=args.get("notes", ""), allocations=args.get("allocations"),
+        tds_section=args.get("tds_section", ""),
     )
     left = payment_service.unallocated(receipt)
     return {"receipt_id": str(receipt.id), "number": receipt.number,
@@ -109,7 +111,31 @@ def void_payment(db: Session, context: RequestContext, args: dict[str, Any]) -> 
             "result_summary": f"Voided payment {receipt.number}: {receipt.void_reason}"}
 
 
+@_guard
+def create_refund(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    refund = refund_service.create_refund(
+        db, context, amount=float(args["amount"]), mode=args["mode"], reason=str(args.get("reason", "")),
+        reference=args.get("reference", ""),
+        refund_date=date.fromisoformat(args["refund_date"]) if args.get("refund_date") else None,
+        receipt_id=UUID(str(args["receipt_id"])) if args.get("receipt_id") else None,
+        invoice_id=UUID(str(args["invoice_id"])) if args.get("invoice_id") else None,
+    )
+    return {"refund_id": str(refund.id), "number": refund.number,
+            "result_summary": f"Refunded ₹{float(refund.amount):,.2f} to {refund.customer.name} ({refund.number})"}
+
+
+@_guard
+def void_refund(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    refund = refund_service.void_refund(db, context, UUID(str(args["refund_id"])), str(args.get("reason", "")))
+    return {"refund_id": str(refund.id), "number": refund.number,
+            "result_summary": f"Voided refund {refund.number}: {refund.void_reason}"}
+
+
 for name, purpose, permission, handler in [
+    ("sales.create_refund.v1", "Pay a customer back from an advance or an invoice's credit balance.",
+     "sales.payment.write", create_refund),
+    ("sales.void_refund.v1", "Void a refund entered by mistake; the amount is owed back again.",
+     "sales.payment.write", void_refund),
     ("sales.record_payment.v1", "Record money received and apply it to invoices.", "sales.payment.write",
      record_payment),
     ("sales.allocate_payment.v1", "Apply an advance payment to invoices.", "sales.payment.write", allocate_payment),
@@ -138,6 +164,8 @@ def export_report(db: Session, context: RequestContext, args: dict[str, Any]) ->
     start, end = date.fromisoformat(args["date_from"]), date.fromisoformat(args["date_to"])
     if kind == "register":
         rows = sales_reports.sales_register(db, context, start, end)["rows"]
+    elif kind == "tds":
+        rows = sales_reports.tds_report(db, context, start, end)["rows"]
     elif kind in sales_reports.SECTIONS:
         rows = sales_reports.gstr1(db, context, start, end)[kind]
     else:
@@ -216,4 +244,64 @@ register_tool(ToolDefinition(
 register_tool(ToolDefinition(
     name="sales.draft_invoice.v1", purpose="Draft an invoice for what's delivered and not yet invoiced on an order.",
     permission="sales.invoice.write", risk_level="L2 Prepare", handler=draft_invoice,
+))
+
+
+def quick_sale(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    from app.domain import quick_sale as qs
+
+    try:
+        order, invoice, receipt = qs.quick_sale(
+            db, context, customer_id=UUID(args["customer_id"]) if args.get("customer_id") else None,
+            lines=args["lines"], discount_pct=float(args.get("discount_pct") or 0), notes=args.get("notes", ""),
+            payment=args.get("payment"),
+        )
+    except (ConflictError, NotFoundError, PermissionError) as exc:
+        raise ToolValidationError(str(exc)) from exc
+    paid = f", ₹{float(receipt.amount):,.2f} received" if receipt else ", not paid yet"
+    return {"order_id": str(order.id), "invoice_id": str(invoice.id),
+            "receipt_id": str(receipt.id) if receipt else None,
+            "result_summary": f"Counter sale: {invoice.number} for {invoice.buyer_name} "
+                              f"(₹{float(invoice.grand_total):,.2f}){paid}"}
+
+
+register_tool(ToolDefinition(
+    name="sales.quick_sale.v1", purpose="Counter sale: order, delivery, invoice and payment in one step.",
+    permission="sales.invoice.write", risk_level="L3 Execute", handler=quick_sale,
+))
+
+
+def share_document(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = share_service.share(
+            db, context, kind=args["kind"], doc_id=UUID(args["id"]), customer_id=UUID(args["customer_id"]),
+            title=args["title"], summary=args["summary"], email=args.get("email", ""),
+            date_from=date.fromisoformat(args["date_from"]) if args.get("date_from") else None,
+            date_to=date.fromisoformat(args["date_to"]) if args.get("date_to") else None,
+        )
+    except (ConflictError, NotFoundError, PermissionError) as exc:
+        raise ToolValidationError(str(exc)) from exc
+    sent = f"emailed to {result['emailed_to']}" if result["emailed_to"] else "share link made"
+    return {**result, "result_summary": f"{args['title']}: {sent}"}
+
+
+for kind, (permission, _) in share_service.KINDS.items():
+    register_tool(ToolDefinition(
+        name=f"sales.share_{kind}.v1", purpose=f"Send a customer a link to a {kind.replace('_', ' ')}, by email or WhatsApp.",
+        permission=permission, risk_level="L2 Prepare", handler=share_document,
+    ))
+
+
+@_guard
+def export_tally(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    start, end = date.fromisoformat(args["date_from"]), date.fromisoformat(args["date_to"])
+    xml, counts = tally_export.build(db, context, start, end)
+    vouchers = counts["sales"] + counts["credit_notes"] + counts["receipts"] + counts["refunds"]
+    return {"xml": xml, "counts": counts,
+            "result_summary": f"Exported {vouchers} vouchers to Tally for {start:%d %b %Y} – {end:%d %b %Y}"}
+
+
+register_tool(ToolDefinition(
+    name="sales.export_tally.v1", purpose="Download a period's sales, credit notes, receipts and refunds as Tally XML.",
+    permission="sales.reports.read", risk_level="L1 Read", handler=export_tally,
 ))

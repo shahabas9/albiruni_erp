@@ -10,7 +10,7 @@ from app.toolgateway.executor import execute_tool
 router = APIRouter(prefix="/api/exports", tags=["exports"])
 
 FILTERS = {"q", "status", "owner", "tag", "stage", "stale", "customer_id", "closed_since", "active", "show",
-           "lead_id", "opportunity_id"}
+           "lead_id", "opportunity_id", "with_advance"}
 
 
 @router.get("/{kind}.csv")
@@ -20,7 +20,7 @@ def export_csv(
     context: RequestContext = Depends(get_current_context),
     db: Session = Depends(get_db),
 ):
-    """leads, opportunities, customers, contacts or activities as CSV, with the
+    """leads, opportunities, customers, contacts, activities, orders, invoices or payments as CSV, with the
     same filters (query parameters) and record visibility as the lists. Needs
     crm.export plus read permission on that list; every export is audited."""
 

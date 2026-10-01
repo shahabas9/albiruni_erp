@@ -9,13 +9,18 @@ import {
   issueInvoice,
   type CreditNote,
   type Invoice,
+  setInvoiceSalesperson,
 } from "../api/sales";
+import { SalespersonField } from "../sales/SalespersonField";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format";
 import { CreditNoteModal } from "../sales/CreditNoteModal";
 import { PaymentModal } from "../sales/PaymentModal";
+import { RefundModal } from "../sales/RefundModal";
+import { GstPortalModal } from "../sales/GstPortalModal";
+import { SendModal } from "../sales/SendModal";
 import { DocTotals } from "../sales/DocTotals";
 
 export function InvoicePage() {
@@ -29,7 +34,10 @@ export function InvoicePage() {
   const [issueDate, setIssueDate] = useState(todayIso());
   const [notes, setNotes] = useState<CreditNote[]>([]);
   const [crediting, setCrediting] = useState(false);
+  const [refunding, setRefunding] = useState(false);
+  const [portal, setPortal] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [sending, setSending] = useState<{ kind: "invoice" | "credit_note"; id: string; title: string; reminder?: boolean } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -96,9 +104,29 @@ export function InvoicePage() {
               Print / PDF
             </a>
           )}
+          {!draft && (
+            <button className="ghost-btn" onClick={() => setSending({ kind: "invoice", id: invoice.id, title: `invoice ${invoice.number}` })}>
+              Send
+            </button>
+          )}
+          {!draft && invoice.balance > 0 && (
+            <button className="ghost-btn" onClick={() => setSending({ kind: "invoice", id: invoice.id, title: `invoice ${invoice.number}`, reminder: true })}>
+              Send reminder
+            </button>
+          )}
           {!draft && can("sales.payment.write") && invoice.balance > 0 && (
             <button className="primary-btn" onClick={() => setPaying(true)}>
               Record payment
+            </button>
+          )}
+          {!draft && (
+            <button className="ghost-btn" onClick={() => setPortal(true)}>
+              e-Invoice / e-Way bill
+            </button>
+          )}
+          {!draft && can("sales.payment.write") && invoice.balance < 0 && (
+            <button className="primary-btn" onClick={() => setRefunding(true)}>
+              Refund {inr(-invoice.balance)}
             </button>
           )}
           {!draft && can("sales.credit_note.write") && invoice.amount_credited < invoice.grand_total && (
@@ -175,15 +203,27 @@ export function InvoicePage() {
                 <dt>Paid</dt>
                 <dd className="num">{inr(invoice.amount_paid)}</dd>
               </div>
+              {invoice.amount_tds > 0 && (
+                <div>
+                  <dt>TDS deducted by customer</dt>
+                  <dd className="num">{inr(invoice.amount_tds)}</dd>
+                </div>
+              )}
               {invoice.amount_credited > 0 && (
                 <div>
                   <dt>Credited</dt>
                   <dd className="num">{inr(invoice.amount_credited)}</dd>
                 </div>
               )}
+              {invoice.amount_refunded > 0 && (
+                <div>
+                  <dt>Refunded to customer</dt>
+                  <dd className="num">{inr(invoice.amount_refunded)}</dd>
+                </div>
+              )}
               <div className="grand">
-                <dt>Balance due</dt>
-                <dd className="num">{inr(invoice.balance)}</dd>
+                <dt>{invoice.balance < 0 ? "We owe the customer" : "Balance due"}</dt>
+                <dd className="num">{inr(Math.abs(invoice.balance))}</dd>
               </div>
             </dl>
           )}
@@ -210,6 +250,18 @@ export function InvoicePage() {
                 <p>{invoice.customer_po}</p>
               </div>
             )}
+            <SalespersonField
+              id={invoice.salesperson_id}
+              name={invoice.salesperson_name}
+              onSave={
+                can("sales.invoice.write")
+                  ? async (userId) => {
+                      await setInvoiceSalesperson(invoice.id, userId);
+                      setChanges((n) => n + 1);
+                    }
+                  : undefined
+              }
+            />
             {invoice.issued_at && (
               <div>
                 <span>Issued</span>
@@ -235,7 +287,10 @@ export function InvoicePage() {
                         {p.reference && ` ${p.reference}`}
                       </small>
                     </div>
-                    <span className="num">{inr(p.amount)}</span>
+                    <span className="num">
+                      {inr(p.amount)}
+                      {p.tds_amount > 0 && <small> + {inr(p.tds_amount)} TDS</small>}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -256,9 +311,14 @@ export function InvoicePage() {
                         {n.restocked && " · back in stock"}
                       </small>
                     </div>
-                    <a className="ghost-btn sm" href={`/print/credit-note/${n.id}`} target="_blank" rel="noreferrer">
-                      Print
-                    </a>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="ghost-btn sm" onClick={() => setSending({ kind: "credit_note", id: n.id, title: `credit note ${n.number}` })}>
+                        Send
+                      </button>
+                      <a className="ghost-btn sm" href={`/print/credit-note/${n.id}`} target="_blank" rel="noreferrer">
+                        Print
+                      </a>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -272,6 +332,16 @@ export function InvoicePage() {
           </div>
         </div>
       </div>
+      {sending && (
+        <SendModal
+          kind={sending.kind}
+          id={sending.id}
+          customerId={invoice.customer_id}
+          title={sending.title}
+          reminder={sending.reminder}
+          onClose={() => setSending(null)}
+        />
+      )}
       {paying && (
         <PaymentModal
           customer={{ id: invoice.customer_id, name: invoice.customer_name }}
@@ -279,6 +349,27 @@ export function InvoicePage() {
           onClose={() => setPaying(false)}
           onDone={() => {
             setPaying(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
+      {portal && (
+        <GstPortalModal
+          invoice={invoice}
+          canWrite={can("sales.invoice.write")}
+          onClose={() => setPortal(false)}
+          onSaved={() => {
+            setPortal(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
+      {refunding && (
+        <RefundModal
+          source={{ invoice_id: invoice.id, number: invoice.number ?? "", customer_name: invoice.customer_name, available: -invoice.balance }}
+          onClose={() => setRefunding(false)}
+          onDone={() => {
+            setRefunding(false);
             setChanges((n) => n + 1);
           }}
         />

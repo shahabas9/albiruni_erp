@@ -6,7 +6,8 @@ between the quote a customer saw and the invoice they receive.
 
 Rules applied:
 - Prices exclude GST; tax is added on top.
-- A document-level discount comes off each line before tax.
+- A line's own discount, then the document's discount, come off each line
+  before tax.
 - Supply within the seller's state: CGST + SGST, half the rate each.
   Supply to another state: IGST at the full rate.
 - Each tax amount is rounded to the paisa per line; the grand total is
@@ -80,6 +81,8 @@ class LineIn:
     qty: Decimal
     unit_price: Decimal
     gst_rate: Decimal
+    # This line's own discount, before the document's.
+    discount_pct: Decimal = Decimal(0)
 
 
 @dataclass
@@ -117,7 +120,8 @@ def compute(lines: list[LineIn], discount_pct, interstate: bool) -> DocumentTax:
     out: list[LineTax] = []
     for line in lines:
         amount = money(line.qty * line.unit_price)
-        taxable = money(amount * (100 - discount) / 100)
+        line_discount = Decimal(str(line.discount_pct or 0))
+        taxable = money(amount * (100 - line_discount) / 100 * (100 - discount) / 100)
         if interstate:
             cgst = sgst = Decimal("0.00")
             igst = money(taxable * line.gst_rate / 100)

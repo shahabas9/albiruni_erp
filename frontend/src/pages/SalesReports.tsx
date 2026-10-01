@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { downloadReport, fetchGstr1, fetchSalesRegister, GSTR1_SECTIONS, type Gstr1, type SalesRegister } from "../api/sales";
+import { downloadReport, downloadTally, fetchGstr1, fetchSalesRegister, fetchTdsReport, GSTR1_SECTIONS, type Gstr1, type SalesRegister, type TdsReport } from "../api/sales";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, inr, inrShort } from "../lib/format";
@@ -30,25 +30,27 @@ export function SalesReports() {
   const [to, setTo] = useState(monthRange(lastMonth())[1]);
   const [register, setRegister] = useState<SalesRegister | null>(null);
   const [gstr1, setGstr1] = useState<Gstr1 | null>(null);
+  const [tds, setTds] = useState<TdsReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [start, end] = custom ? [from, to] : monthRange(month);
 
   useEffect(() => {
     let live = true;
-    Promise.all([fetchSalesRegister(start, end), fetchGstr1(start, end)])
-      .then(([r, g]) => live && (setRegister(r), setGstr1(g), setError(null)))
+    Promise.all([fetchSalesRegister(start, end), fetchGstr1(start, end), fetchTdsReport(start, end)])
+      .then(([r, g, d]) => live && (setRegister(r), setGstr1(g), setTds(d), setError(null)))
       .catch((err) => live && setError(err instanceof ApiError ? err.message : "Couldn't load the reports."));
     return () => {
       live = false;
     };
   }, [start, end, version]);
 
-  async function download(kind: Parameters<typeof downloadReport>[0]) {
+  async function download(kind: Parameters<typeof downloadReport>[0] | "tally") {
     setBusy(kind);
     setError(null);
     try {
-      await downloadReport(kind, start, end);
+      if (kind === "tally") await downloadTally(start, end);
+      else await downloadReport(kind, start, end);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't download.");
     } finally {
@@ -85,6 +87,14 @@ export function SalesReports() {
           )}
           <button className="ghost-btn sm" onClick={() => setCustom((v) => !v)}>
             {custom ? "Whole month" : "Custom dates"}
+          </button>
+          <button
+            className="ghost-btn sm"
+            disabled={busy !== null}
+            title="Sales, credit notes, receipts and refunds as vouchers for TallyPrime (Import → Transactions)"
+            onClick={() => download("tally")}
+          >
+            {busy === "tally" ? "Exporting…" : "Export to Tally"}
           </button>
         </div>
       </div>
@@ -153,6 +163,48 @@ export function SalesReports() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tds && tds.rows.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="card-head">
+            <span className="card-title">TDS deducted by customers</span>
+            <button className="ghost-btn sm" disabled={busy !== null} onClick={() => download("tds")}>
+              {busy === "tds" ? "Downloading…" : "Download CSV"}
+            </button>
+          </div>
+          <p className="card-note">
+            {inr(tds.total_tds)} deducted; certificates (Form 16A) still to come for {inr(tds.certificates_missing)}. Match it against Form 26AS.
+          </p>
+          <div className="table-wrap">
+            <table className="doc-lines">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Customer</th>
+                  <th>PAN</th>
+                  <th>Section</th>
+                  <th>Invoice</th>
+                  <th className="num">TDS</th>
+                  <th>Form 16A</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tds.rows.map((r) => (
+                  <tr key={`${r.receipt_id}-${r.invoice_number}`}>
+                    <td>{dayDate(r.date)}</td>
+                    <td>{r.customer}</td>
+                    <td className="mono">{r.customer_pan || "—"}</td>
+                    <td>{r.section}</td>
+                    <td className="mono">{r.invoice_number}</td>
+                    <td className="num">{inr(r.tds_amount)}</td>
+                    <td>{r.certificate_received}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

@@ -33,6 +33,7 @@ class InvoiceLineOut(BaseModel):
     qty: float
     unit_price: float
     gst_rate: float
+    discount_pct: float = 0
     amount: float
     taxable_value: float
     cgst: float
@@ -88,6 +89,15 @@ class InvoiceOut(BaseModel):
     amount_in_words: str
     amount_paid: float
     amount_credited: float
+    # TDS the customer deducted (settles the invoice like a payment).
+    amount_tds: float = 0
+    amount_refunded: float = 0
+    # Recorded from the GST portals after upload.
+    irn: str = ""
+    irn_ack_no: str = ""
+    irn_ack_date: date | None = None
+    eway_bill_no: str = ""
+    eway_bill_date: date | None = None
     balance: float
     notes: str
     terms: str
@@ -95,6 +105,8 @@ class InvoiceOut(BaseModel):
     created_at: datetime
     issued_at: datetime | None
     issued_by_name: str | None
+    salesperson_id: UUID | None = None
+    salesperson_name: str | None = None
     lines: list[InvoiceLineOut]
     hsn_summary: list[HsnRow]
     # Receipts applied to this invoice (only on the single-invoice endpoint).
@@ -161,3 +173,13 @@ class CreditNoteOut(BaseModel):
     created_by_name: str | None
     created_at: datetime
     lines: list[CreditNoteLineOut]
+
+
+class GstRefsIn(BaseModel):
+    """Only the fields sent change; "" clears one."""
+
+    irn: str | None = Field(default=None, max_length=64)
+    irn_ack_no: str | None = Field(default=None, max_length=20)
+    irn_ack_date: date | None = None
+    eway_bill_no: str | None = Field(default=None, max_length=14)
+    eway_bill_date: date | None = None

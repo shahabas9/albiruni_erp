@@ -15,27 +15,30 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_ask, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_crm, routes_price_lists, routes_reports as routes_sales_reports, routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
-from app.core.dev_schema import ensure_dev_schema
-from app.domain import credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.core.migrations import upgrade_database
+from app.domain import gst_portal, price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
 from app.models.crm import Opportunity
 from app.models.identity import Role, User
-from app.models.sales import Item
+from app.models.sales import Item, Quotation
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
-from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
+from app.schemas.invoices import GstRefsIn, CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
 from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.items import ItemIn, ItemUpdate
-from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn
+from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn, RefundIn, TdsCertificateIn
 from app.schemas.orders import (
+    QuickPaymentIn, QuickSaleIn,
     DeliveryIn, DeliveryLineIn, DocLineIn, OrderIn, OrderUpdate, ReasonIn, StockAdjustIn,
 )
-from app.schemas.sales import CompanyProfileUpdate, QuotationActionIn
+from app.schemas.sales import (
+    CompanyProfileUpdate, CreateQuotationIn, QuotationActionIn, QuotationLineIn, QuotationUpdate,
+)
 from app.toolgateway import tools_crm, tools_documents, tools_sales  # noqa: F401 — registers the tools
 
 KERALA_GSTIN = "32AABCA1234F1ZI"
@@ -79,7 +82,7 @@ class TaxMathTests(unittest.TestCase):
 class SalesTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        ensure_dev_schema()
+        upgrade_database()
 
     def setUp(self):
         self.db = SessionLocal()
@@ -911,6 +914,575 @@ class AskAndAlertTests(SalesTestCase):
             Notification.tenant_id == self.context.tenant_id, Notification.kind == "invoice_overdue",
         )).scalars().all()
         self.assertEqual([(a.user_id, a.link) for a in alerts], [(issuer.user.id, f"/sales/invoices/{invoice.id}")])
+
+
+
+class QuickSaleTests(SalesTestCase):
+    def sell(self, lines, context=None, **fields):
+        body = QuickSaleIn(lines=[DocLineIn(**l) for l in lines], **fields)
+        return routes_orders.quick_sale(body, context or self.context, self.db)
+
+    def test_counter_sale_does_everything_in_one_go(self):
+        goods, service = self.item(stock=20), self.item("Fitting", price=500, stock=0, kind="service")
+        out = self.sell([{"item_id": goods.id, "qty": 2}, {"item_id": service.id, "qty": 1}],
+                        payment=QuickPaymentIn(amount=1581, mode="Cash"))
+        invoice = routes_invoices.get_invoice(out.invoice_id, self.context, self.db)
+        self.assertEqual((invoice.status, invoice.customer_name, invoice.grand_total, invoice.payment_status),
+                         ("Issued", "Walk-in customer", 1581.0, "Paid"))
+        order = routes_orders.get_order(out.order_id, self.context, self.db)
+        self.assertEqual((order.status, order.invoice_status), ("Delivered", "Invoiced"))
+        self.db.refresh(goods)
+        self.assertEqual(float(goods.stock_qty), 18)
+        again = self.sell([{"item_id": goods.id, "qty": 1}])  # same walk-in customer, paid later
+        self.assertIsNone(again.receipt_id)
+        self.assertEqual(routes_invoices.get_invoice(again.invoice_id, self.context, self.db).customer_name,
+                         "Walk-in customer")
+
+    def test_any_refusal_saves_nothing(self):
+        scarce = self.item(stock=1)
+        orders_before = len(routes_orders.list_orders(Response(), "", None, "", False, None, 0, self.context, self.db))
+        with self.assertRaises(HTTPException) as short:
+            self.sell([{"item_id": scarce.id, "qty": 3}])
+        self.assertIn("Only 1", short.exception.detail)
+        with self.assertRaises(HTTPException) as overpaid:
+            self.sell([{"item_id": scarce.id, "qty": 1}], payment=QuickPaymentIn(amount=10000, mode="Cash"))
+        self.assertIn("change", overpaid.exception.detail)
+        self.assertEqual(len(routes_orders.list_orders(Response(), "", None, "", False, None, 0, self.context,
+                                                       self.db)), orders_before)
+        self.db.refresh(scarce)
+        self.assertEqual(float(scarce.stock_qty), 1)
+        clerk = self.make_context(["sales.invoice.write", "sales.order.write"], self.context.tenant_id,
+                                  self.context.company_id)
+        self.db.commit()  # a refused sale rolls back; the user must already be saved
+        with self.assertRaises(HTTPException) as denied:
+            self.sell([{"item_id": scarce.id, "qty": 1}], clerk)
+        self.assertIn("sales.delivery.write", denied.exception.detail)
+
+
+
+class QuotationFormTests(SalesTestCase):
+    def create(self, customer, lines, **fields):
+        body = CreateQuotationIn(customer_id=customer.id, lines=[QuotationLineIn(**l) for l in lines], **fields)
+        result = routes_sales.create_quotation(body, self.context, self.db)
+        return routes_sales.get_quotation(UUID(result["quotation_id"]), self.context, self.db)
+
+    def test_form_quotes_pick_items_set_prices_and_expire(self):
+        item = self.item()
+        customer = self.customer()
+        quote = self.create(customer, [{"item_id": item.id, "qty": 10}], notes="Delivery in a week")
+        self.assertEqual((quote.status, quote.grand_total, quote.notes), ("Draft", 4956.0, "Delivery in a week"))
+        self.assertEqual(quote.valid_until, date.today() + timedelta(days=15))
+        cheap = self.create(customer, [{"item_id": item.id, "qty": 10, "unit_price": 400}])
+        self.assertEqual(cheap.status, "Pending approval")  # below list price
+
+        # Editing a draft re-prices it; a bigger discount sends it for approval.
+        edited = routes_sales.update_quotation(quote.id, QuotationUpdate(
+            lines=[QuotationLineIn(item_id=item.id, qty=20)], discount_pct=5), self.context, self.db)
+        self.assertEqual((edited.status, edited.total), ("Pending approval", 7980.0))
+        back = routes_sales.update_quotation(quote.id, QuotationUpdate(discount_pct=1), self.context, self.db)
+        self.assertEqual((back.status, back.total), ("Draft", 8316.0))
+
+        sent = routes_sales.quotation_action(quote.id, "send", QuotationActionIn(), self.context, self.db)
+        with self.assertRaises(HTTPException):  # a sent quote's content is fixed
+            routes_sales.update_quotation(quote.id, QuotationUpdate(discount_pct=0), self.context, self.db)
+        row = self.db.get(Quotation, sent.id)
+        row.valid_until = date.today() - timedelta(days=1)
+        self.db.commit()
+        self.assertTrue(routes_sales.get_quotation(sent.id, self.context, self.db).is_expired)
+        with self.assertRaises(HTTPException) as expired:
+            routes_sales.quotation_action(quote.id, "accept", QuotationActionIn(), self.context, self.db)
+        self.assertIn("expired", expired.exception.detail)
+        with self.assertRaises(ConflictError):
+            order_service.order_from_quotation(self.db, self.context, quote.id)
+        extended = routes_sales.update_quotation(
+            quote.id, QuotationUpdate(valid_until=date.today() + timedelta(days=7)), self.context, self.db)
+        self.assertFalse(extended.is_expired)
+        self.assertEqual(routes_sales.quotation_action(quote.id, "accept", QuotationActionIn(), self.context,
+                                                       self.db).status, "Accepted")
+
+
+
+class ShareTests(SalesTestCase):
+    def test_share_links_open_one_document_and_nothing_else(self):
+        from app.core.config import settings
+
+        customer = self.customer()
+        invoice = self.invoice_for(customer, 2)
+        out = routes_share.share_document(routes_share.ShareIn(kind="invoice", id=invoice.id), self.context, self.db)
+        self.assertIn(f"invoice {invoice.number}", out["message"])
+        self.assertIsNone(out["emailed_to"])
+        token = out["url"].rsplit("/d/", 1)[1]
+        public = routes_share.public_document(token, self.db)
+        self.assertEqual((public["kind"], public["document"].number, public["company"]["gstin"]),
+                         ("invoice", invoice.number, KERALA_GSTIN))
+        with self.assertRaises(HTTPException):  # tampered
+            routes_share.public_document(token[:-2] + ("AA" if token[-2:] != "AA" else "BB"), self.db)
+
+        # Statements carry their period; email needs SMTP.
+        st = routes_share.share_document(routes_share.ShareIn(kind="statement", id=customer.id), self.context, self.db)
+        statement = routes_share.public_document(st["url"].rsplit("/d/", 1)[1], self.db)["document"]
+        self.assertEqual(statement["closing_balance"], 991.0)
+        self.addCleanup(setattr, settings, "smtp_host", settings.smtp_host)
+        settings.smtp_host = ""
+        with self.assertRaises(HTTPException) as no_smtp:
+            routes_share.share_document(routes_share.ShareIn(kind="invoice", id=invoice.id, email="a@b.example"),
+                                        self.context, self.db)
+        self.assertIn("SMTP", no_smtp.exception.detail)
+
+    def test_sharing_needs_the_documents_read_permission(self):
+        draft = self.draft(self.confirmed_order([{"item_id": self.item().id, "qty": 1}]))
+        with self.assertRaises(HTTPException) as unissued:
+            routes_share.share_document(routes_share.ShareIn(kind="invoice", id=draft.id), self.context, self.db)
+        self.assertIn("Issue the invoice", unissued.exception.detail)
+        quote = self.quote()
+        clerk = self.make_context(["sales.invoice.read"], self.context.tenant_id, self.context.company_id)
+        self.db.commit()
+        with self.assertRaises(HTTPException) as denied:
+            routes_share.share_document(routes_share.ShareIn(kind="quotation", id=quote.id), clerk, self.db)
+        self.assertEqual(denied.exception.status_code, 403)
+
+
+
+class TdsTests(SalesTestCase):
+    def test_tds_deducted_settles_the_invoice_and_is_reported(self):
+        customer = self.customer(gstin=KARNATAKA_GSTIN)
+        invoice = self.invoice_for(customer, 20)  # 9,912 with GST
+        with self.assertRaises(HTTPException) as no_section:
+            self.pay(customer, 9744, allocations=[AllocationIn(invoice_id=invoice.id, amount=9744, tds_amount=168)])
+        self.assertIn("section", no_section.exception.detail)
+        with self.assertRaises(HTTPException) as too_much:
+            self.pay(customer, 9744, tds_section="194Q",
+                     allocations=[AllocationIn(invoice_id=invoice.id, amount=9744, tds_amount=200)])
+        self.assertIn("more", too_much.exception.detail)
+
+        receipt = self.pay(customer, 9744, tds_section="194q",
+                           allocations=[AllocationIn(invoice_id=invoice.id, amount=9744, tds_amount=168)])
+        self.assertEqual((receipt.tds_amount, receipt.tds_section, receipt.unallocated), (168.0, "194Q", 0))
+        paid = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((paid.amount_paid, paid.amount_tds, paid.balance, paid.payment_status),
+                         (9744.0, 168.0, 0.0, "Paid"))
+        self.assertEqual(float(receivables.net_owed(self.db, self.context, customer.id)), 0)
+
+        today = date.today()
+        report = routes_reports.tds(today, today, self.context, self.db)
+        row = next(r for r in report["rows"] if r["receipt_number"] == receipt.number)
+        self.assertEqual((row["customer_pan"], row["section"], row["tds_amount"], row["certificate_received"]),
+                         (KARNATAKA_GSTIN[2:12], "194Q", 168.0, "No"))
+        routes_payments.tds_certificate(receipt.id, TdsCertificateIn(received=True), self.context, self.db)
+        row = next(r for r in routes_reports.tds(today, today, self.context, self.db)["rows"]
+                   if r["receipt_number"] == receipt.number)
+        self.assertEqual(row["certificate_received"], "Yes")
+
+        # Voiding takes the TDS back off too.
+        routes_payments.void_payment(receipt.id, ReasonIn(reason="Wrong customer"), self.context, self.db)
+        again = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((again.amount_tds, again.balance), (0.0, 9912.0))
+
+
+
+class ReminderTests(SalesTestCase):
+    def test_each_reminder_stage_goes_once_and_only_the_latest(self):
+        from app.domain import reminder_service
+
+        company = self.db.get(Company, self.context.company_id)
+        company.reminders_enabled = True
+        self.db.commit()
+        payer = self.customer("Prompt Payer", email="Accounts@Prompt.example")
+        silent = self.customer("No Email Co")
+        invoice = self.invoice_for(payer, 1)
+        self.invoice_for(silent, 1)
+        due = self.db.get(Invoice, invoice.id).due_date
+        mail = []
+        send = lambda to, subject, text: mail.append((to, subject, text))  # noqa: E731
+
+        def run(day):
+            mail.clear()
+            reminder_service.send_due_reminders(self.db, today=day, send=send)
+            return [m for m in mail if invoice.number in m[1]]
+
+        self.assertEqual(run(due - timedelta(days=5)), [])  # too early
+        before = run(due - timedelta(days=3))
+        self.assertEqual(len(before), 1)
+        self.assertEqual(before[0][0], "accounts@prompt.example")
+        self.assertIn("in 3 days", before[0][2])
+        self.assertIn("/d/", before[0][2])
+        self.assertEqual(run(due - timedelta(days=2)), [])  # already sent this stage
+        late = run(due + timedelta(days=20))  # worker was off: stages 1 and 7 are skipped, 15 goes
+        self.assertEqual(len(late), 1)
+        self.assertIn("20 days ago", late[0][2])
+        self.assertEqual(self.db.get(Invoice, invoice.id).reminder_offsets_sent, [-3, 1, 7, 15])
+        self.assertFalse(any("No Email Co" in m[2] for m in mail))
+
+        self.pay(payer, 496)
+        self.assertEqual(run(due + timedelta(days=40)), [])  # paid: no more reminders
+
+    def test_manual_reminder_and_settings(self):
+        customer = self.customer(email="ap@example.test", phone="9446044556")
+        invoice = self.invoice_for(customer, 1)
+        out = routes_share.share_document(routes_share.ShareIn(kind="invoice", id=invoice.id, reminder=True),
+                                          self.context, self.db)
+        self.assertIn("gentle reminder", out["message"])
+        people = routes_share.share_recipients(customer.id, self.context, self.db)
+        self.assertEqual(people[0]["email"], "ap@example.test")
+        with self.assertRaises(ConflictError):
+            sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(reminder_after_days="0,400"))
+        saved = sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(reminder_after_days="30, 7,7"))
+        self.assertEqual(saved.reminder_after_days, "7,30")
+
+
+class PricingTests(SalesTestCase):
+    def price_list(self, name, rows, **fields):
+        body = routes_price_lists.PriceListIn(name=name, rows=[routes_price_lists.PriceRowIn(**r) for r in rows],
+                                              **fields)
+        return routes_price_lists.create_price_list(body, self.context, self.db)
+
+    def test_customers_pay_their_agreed_price_with_quantity_breaks(self):
+        item = self.item()
+        retail = self.price_list("Retail", [{"item_id": item.id, "unit_price": 410}], is_default=True)
+        dealer = self.price_list("Dealer", [{"item_id": item.id, "min_qty": 1, "unit_price": 400},
+                                            {"item_id": item.id, "min_qty": 100, "unit_price": 380}])
+        rahman = self.customer(price_list_id=dealer.id)
+        walk_in = self.customer("Walk in")
+        self.assertEqual(price_lists.price_for(self.db, self.context, walk_in, item, 10), 410)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 10), 400)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 150), 380)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 99.5), 400)
+        prices = routes_price_lists.customer_prices(rahman.id, self.context, self.db)
+        self.assertEqual(prices["prices"][str(item.id)], [{"min_qty": 1, "unit_price": 400}, {"min_qty": 100, "unit_price": 380}])
+
+        # Switching the dealer list off sends Rahman back to the default.
+        routes_price_lists.update_price_list(dealer.id, routes_price_lists.PriceListIn(name="Dealer", active=False),
+                                             self.context, self.db)
+        self.assertEqual(price_lists.price_for(self.db, self.context, rahman, item, 10), 410)
+        listed = {pl.name: pl for pl in routes_price_lists.list_price_lists(self.context, self.db)}
+        self.assertEqual((listed["Retail"].is_default, listed["Dealer"].customers), (True, 1))
+        with self.assertRaises(HTTPException) as in_use:
+            routes_price_lists.delete_price_list(dealer.id, self.context, self.db)
+        self.assertIn("Rahman", in_use.exception.detail)
+        customer_service.update_customer(self.db, self.context, rahman.id, CustomerUpdate(price_list_id=None))
+        routes_price_lists.delete_price_list(dealer.id, self.context, self.db)
+        with self.assertRaises(HTTPException):  # names are unique per company
+            self.price_list("retail", [])
+        with self.assertRaises(HTTPException):  # the same break twice
+            self.price_list("Bulk", [{"item_id": item.id, "unit_price": 1}, {"item_id": item.id, "unit_price": 2}])
+        self.assertEqual(retail.rows[0].item_price, 420)
+
+    def test_line_discounts_and_agreed_prices_flow_to_the_invoice(self):
+        item = self.item()
+        dealer = self.price_list("Dealer", [{"item_id": item.id, "unit_price": 400}])
+        customer = self.customer(price_list_id=dealer.id)
+        seller = self.make_context(["sales.order.read", "sales.order.write"], self.context.tenant_id,
+                                   self.context.company_id)
+        order = self.order(customer, [{"item_id": item.id, "qty": 10, "discount_pct": 2}], seller)
+        line = order.lines[0]
+        self.assertEqual((line.unit_price, line.list_price, line.discount_pct, line.taxable_value),
+                         (400, 400, 2, 3920))
+        self.assertEqual((order.cgst, order.grand_total, order.needs_approval), (352.8, 4626, False))
+        below = self.order(customer, [{"item_id": item.id, "qty": 10, "unit_price": 395}], seller)
+        stacked = self.order(customer, [{"item_id": item.id, "qty": 10, "discount_pct": 2}], seller, discount_pct=1)
+        self.assertEqual((below.needs_approval, stacked.needs_approval), (True, True))  # 2% then 1% is 2.98%
+
+        confirmed = self.confirm(order.id, seller)
+        self.deliver(confirmed, {0: 10})
+        invoice = self.issue(self.draft(confirmed))
+        self.assertEqual((invoice.lines[0].discount_pct, invoice.lines[0].taxable_value, invoice.grand_total),
+                         (2, 3920, 4626))
+
+    def test_quotation_line_discounts_carry_into_the_order(self):
+        item = self.item()
+        dealer = self.price_list("Dealer", [{"item_id": item.id, "unit_price": 400}])
+        customer = self.customer(price_list_id=dealer.id)
+        body = CreateQuotationIn(customer_id=customer.id, discount_pct=1,
+                                 lines=[QuotationLineIn(item_id=item.id, qty=10, discount_pct=1)])
+        quote = routes_sales.get_quotation(UUID(routes_sales.create_quotation(body, self.context, self.db)["quotation_id"]),
+                                           self.context, self.db)
+        self.assertEqual((quote.status, quote.lines[0].unit_price, quote.lines[0].discount_pct), ("Draft", 400, 1))
+        big = routes_sales.create_quotation(CreateQuotationIn(
+            customer_id=customer.id, lines=[QuotationLineIn(item_id=item.id, qty=10, discount_pct=5)]),
+            self.context, self.db)
+        self.assertEqual(self.db.get(Quotation, UUID(big["quotation_id"])).status, "Pending approval")
+
+        order = routes_orders.order_from_quotation(quote.id, Response(), self.context, self.db)
+        self.assertEqual((order.lines[0].discount_pct, order.lines[0].list_price, order.grand_total, order.needs_approval),
+                         (1, 400, quote.grand_total, False))
+
+
+class RefundTests(SalesTestCase):
+    def refund(self, amount, context=None, **fields):
+        body = RefundIn(amount=amount, mode=fields.pop("mode", "UPI"), reference=fields.pop("reference", "UTR9"),
+                        reason=fields.pop("reason", "Order cancelled"), **fields)
+        return routes_payments.create_refund(body, context or self.context, self.db)
+
+    def test_advances_are_paid_back_and_can_be_voided(self):
+        customer = self.customer()
+        receipt = self.pay(customer, 1000)  # no invoices: all advance
+        self.assertEqual(refund_service.refundable(self.db, self.context, customer.id)["total"], 1000)
+        refund = self.refund(400, receipt_id=receipt.id)
+        self.assertRegex(refund.number, r"^RFD/\d\d-\d\d/00001$")
+        self.assertEqual((refund.source_number, refund.status), (receipt.number, "Paid"))
+        after = routes_payments.get_payment(receipt.id, self.context, self.db)
+        self.assertEqual((after.unallocated, after.refunded), (600, 400))
+        self.assertEqual(receivables.advances(self.db, self.context, customer.id), 600)
+        with self.assertRaises(HTTPException) as too_much:
+            self.refund(700, receipt_id=receipt.id)
+        self.assertIn("600", too_much.exception.detail)
+        with self.assertRaises(HTTPException) as void_payment:  # the refund depends on it
+            routes_payments.void_payment(receipt.id, ReasonIn(reason="Bounced"), self.context, self.db)
+        self.assertIn("refund", void_payment.exception.detail)
+
+        statement = receivables.statement(self.db, self.context, customer.id, date.today(), date.today())
+        self.assertEqual([l["kind"] for l in statement["lines"]], ["Payment", "Refund"])
+        self.assertEqual(statement["closing_balance"], -600)
+
+        routes_payments.void_refund(refund.id, ReasonIn(reason="Typed twice"), self.context, self.db)
+        self.assertEqual(routes_payments.get_payment(receipt.id, self.context, self.db).unallocated, 1000)
+        with self.assertRaises(HTTPException):
+            routes_payments.void_refund(refund.id, ReasonIn(reason="Again"), self.context, self.db)
+
+    def test_a_paid_invoice_credited_later_is_refunded_from_its_credit_balance(self):
+        customer = self.customer()
+        item = self.item()
+        order = self.confirmed_order([{"item_id": item.id, "qty": 2}], customer)
+        self.deliver(order, {0: 2})
+        invoice = self.issue(self.draft(order))  # 2 × 420 + 18% = 991
+        self.pay(customer, 991)
+        self.credit(invoice, "Return", {0: {"qty": 1}})  # 496 back
+        self.assertEqual(routes_invoices.get_invoice(invoice.id, self.context, self.db).balance, -496)
+        self.assertEqual(refund_service.refundable(self.db, self.context, customer.id)["credits"][0]["available"], 496)
+
+        self.refund(496, invoice_id=invoice.id, mode="Cash", reference="")
+        cleared = routes_invoices.get_invoice(invoice.id, self.context, self.db)
+        self.assertEqual((cleared.balance, cleared.amount_refunded, cleared.payment_status), (0, 496, "Paid"))
+        self.assertEqual(receivables.net_owed(self.db, self.context, customer.id), 0)
+        with self.assertRaises(HTTPException) as nothing:
+            self.refund(1, invoice_id=invoice.id)
+        self.assertIn("Nothing is owed back", nothing.exception.detail)
+
+    def test_refund_rules(self):
+        customer = self.customer()
+        receipt = self.pay(customer, 500)
+        invoice = self.invoice_for(customer, 1)
+        for fields, message in [
+            ({}, "either"),
+            ({"receipt_id": receipt.id, "invoice_id": invoice.id}, "either"),
+            ({"receipt_id": receipt.id, "reference": ""}, "UTR"),
+            ({"receipt_id": receipt.id, "refund_date": date.today() + timedelta(days=1)}, "future"),
+            ({"invoice_id": invoice.id}, "Nothing is owed back"),
+        ]:
+            with self.assertRaises(HTTPException) as refused:
+                self.refund(10, **fields)
+            self.assertIn(message, refused.exception.detail)
+        clerk = self.make_context(["sales.payment.read"], self.context.tenant_id, self.context.company_id)
+        with self.assertRaises(HTTPException) as denied:
+            self.refund(10, clerk, receipt_id=receipt.id)
+        self.assertEqual(denied.exception.status_code, 403)
+
+
+class SalesListToolsTests(SalesTestCase):
+    def export(self, kind, context=None, **params):
+        import csv as csvlib
+        from starlette.requests import Request
+        from app.api import routes_exports
+
+        query = "&".join(f"{k}={v}" for k, v in params.items()).encode()
+        request = Request({"type": "http", "method": "GET", "path": f"/api/exports/{kind}.csv",
+                           "query_string": query, "headers": []})
+        response = routes_exports.export_csv(kind, request, context or self.context, self.db)
+        return list(csvlib.reader(response.body.decode("utf-8")[1:].splitlines()))
+
+    def test_orders_invoices_and_payments_export_with_their_filters(self):
+        customer = self.customer(gstin=KERALA_CUSTOMER_GSTIN)
+        paid = self.invoice_for(customer, 1)  # 496
+        self.invoice_for(customer, 2)  # 991, left unpaid
+        self.pay(customer, 496 + 100, allocations=[AllocationIn(invoice_id=paid.id, amount=496)])
+        self.order(customer, [{"item_id": self.item(name="Extra").id, "qty": 1}])  # a draft
+
+        orders = self.export("orders", status="Draft")
+        self.assertEqual(orders[0][:3], ["Order", "Date", "Customer"])
+        self.assertEqual([r[5] for r in orders[1:]], ["Draft"])
+        invoices = self.export("invoices", status="unpaid")
+        self.assertEqual(len(invoices), 2)
+        self.assertEqual((invoices[1][4], invoices[1][10], invoices[1][15], invoices[1][16]),
+                         (KERALA_CUSTOMER_GSTIN, "991.0", "991.0", "Unpaid"))
+        self.assertEqual(len(self.export("invoices")), 3)
+        payments = self.export("payments", with_advance="true")
+        self.assertEqual((len(payments), payments[1][8], payments[1][11]), (2, paid.number, "100.0"))
+
+        seller = self.make_context(["sales.order.read", "crm.export"], self.context.tenant_id, self.context.company_id)
+        self.assertEqual(len(self.export("orders", seller)), 4)
+        with self.assertRaises(HTTPException) as denied:
+            self.export("invoices", seller)
+        self.assertEqual(denied.exception.status_code, 403)
+
+    def test_sales_lists_have_saved_views(self):
+        from app.api import routes_views
+
+        view = routes_views.create_view(routes_views.ViewIn(page="invoices", name="Overdue", filters={"status": "overdue"}),
+                                        self.context, self.db)
+        self.assertEqual([v.name for v in routes_views.list_views("invoices", self.context, self.db)], [view.name])
+
+
+class DashboardTests(SalesTestCase):
+    def test_dashboard_sums_this_month_and_hides_what_you_cant_read(self):
+        big = self.customer("Big Buyer")
+        small = self.customer("Small Buyer")
+        self.invoice_for(big, 4)  # 1,982
+        late = self.invoice_for(small, 1)  # 496, made overdue below
+        row = self.db.get(Invoice, late.id)
+        row.due_date = date.today() - timedelta(days=10)
+        self.db.commit()
+        self.pay(big, 1000)
+        self.order(big, [{"item_id": self.item(name="Draft only").id, "qty": 1}])
+
+        dash = routes_sales.dashboard(self.context, self.db)
+        money = dash["money"]
+        self.assertEqual((money["invoiced_this_month"], money["collected_this_month"]), (2478, 1000))
+        self.assertEqual((money["outstanding"], money["overdue"]), (1478, 496))
+        self.assertEqual([c["name"] for c in money["top_customers"]], ["Big Buyer", "Small Buyer"])
+        self.assertEqual(money["overdue_customers"][0]["name"], "Small Buyer")
+        self.assertEqual(len(money["monthly"]), 6)
+        self.assertEqual(dash["orders"], {"to_invoice": 0, "drafts": 1})
+
+        seller = self.make_context(["sales.order.read"], self.context.tenant_id, self.context.company_id)
+        limited = sales_dashboard.dashboard(self.db, seller)
+        self.assertNotIn("money", limited)
+        self.assertIn("orders", limited)
+
+
+class GstPortalTests(SalesTestCase):
+    def test_addresses_split_into_lines_place_and_pin(self):
+        self.assertEqual(gst_portal.split_address("12 Beach Road,\nKozhikode 673001", "32"),
+                         {"addr1": "12 Beach Road", "addr2": "Kozhikode 673001", "place": "Kozhikode", "pin": 673001})
+        self.assertEqual(gst_portal.split_address("", "32")["place"], "Kerala")
+        self.assertEqual((gst_portal.uqc("Box"), gst_portal.uqc("kgs"), gst_portal.uqc("tins")), ("BOX", "KGS", "OTH"))
+
+    def test_einvoice_and_eway_bill_json_for_an_issued_invoice(self):
+        company = self.db.get(Company, self.context.company_id)
+        company.address = "4/12 Mavoor Road\nKozhikode 673004"
+        self.db.commit()
+        customer = self.customer(gstin=KARNATAKA_GSTIN, billing_address="88 MG Road\nBengaluru 560001")
+        item = self.item(price=50000, stock=10)
+        order = self.confirmed_order([{"item_id": item.id, "qty": 2}], customer)
+        self.deliver(order, {0: 2}, vehicle_no="KL 11 AB 1234", transporter="Fast Movers")
+        invoice = self.issue(self.draft(order))
+
+        out = routes_invoices.invoice_einvoice(invoice.id, self.context, self.db)
+        doc = out["payload"]
+        self.assertEqual(out["problems"], [])
+        self.assertEqual((doc["DocDtls"]["Typ"], doc["DocDtls"]["No"]), ("INV", invoice.number))
+        self.assertEqual((doc["SellerDtls"]["Pin"], doc["BuyerDtls"]["Pin"], doc["BuyerDtls"]["Pos"]),
+                         (673004, 560001, "29"))
+        self.assertEqual((doc["ItemList"][0]["IgstAmt"], doc["ItemList"][0]["Unit"], doc["ValDtls"]["TotInvVal"]),
+                         (18000.0, "BOX", 118000.0))
+
+        eway = routes_invoices.invoice_eway_bill(invoice.id, 360, "", "", "", self.context, self.db)
+        bill = eway["payload"]["billLists"][0]
+        self.assertEqual(eway["problems"], [])
+        self.assertEqual((bill["vehicleNo"], bill["transporterName"], bill["toStateCode"], bill["igstValue"]),
+                         ("KL11AB1234", "Fast Movers", 29, 18000.0))
+        self.assertEqual(bill["itemList"][0]["igstRate"], 18)
+        self.assertIn("distance", " ".join(routes_invoices.invoice_eway_bill(
+            invoice.id, 0, "", "", "", self.context, self.db)["problems"]))
+
+        note = self.credit(invoice, "Return", {0: {"qty": 1}})
+        crn = routes_invoices.credit_note_einvoice(note.id, self.context, self.db)["payload"]
+        self.assertEqual((crn["DocDtls"]["Typ"], crn["RefDtls"]["PrecDocDtls"][0]["InvNo"]), ("CRN", invoice.number))
+
+        saved = routes_invoices.record_gst_refs(invoice.id, GstRefsIn(irn="a" * 64, irn_ack_no="112410000000001",
+                                                eway_bill_no="1812 3456 7890"), self.context, self.db)
+        self.assertEqual((saved.irn, saved.eway_bill_no), ("a" * 64, "181234567890"))
+        with self.assertRaises(HTTPException):
+            routes_invoices.record_gst_refs(invoice.id, GstRefsIn(irn="not-an-irn"), self.context, self.db)
+
+    def test_b2c_and_missing_pins_are_reported(self):
+        customer = self.customer("Walk in buyer")
+        invoice = self.invoice_for(customer, 1)
+        problems = routes_invoices.invoice_einvoice(invoice.id, self.context, self.db)["problems"]
+        self.assertTrue(any("B2B" in p for p in problems))
+        self.assertTrue(any("PIN" in p for p in problems))
+
+
+class TallyExportTests(SalesTestCase):
+    def test_a_periods_documents_become_balanced_tally_vouchers(self):
+        import xml.etree.ElementTree as ET
+
+        customer = self.customer("Rahman & Sons", gstin=KERALA_CUSTOMER_GSTIN)
+        invoice = self.invoice_for(customer, 2)  # 991
+        self.credit(invoice, "Price correction", {0: {"amount": 100}})  # 118
+        self.pay(customer, 800, allocations=[AllocationIn(invoice_id=invoice.id, amount=800, tds_amount=10)],
+                 tds_section="194Q")
+        advance = self.pay(customer, 300)  # 63 clears the invoice, 237 is an advance
+        routes_payments.create_refund(RefundIn(receipt_id=advance.id, amount=200, mode="Cash", reason="Not needed"),
+                                      self.context, self.db)
+
+        response = routes_sales_reports.tally_xml(date.today(), date.today(), self.context, self.db)
+        root = ET.fromstring(response.body)
+        vouchers = root.findall(".//VOUCHER")
+        self.assertEqual([v.get("VCHTYPE") for v in vouchers], ["Sales", "Credit Note", "Receipt", "Receipt", "Payment"])
+        for v in vouchers:
+            amounts = [Decimal(a.text) for a in v.findall(".//AMOUNT")]
+            self.assertEqual(sum(amounts), 0, v.findtext("VOUCHERNUMBER"))
+        sale = vouchers[0]
+        self.assertEqual(sale.findtext("PARTYLEDGERNAME"), "Rahman & Sons")
+        entries = {e.findtext("LEDGERNAME"): Decimal(e.findtext("AMOUNT")) for e in sale.findall("ALLLEDGERENTRIES.LIST")}
+        self.assertEqual((entries["Rahman & Sons"], entries["Sales"], entries["Output CGST"]),
+                         (Decimal("-991.00"), Decimal("840.00"), Decimal("75.60")))
+        tds = {e.findtext("LEDGERNAME"): Decimal(e.findtext("AMOUNT")) for e in vouchers[2].findall("ALLLEDGERENTRIES.LIST")}
+        self.assertEqual((tds["Bank"], tds["TDS Receivable"], tds["Rahman & Sons"]),
+                         (Decimal("-800.00"), Decimal("-10.00"), Decimal("810.00")))
+        ledger = root.find(".//LEDGER")
+        self.assertEqual((ledger.get("NAME"), ledger.findtext("PARTYGSTIN")), ("Rahman & Sons", KERALA_CUSTOMER_GSTIN))
+        self.assertIn(b"Rahman &amp; Sons", response.body)
+
+
+class SalespersonTests(SalesTestCase):
+    def test_sales_count_for_the_salesperson_and_targets_can_use_invoiced_sales(self):
+        from app.domain import target_service
+        from app.schemas.crm import TargetBasisIn
+        from app.schemas.orders import SalespersonIn
+
+        rep = self.make_context(["*"], self.context.tenant_id, self.context.company_id)
+        customer = self.customer()
+        item = self.item(stock=100)
+        order = self.confirmed_order([{"item_id": item.id, "qty": 10}], customer)  # 4,200 taxable
+        self.assertEqual(order.salesperson_id, self.context.user.id)
+        moved = routes_orders.set_order_salesperson(order.id, SalespersonIn(user_id=rep.user.id), self.context, self.db)
+        self.assertEqual(moved.salesperson_name, "Test user")
+        self.deliver(order, {0: 10})
+        invoice = self.issue(self.draft(order))
+        self.assertEqual(invoice.salesperson_id, rep.user.id)
+        self.credit(invoice, "Return", {0: {"qty": 1}})  # 420 back
+
+        month = date.today().replace(day=1)
+        target_service.set_targets(self.db, self.context, month, [(rep.user.id, Decimal("10000"))])
+        report = target_service.report(self.db, self.context, month)
+        row = next(r for r in report["rows"] if r["user_id"] == rep.user.id)
+        self.assertEqual((report["basis"], row["invoiced_value"], row["pct"]), ("won", 3780, 0))
+        switched = routes_crm.put_target_basis(TargetBasisIn(basis="invoiced"), month.strftime("%Y-%m"),
+                                               self.context, self.db)
+        row = next(r for r in switched["rows"] if r["user_id"] == rep.user.id)
+        self.assertEqual((switched["basis"], row["pct"], switched["team_invoiced"]), ("invoiced", 38, 3780))
+
+        # Attribution can move after issue; the tax invoice itself doesn't change.
+        back = routes_invoices.set_invoice_salesperson(invoice.id, SalespersonIn(user_id=None), self.context, self.db)
+        self.assertIsNone(back.salesperson_id)
+        with self.assertRaises(HTTPException):
+            routes_orders.set_order_salesperson(order.id, SalespersonIn(user_id=uuid4()), self.context, self.db)
+
+    def test_orders_from_a_deal_count_for_its_owner(self):
+        owner = self.make_context(["*"], self.context.tenant_id, self.context.company_id)
+        customer = self.customer()
+        self.item()
+        deal = Opportunity(tenant_id=self.context.tenant_id, company_id=self.context.company_id, customer_id=customer.id,
+                           name="Big order", stage="Proposal", value=5000, probability_pct=50,
+                           owner_user_id=owner.user.id)
+        self.db.add(deal)
+        self.db.commit()
+        quotation = self.quote(qty=2)
+        quotation.opportunity_id = deal.id
+        self.db.commit()
+        order = routes_orders.order_from_quotation(quotation.id, Response(), self.context, self.db)
+        self.assertEqual(order.salesperson_id, owner.user.id)
 
 
 if __name__ == "__main__":

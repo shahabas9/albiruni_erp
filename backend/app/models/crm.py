@@ -25,6 +25,8 @@ class Lead(Base):
     never edited in place into one."""
 
     __tablename__ = "leads"
+    # Tag filters use array containment; GIN keeps them fast.
+    __table_args__ = (Index("ix_leads_tags", "tags", postgresql_using="gin"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
@@ -82,6 +84,7 @@ class Opportunity(Base):
     pursued: a Quotation is one priced document inside it."""
 
     __tablename__ = "opportunities"
+    __table_args__ = (Index("ix_opportunities_tags", "tags", postgresql_using="gin"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
@@ -187,6 +190,8 @@ class CrmSettings(Base):
     lead_rotation: Mapped[dict] = mapped_column(JSONB, default=dict)
     # {"enabled": bool, "key": secret for the public URL, "source": str, "thank_you": str}
     web_form: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # What targets are measured against: "won" deals or "invoiced" sales.
+    target_basis: Mapped[str] = mapped_column(String(10), default="won", server_default="won")
 
 
 class SalesTarget(Base):

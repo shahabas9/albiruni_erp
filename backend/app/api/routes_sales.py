@@ -9,13 +9,13 @@ from app.ai.orchestrator import new_correlation_id
 from app.api.routes_items import _to_out as item_out
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_any_permission, require_permission
-from app.domain import quotation_service, sales_settings, tax
+from app.domain import quotation_service, sales_dashboard, sales_settings, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import SalesOrder
 from app.models.sales import Item, Quotation
 from app.schemas.sales import (
     CompanyProfile, CompanyProfileUpdate, CreateQuotationIn, ItemOut, QuotationActionIn, QuotationLineOut, QuotationOut,
-    StateOut,
+    QuotationUpdate, StateOut,
 )
 from app.toolgateway.executor import execute_tool
 
@@ -52,17 +52,26 @@ def to_quotation_out(q: Quotation, order: tuple[UUID, str] | None = None) -> Quo
         grand_total=float(q.grand_total),
         status=q.status,
         status_note=q.status_note or "",
+        valid_until=q.valid_until,
+        is_expired=quotation_service.is_expired(q),
+        notes=q.notes or "",
+        customer_gstin=q.customer.gstin or "",
+        billing_address=q.customer.billing_address or "",
+        created_by_name=q.creator.display_name if q.creator else None,
         order_id=order[0] if order else None,
         order_number=order[1] if order else None,
         created_at=q.created_at,
         lines=[
             QuotationLineOut(
+                item_id=line.item_id,
                 item_name=line.item.name,
+                uom=line.item.uom,
                 qty=float(line.qty),
                 unit_price=float(line.unit_price),
                 line_total=float(line.line_total),
                 hsn_code=line.hsn_code or "",
                 gst_rate=float(line.gst_rate),
+                discount_pct=float(line.discount_pct or 0),
                 taxable_value=float(line.taxable_value),
                 tax_amount=float(line.tax_amount),
             )
@@ -101,6 +110,25 @@ def get_quotation(
         q = quotation_service.get_quotation(db, context, quotation_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return to_quotation_out(q, orders_for(db, [q.id]).get(q.id))
+
+
+@router.patch("/quotations/{quotation_id}", response_model=QuotationOut)
+def update_quotation(
+    quotation_id: UUID,
+    body: QuotationUpdate,
+    context: RequestContext = Depends(require_permission("sales.quotation.create")),
+    db: Session = Depends(get_db),
+):
+    """Edit a draft (re-priced; a discount over the limit or a price below list sends it back for approval).
+    A sent quotation can only have its validity extended."""
+
+    try:
+        q, _ = quotation_service.update_quotation(db, context, quotation_id, body)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return to_quotation_out(q, orders_for(db, [q.id]).get(q.id))
 
 
@@ -154,15 +182,18 @@ def create_quotation(
 
     args = {
         "customer_name": body.customer_name,
-        "lines": [line.model_dump() for line in body.lines],
+        "customer_id": str(body.customer_id) if body.customer_id else None,
+        "lines": [line.model_dump(mode="json", exclude_none=True) for line in body.lines],
         "discount_pct": body.discount_pct,
+        "valid_until": body.valid_until.isoformat() if body.valid_until else None,
+        "notes": body.notes,
     }
     return execute_tool(
         db,
         context,
         "sales.create_quotation_draft.v1",
         args,
-        request_text=f"[form] New quotation for {body.customer_name}",
+        request_text=f"[form] New quotation for {body.customer_name or 'a customer'}",
         intent="sales.create_quotation",
         correlation_id=new_correlation_id(),
         confirmed=True,
@@ -197,3 +228,16 @@ def update_company_profile(
         return sales_settings.update_profile(db, context, body)
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/dashboard")
+def dashboard(
+    context: RequestContext = Depends(require_any_permission("sales.invoice.read", "sales.order.read",
+                                                             "sales.quotation.read")),
+    db: Session = Depends(get_db),
+):
+    """Overview figures: invoiced and collected this month, what's owed and overdue, the last six
+    months, top customers this financial year, orders to invoice and quotes awaiting a reply. Each
+    block is present only with permission to read what's behind it."""
+
+    return sales_dashboard.dashboard(db, context)

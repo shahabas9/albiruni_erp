@@ -1,4 +1,4 @@
-"""CSV exports of the CRM lists, with the same filters and visibility as the
+"""CSV exports of the CRM and sales lists, with the same filters and visibility as the
 screens. Runs as the audited tool crm.export_records.v1 (see tools_crm), so
 every export — who, what, which filters, how many rows — is on record.
 """
@@ -13,13 +13,14 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
 from app.domain import activity_service, contact_service, crm_service, customer_service, fields, lead_service
-from app.domain import opportunity_service
+from app.domain import invoice_service, opportunity_service, order_service, payment_service
 from app.domain.errors import ConflictError
 
 MAX_ROWS = 50_000
 READ = {
     "leads": "crm.lead.read", "opportunities": "crm.opportunity.read", "customers": "sales.customer.read",
     "contacts": "crm.contact.read", "activities": "crm.activity.read",
+    "orders": "sales.order.read", "invoices": "sales.invoice.read", "payments": "sales.payment.read",
 }
 CUSTOM_TYPE = {"leads": "lead", "opportunities": "opportunity", "customers": "customer"}
 
@@ -98,6 +99,36 @@ def build(db: Session, context: RequestContext, kind: str, filters: dict[str, An
                                                 limit=None)
         header = ["Name", "Customer", "Title", "Phone", "Email"]
         data = [[r.name, r.customer.name, r.title, r.phone, r.email] for r in rows]
+    elif kind == "orders":
+        rows, _ = order_service.list_orders(db, context, status=f.get("status", ""), q=f.get("q", ""),
+                                            customer_id=_uuid(f.get("customer_id")), limit=None)
+        people = crm_service.owner_names(db, {r.salesperson_id for r in rows})
+        header = ["Order", "Date", "Customer", "GSTIN", "Customer PO", "Status", "Invoicing", "Taxable value", "CGST",
+                  "SGST", "IGST", "Total", "Salesperson", "Created"]
+        data = [[r.number, r.order_date, r.customer.name, r.customer.gstin, r.customer_po, r.status,
+                 order_service.invoice_status(r), float(r.total), float(r.cgst), float(r.sgst), float(r.igst),
+                 float(r.grand_total), people.get(r.salesperson_id, ""), r.created_at] for r in rows]
+    elif kind == "invoices":
+        rows, _ = invoice_service.list_invoices(db, context, status=f.get("status", ""), q=f.get("q", ""),
+                                                customer_id=_uuid(f.get("customer_id")), limit=None)
+        header = ["Invoice", "Date", "Due", "Customer", "GSTIN", "Place of supply", "Taxable value", "CGST", "SGST",
+                  "IGST", "Total", "Paid", "Credited", "TDS", "Refunded", "Balance", "Status", "Salesperson"]
+        people = crm_service.owner_names(db, {r.salesperson_id for r in rows})
+        data = [[r.number or "(draft)", r.invoice_date, r.due_date, r.buyer_name or r.customer.name,
+                 r.buyer_gstin or r.customer.gstin, r.place_of_supply, float(r.total), float(r.cgst), float(r.sgst),
+                 float(r.igst), float(r.grand_total), float(r.amount_paid), float(r.amount_credited),
+                 float(r.amount_tds or 0), float(r.amount_refunded or 0), float(invoice_service.balance(r)),
+                 invoice_service.payment_status(r), people.get(r.salesperson_id, "")] for r in rows]
+    elif kind == "payments":
+        with_advance = str(f.get("with_advance", "")).lower() in ("1", "true")
+        rows, _ = payment_service.list_receipts(db, context, q=f.get("q", ""), customer_id=_uuid(f.get("customer_id")),
+                                                with_advance=with_advance, limit=None)
+        header = ["Receipt", "Date", "Customer", "Mode", "Reference", "Amount", "TDS", "TDS section", "Applied to",
+                  "Applied", "Refunded", "Advance left", "Status"]
+        data = [[r.number, r.receipt_date, r.customer.name, r.mode, r.reference, float(r.amount),
+                 float(r.tds_amount or 0), r.tds_section, [a.invoice.number for a in r.allocations],
+                 float(payment_service.allocated(r)), float(r.amount_refunded or 0),
+                 float(payment_service.unallocated(r)), r.status] for r in rows]
     else:
         rows, _ = activity_service.list_activities(
             db, context, show=f.get("show", "all"), owner=f.get("owner", ""), lead_id=_uuid(f.get("lead_id")),

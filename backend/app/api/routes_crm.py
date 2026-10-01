@@ -13,7 +13,7 @@ from app.core.deps import RequestContext, require_any_permission, require_permis
 from app.domain import activity_service, crm_service, fields, target_service, web_form
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.crm import OPEN_STAGES, Activity, Lead, Opportunity
-from app.schemas.crm import CrmSummary, CustomFieldIn, CustomFieldOut, CustomFieldUpdate, TagCount, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetReport, TargetsIn, WebFormIn, WebFormOut
+from app.schemas.crm import CrmSummary, CustomFieldIn, CustomFieldOut, CustomFieldUpdate, TagCount, LostReasonCount, RotationIn, RotationOut, StaleLimits, StageTotal, TargetBasisIn, TargetReport, TargetsIn, WebFormIn, WebFormOut
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -94,6 +94,19 @@ def put_targets(
         return target_service.report(db, context, when)
     except ConflictError as exc:
         raise http_error(exc) from exc
+
+
+@router.put("/targets/basis", response_model=TargetReport)
+def put_target_basis(
+    body: TargetBasisIn,
+    month: str = Query(""),
+    context: RequestContext = Depends(require_permission("crm.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Measure targets on deals won or on sales invoiced (by each invoice's salesperson)."""
+
+    target_service.set_basis(db, context, body.basis)
+    return get_targets(month, context, db)
 
 
 @router.get("/fields", response_model=list[CustomFieldOut])

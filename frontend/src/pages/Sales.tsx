@@ -4,11 +4,12 @@ import { useLanguage } from "../i18n/LanguageProvider";
 import { useAskErp } from "../askerp/AskErpContext";
 import { useAppData } from "../data/AppDataProvider";
 import { ApiError, type Quotation } from "../api/client";
-import { orderFromQuotation, quotationAction, type QuotationAction } from "../api/sales";
+import { orderFromQuotation, quotationAction, updateQuotation, type QuotationAction } from "../api/sales";
 import { Drawer, ErrorNote } from "../crm/ui";
-import { dateTime, inr, quoteStatusClass } from "../lib/format";
+import { dateTime, dayDate, inr, quoteStatusClass } from "../lib/format";
 import { DocTotals } from "../sales/DocTotals";
 import { ReasonModal } from "../sales/ReasonModal";
+import { SendModal } from "../sales/SendModal";
 
 type QuoteStatus = Quotation["status"];
 
@@ -42,7 +43,8 @@ function formatDateTime(iso: string) {
 export function Sales() {
   const { t } = useLanguage();
   const { open } = useAskErp();
-  const { quotes, loading, quotesError: error, refresh } = useAppData();
+  const { quotes, loading, quotesError: error, refresh, can } = useAppData();
+  const navigate = useNavigate();
   const [openId, setOpenId] = useState<string | null>(null);
   const opened = quotes.find((q) => q.id === openId) ?? null;
   const [params, setParams] = useSearchParams();
@@ -73,9 +75,16 @@ export function Sales() {
             </button>
           ))}
         </div>
-        <button className="primary-btn" onClick={open}>
-          ✦ <span>{t("sales.new")}</span>
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="ghost-btn" onClick={open}>
+            ✦ <span>{t("sales.new")}</span>
+          </button>
+          {can("sales.quotation.create") && (
+            <button className="primary-btn" onClick={() => navigate("/sales/quotations/new")}>
+              + New quotation
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <p className="footnote" style={{ color: "var(--bad)" }}>{error}</p>}
@@ -114,6 +123,7 @@ export function Sales() {
                   <td className="mono">₹{(q.grand_total || q.total).toLocaleString("en-IN")}</td>
                   <td>
                     <span className={`badge ${quoteStatusClass(q.status)}`}>{q.status}</span>
+                    {q.is_expired && <span className="badge status-rejected">Expired</span>}
                     {q.order_number && <small className="mono"> → {q.order_number}</small>}
                   </td>
                   <td>
@@ -138,6 +148,7 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
+  const [sending, setSending] = useState(false);
   const canAct = can("sales.quotation.create");
 
   async function run(action: QuotationAction) {
@@ -166,6 +177,21 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
     }
   }
 
+  async function extend() {
+    setBusy(true);
+    setError(null);
+    try {
+      const d = new Date();
+      d.setDate(d.getDate() + 15);
+      await updateQuotation(q.id, { valid_until: d.toISOString().slice(0, 10) });
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't extend it.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const button = (action: QuotationAction, label: string, primary = false) => (
     <button key={action} className={primary ? "primary-btn" : "ghost-btn"} disabled={busy} onClick={() => run(action)}>
       {label}
@@ -176,8 +202,11 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
     <Drawer title={q.number} subtitle={`${q.customer_name} · ${dateTime(q.created_at)}`} onClose={onClose}>
       <p>
         <span className={`badge ${quoteStatusClass(q.status)}`}>{q.status}</span>
+        {q.is_expired && <span className="badge status-rejected">Expired</span>}
         {q.status_note && <span className="card-note"> {q.status_note}</span>}
       </p>
+      {q.valid_until && <p className="card-note">Valid until {dayDate(q.valid_until)}</p>}
+      {q.notes && <p className="card-note">{q.notes}</p>}
       <ErrorNote message={error} />
       <div className="table-wrap">
         <table className="doc-lines">
@@ -211,6 +240,24 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
       )}
       {canAct && (
         <div className="head-actions" style={{ marginTop: 16 }}>
+          <a className="ghost-btn" href={`/print/quotation/${q.id}`} target="_blank" rel="noreferrer">
+            Print / PDF
+          </a>
+          {q.customer_id && ["Draft", "Sent", "Accepted"].includes(q.status) && (
+            <button className="ghost-btn" onClick={() => setSending(true)}>
+              Send
+            </button>
+          )}
+          {["Draft", "Pending approval"].includes(q.status) && !q.order_id && (
+            <button className="ghost-btn" onClick={() => navigate(`/sales/quotations/${q.id}/edit`)}>
+              Edit
+            </button>
+          )}
+          {q.is_expired && q.status === "Sent" && (
+            <button className="ghost-btn" disabled={busy} onClick={() => extend()}>
+              Extend 15 days
+            </button>
+          )}
           {q.status === "Pending approval" && can("sales.quotation.approve") && button("approve", "Approve discount", true)}
           {q.status === "Draft" && button("send", "Mark as sent")}
           {(q.status === "Draft" || q.status === "Sent") && button("accept", "Customer accepted")}
@@ -226,6 +273,9 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
             </button>
           )}
         </div>
+      )}
+      {sending && q.customer_id && (
+        <SendModal kind="quotation" id={q.id} customerId={q.customer_id} title={`quotation ${q.number}`} onClose={() => setSending(false)} />
       )}
       {rejecting && (
         <ReasonModal

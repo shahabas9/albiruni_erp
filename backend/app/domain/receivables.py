@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.deps import RequestContext
 from app.domain.errors import ConflictError, NotFoundError
-from app.models.documents import CreditNote, Invoice, Receipt, ReceiptAllocation
+from app.models.documents import CreditNote, Invoice, Receipt, ReceiptAllocation, Refund
 from app.models.sales import Customer
 
 
@@ -17,7 +17,7 @@ def invoices_owed(db: Session, context: RequestContext, customer_id: UUID) -> De
     """Sum of issued invoices' balances (a credited-back invoice can count below zero)."""
 
     total = db.execute(select(func.coalesce(
-        func.sum(Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited), 0,
+        func.sum(Invoice.left_expr()), 0,
     )).where(
         Invoice.tenant_id == context.tenant_id, Invoice.company_id == context.company_id,
         Invoice.customer_id == customer_id, Invoice.status == "Issued",
@@ -30,7 +30,7 @@ def advances(db: Session, context: RequestContext, customer_id: UUID) -> Decimal
 
     used = (select(func.coalesce(func.sum(ReceiptAllocation.amount), 0))
             .where(ReceiptAllocation.receipt_id == Receipt.id).scalar_subquery())
-    total = db.execute(select(func.coalesce(func.sum(Receipt.amount - used), 0)).where(
+    total = db.execute(select(func.coalesce(func.sum(Receipt.amount - used - Receipt.amount_refunded), 0)).where(
         Receipt.tenant_id == context.tenant_id, Receipt.company_id == context.company_id,
         Receipt.customer_id == customer_id, Receipt.status == "Received",
     )).scalar_one()
@@ -52,7 +52,7 @@ def ageing(db: Session, context: RequestContext, *, as_of: date | None = None, q
     Customers owing nothing and holding no advance are left out."""
 
     day = as_of or date.today()
-    left = Invoice.grand_total - Invoice.amount_paid - Invoice.amount_credited
+    left = Invoice.left_expr()
     late = func.greatest(0, literal(day) - Invoice.due_date)
 
     def bucket(condition):
@@ -77,7 +77,7 @@ def ageing(db: Session, context: RequestContext, *, as_of: date | None = None, q
     used = (select(func.coalesce(func.sum(ReceiptAllocation.amount), 0))
             .where(ReceiptAllocation.receipt_id == Receipt.id).scalar_subquery())
     adv = (
-        select(Receipt.customer_id.label("customer_id"), func.sum(Receipt.amount - used).label("advance"))
+        select(Receipt.customer_id.label("customer_id"), func.sum(Receipt.amount - used - Receipt.amount_refunded).label("advance"))
         .where(Receipt.tenant_id == context.tenant_id, Receipt.company_id == context.company_id,
                Receipt.status == "Received")
         .group_by(Receipt.customer_id)
@@ -114,9 +114,9 @@ def ageing(db: Session, context: RequestContext, *, as_of: date | None = None, q
 
 
 def statement(db: Session, context: RequestContext, customer_id: UUID, date_from: date, date_to: date) -> dict:
-    """Invoices (debit), credit notes and payments (credit) between two dates,
-    with the balance brought forward and a running balance. Voided payments
-    are left out, as if they never happened."""
+    """Invoices and refunds (debit), credit notes and payments (credit) between
+    two dates, with the balance brought forward and a running balance. Voided
+    payments and refunds are left out, as if they never happened."""
 
     if date_from > date_to:
         raise ConflictError("The start date is after the end date.")
@@ -146,6 +146,10 @@ def statement(db: Session, context: RequestContext, customer_id: UUID, date_from
             Receipt.tenant_id == base["tenant"], Receipt.company_id == base["company"],
             Receipt.customer_id == customer_id, Receipt.status == "Received", window(Receipt.receipt_date),
         )).scalars().all()
+        refunds = db.execute(select(Refund).options(selectinload(Refund.receipt), selectinload(Refund.invoice)).where(
+            Refund.tenant_id == base["tenant"], Refund.company_id == base["company"],
+            Refund.customer_id == customer_id, Refund.status == "Paid", window(Refund.refund_date),
+        )).scalars().all()
         out = [{"date": i.invoice_date, "kind": "Invoice", "number": i.number, "id": i.id,
                 "details": f"Due {i.due_date:%d %b %Y}", "debit": Decimal(str(i.grand_total)), "credit": Decimal(0)}
                for i in invoices]
@@ -157,7 +161,11 @@ def statement(db: Session, context: RequestContext, customer_id: UUID, date_from
                             + (f" — for {', '.join(a.invoice.number for a in r.allocations)}" if r.allocations else
                                " — advance"),
                  "debit": Decimal(0), "credit": Decimal(str(r.amount))} for r in receipts]
-        order = {"Invoice": 0, "Credit note": 1, "Payment": 2}
+        out += [{"date": f.refund_date, "kind": "Refund", "number": f.number, "id": f.id,
+                 "details": f"{f.mode}{' ' + f.reference if f.reference else ''} — from "
+                            + (f"advance on {f.receipt.number}" if f.receipt else f"credit on {f.invoice.number}"),
+                 "debit": Decimal(str(f.amount)), "credit": Decimal(0)} for f in refunds]
+        order = {"Invoice": 0, "Credit note": 1, "Payment": 2, "Refund": 3}
         return sorted(out, key=lambda e: (e["date"], order[e["kind"]], e["number"] or ""))
 
     customer = db.get(Customer, customer_id)
