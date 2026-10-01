@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, fetchTargets, saveTargets, type TargetReport } from "../api/client";
+import { ApiError, fetchTargets, saveTargets, setTargetBasis, type TargetReport } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -19,7 +19,7 @@ function monthLabel(key: string) {
   return new Date(y!, m! - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 }
 
-/** Each person's monthly target against the deals they won. */
+/** Each person's monthly target against the deals they won, or the sales invoiced for them. */
 export function Targets() {
   const { user } = useAuth();
   const { can, version } = useAppData();
@@ -78,12 +78,35 @@ export function Targets() {
         <div className="eyebrow">CRM</div>
         <h1 className="page-title">Targets</h1>
         <p className="page-sub">
-          What each person should win in a month, against the deals they actually closed as Won. Forecast is their open deals
-          expected to close this month, weighted by probability.
+          What each person should sell in a month, measured on the deals they closed as Won or on the sales invoiced with them as
+          salesperson (less credit notes). Forecast is their open deals expected to close this month, weighted by probability.
         </p>
       </div>
 
       <div className="toolbar">
+        {report && (
+          <div className="filters" aria-label="Measure targets on">
+            {(["won", "invoiced"] as const).map((b) => (
+              <button
+                key={b}
+                className={report.basis === b ? "on" : ""}
+                disabled={!canEdit}
+                title={canEdit ? "What targets are measured on, for everyone" : undefined}
+                onClick={async () => {
+                  if (b === report.basis) return;
+                  try {
+                    setReport(await setTargetBasis(b, month));
+                    setNotice(`Targets are now measured on ${b === "won" ? "deals won" : "sales invoiced"}.`);
+                  } catch (err) {
+                    setError(err instanceof ApiError ? err.message : "Couldn't change it.");
+                  }
+                }}
+              >
+                {b === "won" ? "On deals won" : "On sales invoiced"}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="month-switch">
           <button className="ghost-btn sm" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month">
             ←
@@ -109,7 +132,7 @@ export function Targets() {
             <div className="card-head">
               <span className="card-title">Team</span>
               <span className="card-note">
-                {inrShort(report.team_won)} won
+                {report.basis === "invoiced" ? `${inrShort(report.team_invoiced)} invoiced` : `${inrShort(report.team_won)} won`}
                 {report.team_target > 0 ? ` of ${inrShort(report.team_target)}` : " · no targets set"}
               </span>
             </div>
@@ -129,6 +152,7 @@ export function Targets() {
                   <th>Person</th>
                   <th>Target</th>
                   <th>Won</th>
+                  <th>Invoiced</th>
                   <th style={{ minWidth: 180 }}>Progress</th>
                   <th>Forecast</th>
                 </tr>
@@ -163,6 +187,12 @@ export function Targets() {
                       <span className="num">{inrShort(r.won_value)}</span>
                       <span className="sub">
                         {r.won_count} deal{r.won_count === 1 ? "" : "s"}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="num">{inrShort(r.invoiced_value)}</span>
+                      <span className="sub">
+                        {r.invoiced_count} invoice{r.invoiced_count === 1 ? "" : "s"}
                       </span>
                     </td>
                     <td>

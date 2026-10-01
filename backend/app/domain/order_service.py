@@ -174,8 +174,10 @@ def create_order(
     db: Session, context: RequestContext, body: OrderIn, *, commit: bool = True,
 ) -> tuple[SalesOrder, list[str]]:
     customer = get_customer(db, context, body.customer_id)
+    salesperson = (crm_service.resolve_owner(db, context, body.salesperson_id) if body.salesperson_id
+                   else context.user.id)
     order = _new_order(db, context, customer, order_date=body.order_date, customer_po=body.customer_po.strip(),
-                       notes=body.notes.strip())
+                       notes=body.notes.strip(), salesperson_id=salesperson)
     warnings = price_lines(db, context, order, customer, _lines_from(db, context, body.lines, customer), body.discount_pct)
     db.flush()
     history.record(db, context, "sales_order", order.id, "created", f"Order {order.number} drafted")
@@ -202,8 +204,11 @@ def order_from_quotation(db: Session, context: RequestContext, quotation_id: UUI
     if existing:
         raise ConflictError(f"{quotation.number} is already on order {existing}.")
     customer = get_customer(db, context, quotation.customer_id)
+    # The sale counts for whoever owns the deal, else whoever made the quote.
+    deal = db.get(Opportunity, quotation.opportunity_id) if quotation.opportunity_id else None
+    salesperson = (deal.owner_user_id if deal and deal.owner_user_id else None) or quotation.created_by
     order = _new_order(db, context, customer, quotation_id=quotation.id, opportunity_id=quotation.opportunity_id,
-                       approved_by=quotation.approved_by)
+                       approved_by=quotation.approved_by, salesperson_id=salesperson)
     lines = [{"item": l.item, "qty": float(l.qty), "unit_price": float(l.unit_price),
               "discount_pct": float(l.discount_pct or 0)} for l in quotation.lines]
     warnings = price_lines(db, context, order, customer, lines, float(quotation.discount_pct))
@@ -336,3 +341,17 @@ def cancel_order(db: Session, context: RequestContext, order_id: UUID, reason: s
     db.flush()
     return order
 
+
+
+def set_salesperson(db: Session, context: RequestContext, record, user_id: UUID | None, record_type: str) -> None:
+    """Who an order or invoice counts for. Only attribution changes, so any status will do."""
+
+    new = crm_service.resolve_owner(db, context, user_id)
+    if new == record.salesperson_id:
+        return
+    names = crm_service.owner_names(db, {record.salesperson_id, new})
+    before, after = names.get(record.salesperson_id, "nobody"), names.get(new, "nobody")
+    record.salesperson_id = new
+    history.record(db, context, record_type, record.id, "updated", f"Salesperson: {before} → {after}",
+                   {"salesperson": [before, after]})
+    db.commit()

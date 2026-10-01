@@ -12,7 +12,9 @@ from app.domain.errors import ConflictError, NotFoundError
 from app.models.identity import User
 from app.models.documents import SalesOrder
 from app.models.sales import Quotation
-from app.schemas.orders import DocLineOut, OrderIn, OrderOut, OrderUpdate, QuickSaleIn, QuickSaleOut, ReasonIn
+from app.schemas.orders import (
+    DocLineOut, OrderIn, OrderOut, OrderUpdate, QuickSaleIn, QuickSaleOut, ReasonIn, SalespersonIn,
+)
 from app.toolgateway.executor import execute_tool
 
 router = APIRouter(prefix="/api/sales", tags=["sales orders"])
@@ -31,7 +33,7 @@ def _errors(fn):
 
 
 def order_out(db: Session, order: SalesOrder) -> OrderOut:
-    user_ids = {u for u in (order.created_by, order.approved_by) if u}
+    user_ids = {u for u in (order.created_by, order.approved_by, order.salesperson_id) if u}
     names = {u.id: u.display_name for u in db.execute(select(User).where(User.id.in_(user_ids))).scalars()}
     quotation_number = (
         db.execute(select(Quotation.number).where(Quotation.id == order.quotation_id)).scalar_one_or_none()
@@ -48,6 +50,7 @@ def order_out(db: Session, order: SalesOrder) -> OrderOut:
         sgst=float(order.sgst), igst=float(order.igst), round_off=float(order.round_off),
         grand_total=float(order.grand_total), needs_approval=order_service.needs_approval(order),
         approved_by_name=names.get(order.approved_by), cancel_reason=order.cancel_reason,
+        salesperson_id=order.salesperson_id, salesperson_name=names.get(order.salesperson_id),
         created_by_name=names.get(order.created_by), created_at=order.created_at, confirmed_at=order.confirmed_at,
         lines=[line_out(l) for l in order.lines],
     )
@@ -174,3 +177,13 @@ def quick_sale(body: QuickSaleIn, context: RequestContext = Depends(require_perm
     result = execute_tool(db, context, "sales.quick_sale.v1", args, request_text="[form] Counter sale",
                           intent="quick_sale", correlation_id=new_correlation_id(), confirmed=True)
     return QuickSaleOut(order_id=result["order_id"], invoice_id=result["invoice_id"], receipt_id=result["receipt_id"])
+
+
+@router.put("/orders/{order_id}/salesperson", response_model=OrderOut)
+def set_order_salesperson(order_id: UUID, body: SalespersonIn, context: RequestContext = Depends(require_permission(WRITE)),
+                          db: Session = Depends(get_db)):
+    """Who the order counts for. Invoices drafted afterwards copy it."""
+
+    order = _errors(lambda: order_service.get_order(db, context, order_id))
+    _errors(lambda: order_service.set_salesperson(db, context, order, body.user_id, "sales_order"))
+    return order_out(db, order)

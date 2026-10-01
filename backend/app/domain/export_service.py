@@ -102,21 +102,23 @@ def build(db: Session, context: RequestContext, kind: str, filters: dict[str, An
     elif kind == "orders":
         rows, _ = order_service.list_orders(db, context, status=f.get("status", ""), q=f.get("q", ""),
                                             customer_id=_uuid(f.get("customer_id")), limit=None)
+        people = crm_service.owner_names(db, {r.salesperson_id for r in rows})
         header = ["Order", "Date", "Customer", "GSTIN", "Customer PO", "Status", "Invoicing", "Taxable value", "CGST",
-                  "SGST", "IGST", "Total", "Created"]
+                  "SGST", "IGST", "Total", "Salesperson", "Created"]
         data = [[r.number, r.order_date, r.customer.name, r.customer.gstin, r.customer_po, r.status,
                  order_service.invoice_status(r), float(r.total), float(r.cgst), float(r.sgst), float(r.igst),
-                 float(r.grand_total), r.created_at] for r in rows]
+                 float(r.grand_total), people.get(r.salesperson_id, ""), r.created_at] for r in rows]
     elif kind == "invoices":
         rows, _ = invoice_service.list_invoices(db, context, status=f.get("status", ""), q=f.get("q", ""),
                                                 customer_id=_uuid(f.get("customer_id")), limit=None)
         header = ["Invoice", "Date", "Due", "Customer", "GSTIN", "Place of supply", "Taxable value", "CGST", "SGST",
-                  "IGST", "Total", "Paid", "Credited", "TDS", "Refunded", "Balance", "Status"]
+                  "IGST", "Total", "Paid", "Credited", "TDS", "Refunded", "Balance", "Status", "Salesperson"]
+        people = crm_service.owner_names(db, {r.salesperson_id for r in rows})
         data = [[r.number or "(draft)", r.invoice_date, r.due_date, r.buyer_name or r.customer.name,
                  r.buyer_gstin or r.customer.gstin, r.place_of_supply, float(r.total), float(r.cgst), float(r.sgst),
                  float(r.igst), float(r.grand_total), float(r.amount_paid), float(r.amount_credited),
                  float(r.amount_tds or 0), float(r.amount_refunded or 0), float(invoice_service.balance(r)),
-                 invoice_service.payment_status(r)] for r in rows]
+                 invoice_service.payment_status(r), people.get(r.salesperson_id, "")] for r in rows]
     elif kind == "payments":
         with_advance = str(f.get("with_advance", "")).lower() in ("1", "true")
         rows, _ = payment_service.list_receipts(db, context, q=f.get("q", ""), customer_id=_uuid(f.get("customer_id")),

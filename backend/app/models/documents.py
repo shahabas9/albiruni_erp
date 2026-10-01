@@ -57,6 +57,10 @@ class SalesOrder(Base):
     cancel_reason: Mapped[str] = mapped_column(String(200), default="")
     # Set when a manager approved the discount (here or on the quotation).
     approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    # Who the sale counts for (targets, commission). Follows the deal owner when there is one.
+    salesperson_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     confirmed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -215,6 +219,10 @@ class Invoice(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     terms: Mapped[str] = mapped_column(Text, default="")
     bank_details: Mapped[str] = mapped_column(Text, default="")
+    # Copied from the order; who the sale counts for.
+    salesperson_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     issued_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)

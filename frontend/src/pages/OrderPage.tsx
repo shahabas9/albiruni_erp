@@ -13,7 +13,9 @@ import {
   type DeliveryNote,
   type Invoice,
   type SalesOrder,
+  setOrderSalesperson,
 } from "../api/sales";
+import { SalespersonField } from "../sales/SalespersonField";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -185,6 +187,15 @@ export function OrderPage() {
               <span>Place of supply</span>
               <p>{order.place_of_supply || "—"}</p>
             </div>
+            <SalespersonField
+              id={order.salesperson_id}
+              name={order.salesperson_name}
+              onSave={
+                can("sales.order.write") && order.status !== "Cancelled"
+                  ? async (userId) => setOrder(await setOrderSalesperson(order.id, userId))
+                  : undefined
+              }
+            />
             <div>
               <span>Created</span>
               <p>

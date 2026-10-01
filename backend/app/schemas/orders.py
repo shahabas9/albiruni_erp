@@ -20,6 +20,8 @@ class OrderIn(BaseModel):
     customer_po: str = Field(default="", max_length=60)
     notes: str = Field(default="", max_length=2000)
     order_date: date | None = None
+    # Who the sale counts for; the person entering it when left out.
+    salesperson_id: UUID | None = None
 
 
 class OrderUpdate(BaseModel):
@@ -87,6 +89,8 @@ class OrderOut(BaseModel):
     needs_approval: bool
     approved_by_name: str | None
     cancel_reason: str
+    salesperson_id: UUID | None = None
+    salesperson_name: str | None = None
     created_by_name: str | None
     created_at: datetime
     confirmed_at: datetime | None
@@ -172,3 +176,8 @@ class QuickSaleOut(BaseModel):
     order_id: UUID
     invoice_id: UUID
     receipt_id: UUID | None
+
+
+class SalespersonIn(BaseModel):
+    # null: counts for nobody.
+    user_id: UUID | None = None

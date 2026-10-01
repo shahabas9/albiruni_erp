@@ -176,6 +176,9 @@ export interface SalesOrder extends TaxTotals {
   /** A discount over the limit or a price below list, not yet approved. */
   needs_approval: boolean;
   approved_by_name: string | null;
+  /** Who the sale counts for in targets. */
+  salesperson_id: string | null;
+  salesperson_name: string | null;
   cancel_reason: string;
   created_by_name: string | null;
   created_at: string;
@@ -397,6 +400,8 @@ export interface Invoice extends TaxTotals {
   created_at: string;
   issued_at: string | null;
   issued_by_name: string | null;
+  salesperson_id: string | null;
+  salesperson_name: string | null;
   lines: InvoiceLine[];
   hsn_summary: HsnRow[];
   /** Single-invoice endpoint only: receipts applied to it. */
@@ -853,4 +858,12 @@ export function saveJson(file: PortalJson) {
   a.download = file.filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function setOrderSalesperson(id: string, userId: string | null): Promise<SalesOrder> {
+  return request<SalesOrder>(`/api/sales/orders/${id}/salesperson`, { method: "PUT", body: JSON.stringify({ user_id: userId }) });
+}
+
+export function setInvoiceSalesperson(id: string, userId: string | null): Promise<Invoice> {
+  return request<Invoice>(`/api/sales/invoices/${id}/salesperson`, { method: "PUT", body: JSON.stringify({ user_id: userId }) });
 }

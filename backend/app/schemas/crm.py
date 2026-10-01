@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 from decimal import Decimal
 from uuid import UUID
 
@@ -329,15 +329,20 @@ class TargetRow(BaseModel):
     target: float
     won_value: float
     won_count: int
+    invoiced_value: float = 0
+    invoiced_count: int = 0
     forecast: float
     pct: int | None
 
 
 class TargetReport(BaseModel):
     month: str
+    # What pct measures: "won" deals or "invoiced" sales.
+    basis: str = "won"
     rows: list[TargetRow]
     team_target: float
     team_won: float
+    team_invoiced: float = 0
     team_pct: int | None
     unowned_won_value: float
     unowned_won_count: int
@@ -423,3 +428,7 @@ class BulkOut(BaseModel):
     matched: int
     done: int
     skipped: list[dict]
+
+
+class TargetBasisIn(BaseModel):
+    basis: Literal["won", "invoiced"]

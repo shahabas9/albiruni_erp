@@ -105,6 +105,8 @@ class InvoiceOut(BaseModel):
     created_at: datetime
     issued_at: datetime | None
     issued_by_name: str | None
+    salesperson_id: UUID | None = None
+    salesperson_name: str | None = None
     lines: list[InvoiceLineOut]
     hsn_summary: list[HsnRow]
     # Receipts applied to this invoice (only on the single-invoice endpoint).

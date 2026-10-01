@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_price_lists, routes_reports as routes_sales_reports, routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_crm, routes_price_lists, routes_reports as routes_sales_reports, routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
@@ -1433,6 +1433,56 @@ class TallyExportTests(SalesTestCase):
         ledger = root.find(".//LEDGER")
         self.assertEqual((ledger.get("NAME"), ledger.findtext("PARTYGSTIN")), ("Rahman & Sons", KERALA_CUSTOMER_GSTIN))
         self.assertIn(b"Rahman &amp; Sons", response.body)
+
+
+class SalespersonTests(SalesTestCase):
+    def test_sales_count_for_the_salesperson_and_targets_can_use_invoiced_sales(self):
+        from app.domain import target_service
+        from app.schemas.crm import TargetBasisIn
+        from app.schemas.orders import SalespersonIn
+
+        rep = self.make_context(["*"], self.context.tenant_id, self.context.company_id)
+        customer = self.customer()
+        item = self.item(stock=100)
+        order = self.confirmed_order([{"item_id": item.id, "qty": 10}], customer)  # 4,200 taxable
+        self.assertEqual(order.salesperson_id, self.context.user.id)
+        moved = routes_orders.set_order_salesperson(order.id, SalespersonIn(user_id=rep.user.id), self.context, self.db)
+        self.assertEqual(moved.salesperson_name, "Test user")
+        self.deliver(order, {0: 10})
+        invoice = self.issue(self.draft(order))
+        self.assertEqual(invoice.salesperson_id, rep.user.id)
+        self.credit(invoice, "Return", {0: {"qty": 1}})  # 420 back
+
+        month = date.today().replace(day=1)
+        target_service.set_targets(self.db, self.context, month, [(rep.user.id, Decimal("10000"))])
+        report = target_service.report(self.db, self.context, month)
+        row = next(r for r in report["rows"] if r["user_id"] == rep.user.id)
+        self.assertEqual((report["basis"], row["invoiced_value"], row["pct"]), ("won", 3780, 0))
+        switched = routes_crm.put_target_basis(TargetBasisIn(basis="invoiced"), month.strftime("%Y-%m"),
+                                               self.context, self.db)
+        row = next(r for r in switched["rows"] if r["user_id"] == rep.user.id)
+        self.assertEqual((switched["basis"], row["pct"], switched["team_invoiced"]), ("invoiced", 38, 3780))
+
+        # Attribution can move after issue; the tax invoice itself doesn't change.
+        back = routes_invoices.set_invoice_salesperson(invoice.id, SalespersonIn(user_id=None), self.context, self.db)
+        self.assertIsNone(back.salesperson_id)
+        with self.assertRaises(HTTPException):
+            routes_orders.set_order_salesperson(order.id, SalespersonIn(user_id=uuid4()), self.context, self.db)
+
+    def test_orders_from_a_deal_count_for_its_owner(self):
+        owner = self.make_context(["*"], self.context.tenant_id, self.context.company_id)
+        customer = self.customer()
+        self.item()
+        deal = Opportunity(tenant_id=self.context.tenant_id, company_id=self.context.company_id, customer_id=customer.id,
+                           name="Big order", stage="Proposal", value=5000, probability_pct=50,
+                           owner_user_id=owner.user.id)
+        self.db.add(deal)
+        self.db.commit()
+        quotation = self.quote(qty=2)
+        quotation.opportunity_id = deal.id
+        self.db.commit()
+        order = routes_orders.order_from_quotation(quotation.id, Response(), self.context, self.db)
+        self.assertEqual(order.salesperson_id, owner.user.id)
 
 
 if __name__ == "__main__":

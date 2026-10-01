@@ -38,12 +38,15 @@ export function Overview() {
   const navigate = useNavigate();
   const { quotes, crm, loading, can, version } = useAppData();
   // Your own target this month, if one is set.
-  const [myTarget, setMyTarget] = useState<TargetRow | null>(null);
+  const [myTarget, setMyTarget] = useState<(TargetRow & { basis: string }) | null>(null);
   useEffect(() => {
     if (!can("crm.opportunity.read") || !user) return;
     let current = true;
     fetchTargets()
-      .then((r) => current && setMyTarget(r.rows.find((row) => row.user_id === user.id && row.target > 0) ?? null))
+      .then((r) => {
+        const mine = r.rows.find((row) => row.user_id === user.id && row.target > 0);
+        if (current) setMyTarget(mine ? { ...mine, basis: r.basis } : null);
+      })
       .catch(() => current && setMyTarget(null));
     return () => {
       current = false;
@@ -157,7 +160,11 @@ export function Overview() {
                 tone={(myTarget.pct ?? 0) >= 100 ? "ok" : "warn"}
                 icon="target"
                 title={`Your target: ${myTarget.pct}% reached`}
-                sub={`${inrShort(myTarget.won_value)} won of ${inrShort(myTarget.target)} this month · forecast ${inrShort(myTarget.forecast)}`}
+                sub={
+                  myTarget.basis === "invoiced"
+                    ? `${inrShort(myTarget.invoiced_value)} invoiced of ${inrShort(myTarget.target)} this month`
+                    : `${inrShort(myTarget.won_value)} won of ${inrShort(myTarget.target)} this month · forecast ${inrShort(myTarget.forecast)}`
+                }
                 onView={() => navigate("/crm/targets")}
               />
             )}

@@ -190,6 +190,8 @@ class CrmSettings(Base):
     lead_rotation: Mapped[dict] = mapped_column(JSONB, default=dict)
     # {"enabled": bool, "key": secret for the public URL, "source": str, "thank_you": str}
     web_form: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # What targets are measured against: "won" deals or "invoiced" sales.
+    target_basis: Mapped[str] = mapped_column(String(10), default="won", server_default="won")
 
 
 class SalesTarget(Base):

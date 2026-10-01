@@ -743,3 +743,18 @@ invoice for printing.
   SGST, Output IGST, Round Off, Cash, Bank, TDS Receivable. Every voucher
   balances; voided payments and refunds are left out; downloads are audited
   (`sales.export_tally.v1`).
+
+### Salesperson and targets on invoiced sales
+
+- Orders and invoices carry a salesperson: the deal's owner for orders made
+  from a quotation on a deal, else whoever made the quote, else whoever
+  enters the order. Invoices copy it from their order when drafted. It can
+  be changed at any time (`PUT /api/sales/orders/{id}/salesperson`,
+  `/invoices/{id}/salesperson`) — it's attribution, not part of the tax
+  invoice — and is in the order and invoice CSV exports. Migration `0008`
+  backfills existing orders and invoices the same way.
+- Targets show, per person, deals won and sales invoiced (taxable value of
+  invoices issued in the month with them as salesperson, less that month's
+  credit notes on their invoices). The company chooses which one progress
+  is measured on (Targets → "On deals won" / "On sales invoiced",
+  `PUT /api/crm/targets/basis`, needs `crm.settings.write`).

@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import credit_note_service, crm_service, gst_portal, history, invoice_service, payment_service, tax
+from app.domain import order_service, credit_note_service, crm_service, gst_portal, history, invoice_service, payment_service, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import CreditNote, Invoice
 from app.models.identity import User
+from app.schemas.orders import SalespersonIn
 from app.schemas.payments import InvoicePaymentOut
 from app.schemas.invoices import (
     CreditNoteIn, CreditNoteLineOut, CreditNoteOut, GstRefsIn, HsnRow, InvoiceDraftIn, InvoiceLineOut, InvoiceOut,
@@ -35,7 +36,9 @@ def _errors(fn):
 
 def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
     issued_by = db.get(User, inv.issued_by) if inv.issued_by else None
+    salesperson = db.get(User, inv.salesperson_id) if inv.salesperson_id else None
     return InvoiceOut(
+        salesperson_id=inv.salesperson_id, salesperson_name=salesperson.display_name if salesperson else None,
         id=inv.id, number=inv.number, status=inv.status, payment_status=invoice_service.payment_status(inv),
         order_id=inv.order_id, order_number=inv.order.number, customer_id=inv.customer_id,
         customer_name=inv.customer.name, invoice_date=inv.invoice_date, due_date=inv.due_date,
@@ -234,4 +237,14 @@ def record_gst_refs(invoice_id: UUID, body: GstRefsIn, context: RequestContext =
 
     invoice = _errors(lambda: invoice_service.get_invoice(db, context, invoice_id, lock=True))
     _errors(lambda: gst_portal.record_references(db, context, invoice, **body.model_dump(exclude_unset=True)))
+    return get_invoice(invoice_id, context, db)
+
+
+@router.put("/invoices/{invoice_id}/salesperson", response_model=InvoiceOut)
+def set_invoice_salesperson(invoice_id: UUID, body: SalespersonIn,
+                            context: RequestContext = Depends(require_permission(WRITE)), db: Session = Depends(get_db)):
+    """Who the sale counts for in targets. Doesn't change the tax invoice itself, so issued ones can change."""
+
+    invoice = _errors(lambda: invoice_service.get_invoice(db, context, invoice_id))
+    _errors(lambda: order_service.set_salesperson(db, context, invoice, body.user_id, "invoice"))
     return get_invoice(invoice_id, context, db)

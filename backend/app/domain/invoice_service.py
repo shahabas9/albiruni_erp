@@ -150,7 +150,7 @@ def create_draft(db: Session, context: RequestContext, order_id: UUID, lines: li
         status="Draft", invoice_date=today, due_date=today + timedelta(days=terms or 0),
         place_of_supply=order.place_of_supply, customer_po=order.customer_po, discount_pct=order.discount_pct,
         billing_address=order.billing_address, shipping_address=order.shipping_address, notes=notes.strip(),
-        created_by=context.user.id,
+        salesperson_id=order.salesperson_id, created_by=context.user.id,
     )
     for position, (line_id, qty) in enumerate(sorted(wanted.items(), key=lambda kv: by_id[kv[0]].position)):
         line = by_id[line_id]

@@ -962,6 +962,9 @@ export interface TargetRow {
   /** Value of deals this person moved to Won during the month. */
   won_value: number;
   won_count: number;
+  /** Taxable value invoiced with them as salesperson, less the month's credit notes on those invoices. */
+  invoiced_value: number;
+  invoiced_count: number;
   /** Their open deals expected to close this month, value × probability. */
   forecast: number;
   pct: number | null;
@@ -969,13 +972,21 @@ export interface TargetRow {
 
 export interface TargetReport {
   month: string;
+  /** What progress measures. */
+  basis: "won" | "invoiced";
   rows: TargetRow[];
   team_target: number;
   team_won: number;
+  team_invoiced: number;
   team_pct: number | null;
   /** Won by deals nobody owns — counted in the team total only. */
   unowned_won_value: number;
   unowned_won_count: number;
+}
+
+/** Measure targets on deals won or on sales invoiced. */
+export function setTargetBasis(basis: "won" | "invoiced", month: string): Promise<TargetReport> {
+  return request<TargetReport>(`/api/crm/targets/basis${query({ month })}`, { method: "PUT", body: JSON.stringify({ basis }) });
 }
 
 /** month: "YYYY-MM"; this month when omitted. */

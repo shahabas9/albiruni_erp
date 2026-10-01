@@ -9,7 +9,9 @@ import {
   issueInvoice,
   type CreditNote,
   type Invoice,
+  setInvoiceSalesperson,
 } from "../api/sales";
+import { SalespersonField } from "../sales/SalespersonField";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
@@ -248,6 +250,18 @@ export function InvoicePage() {
                 <p>{invoice.customer_po}</p>
               </div>
             )}
+            <SalespersonField
+              id={invoice.salesperson_id}
+              name={invoice.salesperson_name}
+              onSave={
+                can("sales.invoice.write")
+                  ? async (userId) => {
+                      await setInvoiceSalesperson(invoice.id, userId);
+                      setChanges((n) => n + 1);
+                    }
+                  : undefined
+              }
+            />
             {invoice.issued_at && (
               <div>
                 <span>Issued</span>
