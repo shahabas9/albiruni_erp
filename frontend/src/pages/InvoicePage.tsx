@@ -17,6 +17,7 @@ import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format"
 import { CreditNoteModal } from "../sales/CreditNoteModal";
 import { PaymentModal } from "../sales/PaymentModal";
 import { RefundModal } from "../sales/RefundModal";
+import { GstPortalModal } from "../sales/GstPortalModal";
 import { SendModal } from "../sales/SendModal";
 import { DocTotals } from "../sales/DocTotals";
 
@@ -32,6 +33,7 @@ export function InvoicePage() {
   const [notes, setNotes] = useState<CreditNote[]>([]);
   const [crediting, setCrediting] = useState(false);
   const [refunding, setRefunding] = useState(false);
+  const [portal, setPortal] = useState(false);
   const [paying, setPaying] = useState(false);
   const [sending, setSending] = useState<{ kind: "invoice" | "credit_note"; id: string; title: string; reminder?: boolean } | null>(null);
 
@@ -113,6 +115,11 @@ export function InvoicePage() {
           {!draft && can("sales.payment.write") && invoice.balance > 0 && (
             <button className="primary-btn" onClick={() => setPaying(true)}>
               Record payment
+            </button>
+          )}
+          {!draft && (
+            <button className="ghost-btn" onClick={() => setPortal(true)}>
+              e-Invoice / e-Way bill
             </button>
           )}
           {!draft && can("sales.payment.write") && invoice.balance < 0 && (
@@ -328,6 +335,17 @@ export function InvoicePage() {
           onClose={() => setPaying(false)}
           onDone={() => {
             setPaying(false);
+            setChanges((n) => n + 1);
+          }}
+        />
+      )}
+      {portal && (
+        <GstPortalModal
+          invoice={invoice}
+          canWrite={can("sales.invoice.write")}
+          onClose={() => setPortal(false)}
+          onSaved={() => {
+            setPortal(false);
             setChanges((n) => n + 1);
           }}
         />

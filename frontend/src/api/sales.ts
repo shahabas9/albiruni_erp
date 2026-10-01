@@ -383,6 +383,12 @@ export interface Invoice extends TaxTotals {
   amount_tds: number;
   /** Credit balance paid back to the customer. */
   amount_refunded: number;
+  /** Recorded from the GST portals after upload. */
+  irn: string;
+  irn_ack_no: string;
+  irn_ack_date: string | null;
+  eway_bill_no: string;
+  eway_bill_date: string | null;
   /** Still owed: total − paid − credited − TDS. */
   balance: number;
   notes: string;
@@ -806,4 +812,40 @@ export interface SalesDashboard {
 
 export function fetchSalesDashboard(): Promise<SalesDashboard> {
   return request<SalesDashboard>("/api/sales/dashboard");
+}
+
+// --- GST portals ----------------------------------------------------------
+
+export interface PortalJson {
+  filename: string;
+  payload: unknown;
+  /** What the portal would reject; fix before uploading. */
+  problems: string[];
+}
+
+export function fetchEinvoice(kind: "invoices" | "credit-notes", id: string): Promise<PortalJson> {
+  return request<PortalJson>(`/api/sales/${kind}/${id}/einvoice`);
+}
+
+export function fetchEwayBill(id: string, params: { distance_km: number; vehicle_no: string; transporter_id: string }): Promise<PortalJson> {
+  const q = new URLSearchParams({ distance_km: String(params.distance_km), vehicle_no: params.vehicle_no, transporter_id: params.transporter_id });
+  return request<PortalJson>(`/api/sales/invoices/${id}/ewaybill?${q}`);
+}
+
+export function recordGstRefs(
+  id: string,
+  body: Partial<{ irn: string; irn_ack_no: string; irn_ack_date: string; eway_bill_no: string; eway_bill_date: string }>,
+): Promise<Invoice> {
+  return request<Invoice>(`/api/sales/invoices/${id}/gst-refs`, { method: "PUT", body: JSON.stringify(body) });
+}
+
+/** Saves the JSON as a file for the portal's upload. */
+export function saveJson(file: PortalJson) {
+  const blob = new Blob([JSON.stringify(file.payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file.filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

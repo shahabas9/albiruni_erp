@@ -204,6 +204,12 @@ class Invoice(Base):
     amount_credited: Mapped[float] = _money()
     # Tax the customer deducted at source (TDS) instead of paying it to us.
     amount_tds: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
+    # From the GST portals, recorded after uploading: e-invoice IRN and acknowledgement, e-way bill.
+    irn: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    irn_ack_no: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    irn_ack_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    eway_bill_no: Mapped[str] = mapped_column(String(12), default="", server_default="")
+    eway_bill_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Credit balance paid back to the customer (after a credit note on a paid invoice).
     amount_refunded: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     notes: Mapped[str] = mapped_column(Text, default="")

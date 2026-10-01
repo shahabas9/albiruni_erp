@@ -92,6 +92,12 @@ class InvoiceOut(BaseModel):
     # TDS the customer deducted (settles the invoice like a payment).
     amount_tds: float = 0
     amount_refunded: float = 0
+    # Recorded from the GST portals after upload.
+    irn: str = ""
+    irn_ack_no: str = ""
+    irn_ack_date: date | None = None
+    eway_bill_no: str = ""
+    eway_bill_date: date | None = None
     balance: float
     notes: str
     terms: str
@@ -165,3 +171,13 @@ class CreditNoteOut(BaseModel):
     created_by_name: str | None
     created_at: datetime
     lines: list[CreditNoteLineOut]
+
+
+class GstRefsIn(BaseModel):
+    """Only the fields sent change; "" clears one."""
+
+    irn: str | None = Field(default=None, max_length=64)
+    irn_ack_no: str | None = Field(default=None, max_length=20)
+    irn_ack_date: date | None = None
+    eway_bill_no: str | None = Field(default=None, max_length=14)
+    eway_bill_date: date | None = None

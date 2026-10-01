@@ -107,6 +107,13 @@ export function InvoiceSheet({ inv }: { inv: Invoice }) {
         <div className="pd-title">
           <h2>{inv.status === "Draft" ? "DRAFT — NOT A TAX INVOICE" : "TAX INVOICE"}</h2>
           <small>Original for recipient</small>
+          {inv.irn && (
+            <small className="mono" style={{ display: "block", wordBreak: "break-all", maxWidth: 260 }}>
+              IRN {inv.irn}
+              {inv.irn_ack_no && ` · Ack ${inv.irn_ack_no}`}
+              {inv.irn_ack_date && ` · ${dayDate(inv.irn_ack_date)}`}
+            </small>
+          )}
         </div>
       </header>
 
@@ -141,6 +148,15 @@ export function InvoiceSheet({ inv }: { inv: Invoice }) {
           <dd>No</dd>
           <dt>Order</dt>
           <dd className="mono">{inv.order_number}</dd>
+          {inv.eway_bill_no && (
+            <>
+              <dt>e-Way bill</dt>
+              <dd className="mono">
+                {inv.eway_bill_no}
+                {inv.eway_bill_date && ` · ${dayDate(inv.eway_bill_date)}`}
+              </dd>
+            </>
+          )}
           {inv.customer_po && (
             <>
               <dt>Customer PO</dt>

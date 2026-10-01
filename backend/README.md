@@ -716,3 +716,18 @@ invoice for printing.
   invoiced, overdue customers and unapplied advances under "Needs your
   attention". `GET /api/sales/dashboard`; each block appears only with the
   permission to read what's behind it.
+
+### e-Invoice and e-way bill JSON
+
+- Invoice → "e-Invoice / e-Way bill": downloads the e-invoice JSON (NIC
+  schema 1.1, `GET /api/sales/invoices/{id}/einvoice`; credit notes at
+  `/credit-notes/{id}/einvoice` with the original invoice referenced) and
+  the e-way bill bulk-upload JSON (`/invoices/{id}/ewaybill?distance_km=`;
+  vehicle and transporter default to the order's latest delivery note).
+  Each comes with the problems the portal would reject — no buyer GSTIN
+  (e-invoices are B2B only), no 6-digit PIN in an address, missing HSN
+  codes, an e-way bill under ₹50,000 or with no vehicle.
+- Nothing is sent to the portals yet: upload the file (or hand it to a GST
+  Suvidha Provider), then record the IRN, acknowledgement and e-way bill
+  number (`PUT /api/sales/invoices/{id}/gst-refs`); they print on the
+  invoice. PIN codes are read from the free-text addresses. Migration `0007`.

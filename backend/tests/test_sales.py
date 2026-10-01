@@ -19,7 +19,7 @@ from app.api import routes_price_lists, routes_ask, routes_share, routes_custome
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
-from app.domain import price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import gst_portal, price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -28,7 +28,7 @@ from app.models.identity import Role, User
 from app.models.sales import Item, Quotation
 from app.models.tenant import Company, Tenant
 from app.schemas.customers import CustomerIn, CustomerUpdate
-from app.schemas.invoices import CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
+from app.schemas.invoices import GstRefsIn, CreditLineIn, CreditNoteIn, InvoiceDraftIn, InvoiceLineIn, IssueIn
 from app.schemas.ask import AskRequest, ConfirmRequest
 from app.schemas.items import ItemIn, ItemUpdate
 from app.schemas.payments import AllocateIn, AllocationIn, ReceiptIn, RefundIn, TdsCertificateIn
@@ -1347,6 +1347,59 @@ class DashboardTests(SalesTestCase):
         limited = sales_dashboard.dashboard(self.db, seller)
         self.assertNotIn("money", limited)
         self.assertIn("orders", limited)
+
+
+class GstPortalTests(SalesTestCase):
+    def test_addresses_split_into_lines_place_and_pin(self):
+        self.assertEqual(gst_portal.split_address("12 Beach Road,\nKozhikode 673001", "32"),
+                         {"addr1": "12 Beach Road", "addr2": "Kozhikode 673001", "place": "Kozhikode", "pin": 673001})
+        self.assertEqual(gst_portal.split_address("", "32")["place"], "Kerala")
+        self.assertEqual((gst_portal.uqc("Box"), gst_portal.uqc("kgs"), gst_portal.uqc("tins")), ("BOX", "KGS", "OTH"))
+
+    def test_einvoice_and_eway_bill_json_for_an_issued_invoice(self):
+        company = self.db.get(Company, self.context.company_id)
+        company.address = "4/12 Mavoor Road\nKozhikode 673004"
+        self.db.commit()
+        customer = self.customer(gstin=KARNATAKA_GSTIN, billing_address="88 MG Road\nBengaluru 560001")
+        item = self.item(price=50000, stock=10)
+        order = self.confirmed_order([{"item_id": item.id, "qty": 2}], customer)
+        self.deliver(order, {0: 2}, vehicle_no="KL 11 AB 1234", transporter="Fast Movers")
+        invoice = self.issue(self.draft(order))
+
+        out = routes_invoices.invoice_einvoice(invoice.id, self.context, self.db)
+        doc = out["payload"]
+        self.assertEqual(out["problems"], [])
+        self.assertEqual((doc["DocDtls"]["Typ"], doc["DocDtls"]["No"]), ("INV", invoice.number))
+        self.assertEqual((doc["SellerDtls"]["Pin"], doc["BuyerDtls"]["Pin"], doc["BuyerDtls"]["Pos"]),
+                         (673004, 560001, "29"))
+        self.assertEqual((doc["ItemList"][0]["IgstAmt"], doc["ItemList"][0]["Unit"], doc["ValDtls"]["TotInvVal"]),
+                         (18000.0, "BOX", 118000.0))
+
+        eway = routes_invoices.invoice_eway_bill(invoice.id, 360, "", "", "", self.context, self.db)
+        bill = eway["payload"]["billLists"][0]
+        self.assertEqual(eway["problems"], [])
+        self.assertEqual((bill["vehicleNo"], bill["transporterName"], bill["toStateCode"], bill["igstValue"]),
+                         ("KL11AB1234", "Fast Movers", 29, 18000.0))
+        self.assertEqual(bill["itemList"][0]["igstRate"], 18)
+        self.assertIn("distance", " ".join(routes_invoices.invoice_eway_bill(
+            invoice.id, 0, "", "", "", self.context, self.db)["problems"]))
+
+        note = self.credit(invoice, "Return", {0: {"qty": 1}})
+        crn = routes_invoices.credit_note_einvoice(note.id, self.context, self.db)["payload"]
+        self.assertEqual((crn["DocDtls"]["Typ"], crn["RefDtls"]["PrecDocDtls"][0]["InvNo"]), ("CRN", invoice.number))
+
+        saved = routes_invoices.record_gst_refs(invoice.id, GstRefsIn(irn="a" * 64, irn_ack_no="112410000000001",
+                                                eway_bill_no="1812 3456 7890"), self.context, self.db)
+        self.assertEqual((saved.irn, saved.eway_bill_no), ("a" * 64, "181234567890"))
+        with self.assertRaises(HTTPException):
+            routes_invoices.record_gst_refs(invoice.id, GstRefsIn(irn="not-an-irn"), self.context, self.db)
+
+    def test_b2c_and_missing_pins_are_reported(self):
+        customer = self.customer("Walk in buyer")
+        invoice = self.invoice_for(customer, 1)
+        problems = routes_invoices.invoice_einvoice(invoice.id, self.context, self.db)["problems"]
+        self.assertTrue(any("B2B" in p for p in problems))
+        self.assertTrue(any("PIN" in p for p in problems))
 
 
 if __name__ == "__main__":

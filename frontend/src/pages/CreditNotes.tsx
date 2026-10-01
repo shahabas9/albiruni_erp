@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchCreditNotes } from "../api/sales";
+import { fetchCreditNotes, fetchEinvoice, saveJson } from "../api/sales";
 import { Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, inr } from "../lib/format";
@@ -64,7 +64,22 @@ export function CreditNotes() {
                   <td>
                     <a className="ghost-btn sm" href={`/print/credit-note/${n.id}`} target="_blank" rel="noreferrer">
                       Print
-                    </a>
+                    </a>{" "}
+                    <button
+                      className="ghost-btn sm"
+                      title="e-Invoice JSON for the credit note"
+                      onClick={async () => {
+                        try {
+                          const file = await fetchEinvoice("credit-notes", n.id);
+                          if (file.problems.length && !window.confirm(`Fix before uploading:\n\n${file.problems.join("\n")}\n\nDownload anyway?`)) return;
+                          saveJson(file);
+                        } catch (err) {
+                          window.alert(err instanceof Error ? err.message : "Couldn't build the e-invoice.");
+                        }
+                      }}
+                    >
+                      e-Invoice
+                    </button>
                   </td>
                 </tr>
               ))}

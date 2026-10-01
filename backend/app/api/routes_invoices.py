@@ -7,13 +7,14 @@ from sqlalchemy.orm import Session
 from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import credit_note_service, crm_service, history, invoice_service, payment_service, tax
+from app.domain import credit_note_service, crm_service, gst_portal, history, invoice_service, payment_service, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import CreditNote, Invoice
 from app.models.identity import User
 from app.schemas.payments import InvoicePaymentOut
 from app.schemas.invoices import (
-    CreditNoteIn, CreditNoteLineOut, CreditNoteOut, HsnRow, InvoiceDraftIn, InvoiceLineOut, InvoiceOut, IssueIn,
+    CreditNoteIn, CreditNoteLineOut, CreditNoteOut, GstRefsIn, HsnRow, InvoiceDraftIn, InvoiceLineOut, InvoiceOut,
+    IssueIn,
 )
 from app.toolgateway.executor import execute_tool
 
@@ -48,7 +49,9 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
         igst=float(inv.igst), round_off=float(inv.round_off), grand_total=float(inv.grand_total),
         amount_in_words=tax.amount_in_words(inv.grand_total), amount_paid=float(inv.amount_paid),
         amount_credited=float(inv.amount_credited), amount_tds=float(inv.amount_tds or 0),
-        amount_refunded=float(inv.amount_refunded or 0), balance=float(invoice_service.balance(inv)), notes=inv.notes,
+        amount_refunded=float(inv.amount_refunded or 0), irn=inv.irn or "", irn_ack_no=inv.irn_ack_no or "",
+        irn_ack_date=inv.irn_ack_date, eway_bill_no=inv.eway_bill_no or "", eway_bill_date=inv.eway_bill_date,
+        balance=float(invoice_service.balance(inv)), notes=inv.notes,
         terms=inv.terms, bank_details=inv.bank_details, created_at=inv.created_at, issued_at=inv.issued_at,
         issued_by_name=issued_by.display_name if issued_by else None,
         lines=[InvoiceLineOut(
@@ -188,3 +191,47 @@ def create_credit_note(invoice_id: UUID, body: CreditNoteIn,
     result = execute_tool(db, context, "sales.create_credit_note.v1", args, request_text="[form] Credit note",
                           intent="create_credit_note", correlation_id=new_correlation_id(), confirmed=True)
     return credit_note_out(db, credit_note_service.get_credit_note(db, context, UUID(result["credit_note_id"])))
+
+
+# --- GST portals: e-invoice and e-way bill -------------------------------------------------
+
+
+@router.get("/invoices/{invoice_id}/einvoice")
+def invoice_einvoice(invoice_id: UUID, context: RequestContext = Depends(require_permission(READ)),
+                     db: Session = Depends(get_db)):
+    """The e-invoice JSON (NIC schema 1.1) to upload, and anything the portal would reject."""
+
+    invoice = _errors(lambda: invoice_service.get_invoice(db, context, invoice_id))
+    payload, problems = _errors(lambda: gst_portal.einvoice_for_invoice(invoice))
+    return {"filename": f"einvoice-{invoice.number.replace('/', '-')}.json", "payload": payload, "problems": problems}
+
+
+@router.get("/credit-notes/{note_id}/einvoice")
+def credit_note_einvoice(note_id: UUID, context: RequestContext = Depends(require_permission(READ)),
+                         db: Session = Depends(get_db)):
+    note = _errors(lambda: credit_note_service.get_credit_note(db, context, note_id))
+    payload, problems = _errors(lambda: gst_portal.einvoice_for_credit_note(note))
+    return {"filename": f"einvoice-{note.number.replace('/', '-')}.json", "payload": payload, "problems": problems}
+
+
+@router.get("/invoices/{invoice_id}/ewaybill")
+def invoice_eway_bill(invoice_id: UUID, distance_km: int = Query(0, ge=0, le=4000), vehicle_no: str = "",
+                      transporter_id: str = "", transporter_name: str = "",
+                      context: RequestContext = Depends(require_permission(READ)), db: Session = Depends(get_db)):
+    """The e-way bill bulk-upload JSON. Vehicle and transporter default to the order's latest delivery."""
+
+    invoice = _errors(lambda: invoice_service.get_invoice(db, context, invoice_id))
+    payload, problems = _errors(lambda: gst_portal.eway_bill(
+        db, context, invoice, distance_km=distance_km, vehicle_no=vehicle_no, transporter_id=transporter_id,
+        transporter_name=transporter_name))
+    return {"filename": f"ewaybill-{invoice.number.replace('/', '-')}.json", "payload": payload, "problems": problems}
+
+
+@router.put("/invoices/{invoice_id}/gst-refs", response_model=InvoiceOut)
+def record_gst_refs(invoice_id: UUID, body: GstRefsIn, context: RequestContext = Depends(require_permission(WRITE)),
+                    db: Session = Depends(get_db)):
+    """Record the IRN / acknowledgement and e-way bill number the portals gave back; they print on the invoice."""
+
+    invoice = _errors(lambda: invoice_service.get_invoice(db, context, invoice_id, lock=True))
+    _errors(lambda: gst_portal.record_references(db, context, invoice, **body.model_dump(exclude_unset=True)))
+    return get_invoice(invoice_id, context, db)
