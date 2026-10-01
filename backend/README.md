@@ -84,9 +84,6 @@ curl -s http://localhost:8000/api/audit/events -H "Authorization: Bearer $TOKEN"
   `orchestrator.parse_quotation_request` extracts quotation lines. Swap them
   for a Claude tool-calling loop against `toolgateway.registry.list_tools()` —
   the tools, executor, audit trail and permission checks don't need to change.
-- **Alembic migrations.** Schema is created via `Base.metadata.create_all()`
-  at startup for dev convenience. Add real migrations before this touches a
-  shared environment.
 - **CRM writes go through plain routes, not the tool gateway.** They're
   permission-checked and every change lands in the record's history (see
   "Record history" below), but only Ask ERP actions and quotations write
@@ -571,3 +568,28 @@ functions with their own unit tests).
   | `sales.credit_note.write` | Issue credit notes |
   | `sales.payment.read` / `sales.payment.write` | See / record, apply and void payments |
   | `sales.reports.read` | Sales register and GSTR-1 (downloads audited) |
+
+
+## Database migrations
+
+Schema changes are Alembic migrations in `backend/alembic/versions`
+(`0001_baseline` is the schema as of the sales cycle).
+
+- The API applies them at startup (`app/core/migrations.py`); set
+  `AUTO_MIGRATE=0` where deploys run `.venv/bin/alembic upgrade head`
+  instead. `python -m app.seed` upgrades first too.
+- A database made before migrations existed (app tables, no
+  `alembic_version`) is brought to the baseline once by the frozen legacy
+  bootstrap in `app/core/dev_schema.py`, stamped `0001`, and handed to
+  Alembic. Never add new tables or columns there.
+- A change to the models: `.venv/bin/alembic revision --autogenerate -m
+  "what changed"`, read the generated file (data backfills and renames need
+  writing by hand), then `alembic upgrade head`. `alembic check` fails if the
+  models have changes no migration covers.
+- `tests/test_migrations.py` builds an empty database from the migrations,
+  checks it matches the models exactly, and downgrades it again:
+
+```bash
+MIGRATION_TEST_DB=postgresql+psycopg://USER:PASS@localhost/EMPTY_DB \
+  .venv/bin/python -m unittest tests.test_migrations -v
+```

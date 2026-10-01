@@ -18,7 +18,7 @@ from datetime import timedelta
 from app.api import routes_ask, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
-from app.core.dev_schema import ensure_dev_schema
+from app.core.migrations import upgrade_database
 from app.domain import credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
@@ -79,7 +79,7 @@ class TaxMathTests(unittest.TestCase):
 class SalesTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        ensure_dev_schema()
+        upgrade_database()
 
     def setUp(self):
         self.db = SessionLocal()

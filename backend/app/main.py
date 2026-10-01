@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.dev_schema import ensure_dev_schema
+from app.core.migrations import upgrade_database
 from app.domain import notifications
 from app.core.public_cors import PublicCORSMiddleware
 
@@ -46,9 +46,9 @@ from app.toolgateway import tools_crm, tools_documents, tools_sales  # noqa: F40
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Dev convenience only — a real deployment manages schema via Alembic
-    # migrations (see backend/alembic), never create_all().
-    ensure_dev_schema()
+    # Migrations run at startup unless AUTO_MIGRATE=0 (then run `alembic upgrade head` when deploying).
+    if settings.auto_migrate:
+        upgrade_database()
     worker = asyncio.create_task(_notification_worker()) if settings.notification_worker else None
     yield
     if worker:
