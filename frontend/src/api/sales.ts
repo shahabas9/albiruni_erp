@@ -32,6 +32,10 @@ export interface CompanyProfile {
   payment_terms_days: number;
   quotation_validity_days: number;
   allow_negative_stock: boolean;
+  reminders_enabled: boolean;
+  reminder_before_days: number;
+  /** "1,7,15,30": days after the due date. */
+  reminder_after_days: string;
 }
 
 export function fetchCompanyProfile(): Promise<CompanyProfile> {
@@ -656,7 +660,7 @@ export interface ShareResult {
   expires: string;
 }
 
-export function shareDocument(body: { kind: ShareKind; id: string; email?: string; date_from?: string; date_to?: string }): Promise<ShareResult> {
+export function shareDocument(body: { kind: ShareKind; id: string; email?: string; date_from?: string; date_to?: string; reminder?: boolean }): Promise<ShareResult> {
   return request<ShareResult>("/api/sales/share", { method: "POST", body: JSON.stringify(body) });
 }
 

@@ -72,11 +72,15 @@ def link(token: str) -> str:
 def recipients(db: Session, context: RequestContext, customer_id: UUID) -> list[dict]:
     """The customer's contacts with an email or phone, to pick whom to send to."""
 
+    customer = db.get(Customer, customer_id)
     rows = db.execute(select(Contact).where(
         Contact.tenant_id == context.tenant_id, Contact.company_id == context.company_id,
         Contact.customer_id == customer_id,
     ).order_by(Contact.name)).scalars()
-    return [{"name": c.name, "email": c.email or "", "phone": c.phone or ""} for c in rows if c.email or c.phone]
+    billing = ([{"name": f"{customer.name} (billing)", "email": customer.email or "", "phone": customer.phone or ""}]
+               if customer and (customer.email or customer.phone) else [])
+    return billing + [{"name": c.name, "email": c.email or "", "phone": c.phone or ""} for c in rows
+                      if c.email or c.phone]
 
 
 def share(

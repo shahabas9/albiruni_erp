@@ -28,6 +28,9 @@ class Customer(Base):
     shipping_address: Mapped[str] = mapped_column(Text, default="")
     # GST state code (place of supply). Taken from the GSTIN when there is one.
     state_code: Mapped[str] = mapped_column(String(2), default="")
+    # Where invoices, statements and payment reminders go.
+    email: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    phone: Mapped[str] = mapped_column(String(40), default="", server_default="")
     # Days to pay; None falls back to the company's default terms.
     payment_terms_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

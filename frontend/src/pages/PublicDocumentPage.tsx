@@ -21,7 +21,7 @@ export function PublicDocumentPage() {
 
   if (error) return <p className="print-error">{error}</p>;
   if (!doc) return <p className="print-error">Loading…</p>;
-  const company = { payment_terms_days: 0, quotation_validity_days: 0, allow_negative_stock: false, ...doc.company } as CompanyProfile;
+  const company = { ...doc.company } as CompanyProfile;
   return (
     <div className="print-shell">
       <div className="print-bar">

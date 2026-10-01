@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { fetchAgeing, type Ageing } from "../api/sales";
 import { ErrorNote, SearchBox } from "../crm/ui";
+import { SendModal } from "../sales/SendModal";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, inr, inrShort } from "../lib/format";
 
@@ -20,6 +21,7 @@ export function Receivables() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const onSearch = useCallback((q: string) => setSearch(q), []);
+  const [reminding, setReminding] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -89,6 +91,7 @@ export function Receivables() {
                 <th className="num">Advance</th>
                 <th className="num">Net owed</th>
                 <th>Oldest due</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -110,11 +113,28 @@ export function Receivables() {
                     <b>{r.net < 0 ? `${inr(-r.net)} in credit` : inr(r.net)}</b>
                   </td>
                   <td>{r.oldest_due ? dayDate(r.oldest_due) : "—"}</td>
+                  <td>
+                    {r.net > 0 && (
+                      <button className="ghost-btn sm" onClick={() => setReminding({ id: r.customer_id, name: r.customer_name })}>
+                        Remind
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+      {reminding && (
+        <SendModal
+          kind="statement"
+          id={reminding.id}
+          customerId={reminding.id}
+          title={reminding.name}
+          reminder
+          onClose={() => setReminding(null)}
+        />
       )}
     </section>
   );

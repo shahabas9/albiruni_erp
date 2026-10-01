@@ -50,6 +50,8 @@ def state_for(gstin: str, state_code: str) -> str:
 
 
 def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> Customer:
+    if body.email.strip() and "@" not in body.email:
+        raise ConflictError("That email address doesn't look right.")
     if not body.allow_duplicate:
         matches = duplicates.customer_matches(db, context, name=body.name, gstin=body.gstin)
         if matches:
@@ -69,6 +71,8 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
         shipping_address=body.shipping_address.strip(),
         state_code=state_for(body.gstin, body.state_code),
         payment_terms_days=body.payment_terms_days,
+        email=body.email.strip().lower(),
+        phone=body.phone.strip(),
     )
     db.add(customer)
     db.flush()
@@ -81,9 +85,13 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
 def update_customer(db: Session, context: RequestContext, customer_id: UUID, body: CustomerUpdate) -> Customer:
     customer = get_customer(db, context, customer_id)
     data = body.model_dump(exclude_unset=True)
-    for key in ("tags", "custom", "billing_address", "shipping_address", "state_code"):
+    for key in ("tags", "custom", "billing_address", "shipping_address", "state_code", "email", "phone"):
         if key in data and data[key] is None:
             data.pop(key)
+    if data.get("email") is not None:
+        data["email"] = data["email"].strip().lower()
+    if data.get("email") and "@" not in data["email"]:
+        raise ConflictError("That email address doesn't look right.")
     if "gstin" in data or "state_code" in data:
         gstin = data.get("gstin", customer.gstin) or ""
         # A new GSTIN brings its own state; otherwise keep (or set) the one given.

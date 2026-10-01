@@ -652,3 +652,17 @@ invoice for printing.
 - `GET /api/sales/reports/tds` (and `tds.csv`) lists TDS deducted per invoice
   in a period with the customer's PAN (taken from their GSTIN), the section
   and whether the certificate came in, to match against Form 26AS.
+
+### Payment reminders to customers
+
+- Company & GST → Payment reminders: when on, the background worker emails
+  each unpaid invoice's customer (their billing `email` on the customer) a
+  reminder with a share link `reminder_before_days` before the due date and
+  on each of `reminder_after_days` after it (default 3 before; 1, 7, 15, 30
+  after). Each stage goes once (`invoices.reminder_offsets_sent`); after a
+  gap only the latest stage due is sent; paid invoices stop. Needs SMTP.
+  Migration `0004` (also adds the customer's billing `email` and `phone`).
+- By hand: "Send reminder" on an invoice and "Remind" on Receivables (a
+  statement) send reminder wording by email or WhatsApp
+  (`POST /api/sales/share` with `reminder: true`). The customer's billing
+  contact is offered first.

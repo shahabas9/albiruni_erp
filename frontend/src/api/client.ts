@@ -313,6 +313,9 @@ export interface Customer {
   state_code: string;
   /** null: the company's default terms. */
   payment_terms_days: number | null;
+  /** Billing contact: invoices, statements and payment reminders go here. */
+  email: string;
+  phone: string;
 }
 
 export interface CustomerInput {
@@ -328,6 +331,8 @@ export interface CustomerInput {
   shipping_address?: string;
   state_code?: string;
   payment_terms_days?: number | null;
+  email?: string;
+  phone?: string;
 }
 
 export interface CustomerQuery {
@@ -540,10 +545,6 @@ export interface LeadInput {
   tags?: string[];
   /** On update only the keys sent change; null or "" clears one. */
   custom?: CustomValues;
-  billing_address?: string;
-  shipping_address?: string;
-  state_code?: string;
-  payment_terms_days?: number | null;
 }
 
 /** owner: "me", "unassigned" or a user id. status: a status or "open". */
@@ -729,6 +730,8 @@ export interface OpportunityInput {
   shipping_address?: string;
   state_code?: string;
   payment_terms_days?: number | null;
+  email?: string;
+  phone?: string;
 }
 
 /** stage: a stage, "open" or "closed". closed_since: open deals plus those closed since (YYYY-MM-DD). */

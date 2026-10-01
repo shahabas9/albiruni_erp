@@ -124,6 +124,9 @@ class CompanyProfile(BaseModel):
     payment_terms_days: int = Field(default=30, ge=0, le=365)
     quotation_validity_days: int = Field(default=15, ge=0, le=365)
     allow_negative_stock: bool = False
+    reminders_enabled: bool = False
+    reminder_before_days: int = Field(default=3, ge=0, le=60)
+    reminder_after_days: str = "1,7,15,30"
 
 
 class CompanyProfileUpdate(BaseModel):
@@ -138,6 +141,9 @@ class CompanyProfileUpdate(BaseModel):
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
     quotation_validity_days: int | None = Field(default=None, ge=0, le=365)
     allow_negative_stock: bool | None = None
+    reminders_enabled: bool | None = None
+    reminder_before_days: int | None = Field(default=None, ge=0, le=60)
+    reminder_after_days: str | None = Field(default=None, max_length=40)
 
 
 class StateOut(BaseModel):

@@ -12,6 +12,7 @@ export function SendModal({
   customerId,
   title,
   period,
+  reminder = false,
   onClose,
 }: {
   kind: ShareKind;
@@ -20,6 +21,8 @@ export function SendModal({
   title: string;
   /** Statements only. */
   period?: { date_from: string; date_to: string };
+  /** Word it as a payment reminder. */
+  reminder?: boolean;
   onClose: () => void;
 }) {
   const [people, setPeople] = useState<{ name: string; email: string; phone: string }[]>([]);
@@ -46,7 +49,7 @@ export function SendModal({
     // Open the WhatsApp tab straight away (inside the click), so pop-up blockers allow it.
     const tab = how === "whatsapp" ? window.open("about:blank", "_blank") : null;
     try {
-      const out = await shareDocument({ kind, id, ...(how === "email" ? { email } : {}), ...(period ?? {}) });
+      const out = await shareDocument({ kind, id, reminder, ...(how === "email" ? { email } : {}), ...(period ?? {}) });
       setResult(out);
       if (how === "whatsapp") {
         const digits = internationalDigits(phone);
@@ -67,7 +70,7 @@ export function SendModal({
   }
 
   return (
-    <Modal title={`Send ${title}`} onClose={onClose} footer={<button className="ghost-btn" onClick={onClose}>Done</button>}>
+    <Modal title={reminder ? `Remind about ${title}` : `Send ${title}`} onClose={onClose} footer={<button className="ghost-btn" onClick={onClose}>Done</button>}>
       <ErrorNote message={error} />
       <div className="fields">
         <label className="field full">

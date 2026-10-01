@@ -279,6 +279,8 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
   const [shipping, setShipping] = useState(customer?.shipping_address ?? "");
   const [state, setState] = useState(customer?.state_code ?? "");
   const [terms, setTerms] = useState(customer?.payment_terms_days == null ? "" : String(customer.payment_terms_days));
+  const [billEmail, setBillEmail] = useState(customer?.email ?? "");
+  const [billPhone, setBillPhone] = useState(customer?.phone ?? "");
   // A registered customer's state is fixed by their GSTIN.
   const gstinState = /^\d{2}/.test(gstin.trim()) && gstin.trim().length === 15 ? gstin.trim().slice(0, 2) : "";
   const gstFields = {
@@ -286,6 +288,8 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
     shipping_address: shipping,
     state_code: gstinState || state,
     payment_terms_days: terms === "" ? null : Number(terms),
+    email: billEmail.trim(),
+    phone: billPhone.trim(),
   };
   const customFields = useCustomFields("customer");
   const [custom, setCustom] = useState<CustomValues>(customer?.custom ?? {});
@@ -354,6 +358,14 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
         <label className="field">
           <span>Payment terms (days)</span>
           <input type="number" min={0} max={365} value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="Company default" />
+        </label>
+        <label className="field">
+          <span>Billing email</span>
+          <input type="email" value={billEmail} onChange={(e) => setBillEmail(e.target.value)} placeholder="Invoices and reminders go here" />
+        </label>
+        <label className="field">
+          <span>Billing phone / WhatsApp</span>
+          <input value={billPhone} onChange={(e) => setBillPhone(e.target.value)} />
         </label>
         <label className="field full">
           <span>Billing address</span>

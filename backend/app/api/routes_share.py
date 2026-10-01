@@ -12,8 +12,8 @@ from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, get_current_context, require_any_permission
 from app.domain import (
-    credit_note_service, invoice_service, payment_service, quotation_service, receivables, sales_settings,
-    share_service, tax,
+    credit_note_service, invoice_service, payment_service, quotation_service, receivables, reminder_service,
+    sales_settings, share_service, tax,
 )
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.executor import execute_tool
@@ -29,6 +29,8 @@ class ShareIn(BaseModel):
     email: str = Field(default="", max_length=160)
     date_from: date | None = None
     date_to: date | None = None
+    # Word it as a payment reminder (invoices and statements).
+    reminder: bool = False
 
 
 def describe(db: Session, context: RequestContext, body: ShareIn) -> tuple[UUID, str, str]:
@@ -39,6 +41,10 @@ def describe(db: Session, context: RequestContext, body: ShareIn) -> tuple[UUID,
         inv = invoice_service.get_invoice(db, context, body.id)
         if inv.status != "Issued":
             raise ConflictError("Issue the invoice before sending it.")
+        if body.reminder:
+            if invoice_service.balance(inv) <= 0:
+                raise ConflictError(f"{inv.number} is settled — nothing to remind about.")
+            return inv.customer_id, f"Payment reminder: invoice {inv.number}", reminder_service.reminder_text(inv)
         return inv.customer_id, f"Invoice {inv.number}", (
             f"Please find our invoice {inv.number} dated {inv.invoice_date:%d %b %Y} for {money(inv.grand_total)}, "
             f"due on {inv.due_date:%d %b %Y}."
@@ -64,6 +70,10 @@ def describe(db: Session, context: RequestContext, body: ShareIn) -> tuple[UUID,
     end = body.date_to or today
     st = receivables.statement(db, context, body.id, start, end)
     body.date_from, body.date_to = start, end
+    if body.reminder:
+        return body.id, "Payment reminder", (
+            f"A gentle reminder that {money(st['closing_balance'])} is due on your account. Your statement from "
+            f"{start:%d %b %Y} to {end:%d %b %Y} is at the link below. If you've already paid, thank you.")
     return body.id, "Statement of account", (
         f"Please find your statement of account from {start:%d %b %Y} to {end:%d %b %Y}. "
         f"Balance due: {money(st['closing_balance'])}.")

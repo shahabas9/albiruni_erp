@@ -201,6 +201,9 @@ def run_worker_cycle() -> None:
             raise_overdue_alerts(db)
             raise_overdue_invoice_alerts(db)
             send_pending_emails(db)
+            from app.domain import reminder_service
+
+            reminder_service.send_due_reminders(db)
         except Exception:  # noqa: BLE001 — log and try again next cycle
             db.rollback()
             log.exception("Notification worker cycle failed")

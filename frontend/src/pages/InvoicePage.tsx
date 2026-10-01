@@ -31,7 +31,7 @@ export function InvoicePage() {
   const [notes, setNotes] = useState<CreditNote[]>([]);
   const [crediting, setCrediting] = useState(false);
   const [paying, setPaying] = useState(false);
-  const [sending, setSending] = useState<{ kind: "invoice" | "credit_note"; id: string; title: string } | null>(null);
+  const [sending, setSending] = useState<{ kind: "invoice" | "credit_note"; id: string; title: string; reminder?: boolean } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -101,6 +101,11 @@ export function InvoicePage() {
           {!draft && (
             <button className="ghost-btn" onClick={() => setSending({ kind: "invoice", id: invoice.id, title: `invoice ${invoice.number}` })}>
               Send
+            </button>
+          )}
+          {!draft && invoice.balance > 0 && (
+            <button className="ghost-btn" onClick={() => setSending({ kind: "invoice", id: invoice.id, title: `invoice ${invoice.number}`, reminder: true })}>
+              Send reminder
             </button>
           )}
           {!draft && can("sales.payment.write") && invoice.balance > 0 && (
@@ -294,7 +299,14 @@ export function InvoicePage() {
         </div>
       </div>
       {sending && (
-        <SendModal kind={sending.kind} id={sending.id} customerId={invoice.customer_id} title={sending.title} onClose={() => setSending(null)} />
+        <SendModal
+          kind={sending.kind}
+          id={sending.id}
+          customerId={invoice.customer_id}
+          title={sending.title}
+          reminder={sending.reminder}
+          onClose={() => setSending(null)}
+        />
       )}
       {paying && (
         <PaymentModal

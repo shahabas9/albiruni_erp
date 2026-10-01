@@ -147,6 +147,37 @@ export function SalesSettings() {
         </div>
       </div>
 
+      <div className="card settings-card">
+        <div className="card-head">
+          <span className="card-title">Payment reminders</span>
+        </div>
+        <p className="card-note">
+          Emailed to each customer's billing email with a link to the invoice, once per stage, while money is owed. Needs email (SMTP) set up on the
+          server.
+        </p>
+        <div className="field-grid">
+          <label className="field checkbox-field">
+            <input type="checkbox" checked={draft.reminders_enabled} disabled={!canEdit} onChange={(e) => set("reminders_enabled", e.target.checked)} />
+            <span>Send payment reminders</span>
+          </label>
+          <label className="field">
+            <span>Days before the due date (0: none)</span>
+            <input
+              type="number"
+              min={0}
+              max={60}
+              value={draft.reminder_before_days}
+              disabled={!canEdit}
+              onChange={(e) => set("reminder_before_days", Number(e.target.value))}
+            />
+          </label>
+          <label className="field">
+            <span>Days after the due date</span>
+            <input value={draft.reminder_after_days} disabled={!canEdit} onChange={(e) => set("reminder_after_days", e.target.value)} placeholder="1, 7, 15, 30" />
+          </label>
+        </div>
+      </div>
+
       <ErrorNote message={error} />
       {canEdit ? (
         <div className="form-actions">

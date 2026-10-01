@@ -1079,5 +1079,56 @@ class TdsTests(SalesTestCase):
         self.assertEqual((again.amount_tds, again.balance), (0.0, 9912.0))
 
 
+
+class ReminderTests(SalesTestCase):
+    def test_each_reminder_stage_goes_once_and_only_the_latest(self):
+        from app.domain import reminder_service
+
+        company = self.db.get(Company, self.context.company_id)
+        company.reminders_enabled = True
+        self.db.commit()
+        payer = self.customer("Prompt Payer", email="Accounts@Prompt.example")
+        silent = self.customer("No Email Co")
+        invoice = self.invoice_for(payer, 1)
+        self.invoice_for(silent, 1)
+        due = self.db.get(Invoice, invoice.id).due_date
+        mail = []
+        send = lambda to, subject, text: mail.append((to, subject, text))  # noqa: E731
+
+        def run(day):
+            mail.clear()
+            reminder_service.send_due_reminders(self.db, today=day, send=send)
+            return [m for m in mail if invoice.number in m[1]]
+
+        self.assertEqual(run(due - timedelta(days=5)), [])  # too early
+        before = run(due - timedelta(days=3))
+        self.assertEqual(len(before), 1)
+        self.assertEqual(before[0][0], "accounts@prompt.example")
+        self.assertIn("in 3 days", before[0][2])
+        self.assertIn("/d/", before[0][2])
+        self.assertEqual(run(due - timedelta(days=2)), [])  # already sent this stage
+        late = run(due + timedelta(days=20))  # worker was off: stages 1 and 7 are skipped, 15 goes
+        self.assertEqual(len(late), 1)
+        self.assertIn("20 days ago", late[0][2])
+        self.assertEqual(self.db.get(Invoice, invoice.id).reminder_offsets_sent, [-3, 1, 7, 15])
+        self.assertFalse(any("No Email Co" in m[2] for m in mail))
+
+        self.pay(payer, 496)
+        self.assertEqual(run(due + timedelta(days=40)), [])  # paid: no more reminders
+
+    def test_manual_reminder_and_settings(self):
+        customer = self.customer(email="ap@example.test", phone="9446044556")
+        invoice = self.invoice_for(customer, 1)
+        out = routes_share.share_document(routes_share.ShareIn(kind="invoice", id=invoice.id, reminder=True),
+                                          self.context, self.db)
+        self.assertIn("gentle reminder", out["message"])
+        people = routes_share.share_recipients(customer.id, self.context, self.db)
+        self.assertEqual(people[0]["email"], "ap@example.test")
+        with self.assertRaises(ConflictError):
+            sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(reminder_after_days="0,400"))
+        saved = sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(reminder_after_days="30, 7,7"))
+        self.assertEqual(saved.reminder_after_days, "7,30")
+
+
 if __name__ == "__main__":
     unittest.main()
