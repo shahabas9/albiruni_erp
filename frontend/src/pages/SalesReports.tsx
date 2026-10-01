@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { downloadReport, fetchGstr1, fetchSalesRegister, fetchTdsReport, GSTR1_SECTIONS, type Gstr1, type SalesRegister, type TdsReport } from "../api/sales";
+import { downloadReport, downloadTally, fetchGstr1, fetchSalesRegister, fetchTdsReport, GSTR1_SECTIONS, type Gstr1, type SalesRegister, type TdsReport } from "../api/sales";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, inr, inrShort } from "../lib/format";
@@ -45,11 +45,12 @@ export function SalesReports() {
     };
   }, [start, end, version]);
 
-  async function download(kind: Parameters<typeof downloadReport>[0]) {
+  async function download(kind: Parameters<typeof downloadReport>[0] | "tally") {
     setBusy(kind);
     setError(null);
     try {
-      await downloadReport(kind, start, end);
+      if (kind === "tally") await downloadTally(start, end);
+      else await downloadReport(kind, start, end);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't download.");
     } finally {
@@ -86,6 +87,14 @@ export function SalesReports() {
           )}
           <button className="ghost-btn sm" onClick={() => setCustom((v) => !v)}>
             {custom ? "Whole month" : "Custom dates"}
+          </button>
+          <button
+            className="ghost-btn sm"
+            disabled={busy !== null}
+            title="Sales, credit notes, receipts and refunds as vouchers for TallyPrime (Import → Transactions)"
+            onClick={() => download("tally")}
+          >
+            {busy === "tally" ? "Exporting…" : "Export to Tally"}
           </button>
         </div>
       </div>

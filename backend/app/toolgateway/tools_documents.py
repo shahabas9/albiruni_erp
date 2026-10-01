@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import RequestContext
 from app.domain import (
     credit_note_service, delivery_service, invoice_service, order_service, payment_service, refund_service,
-    sales_reports, share_service,
+    sales_reports, share_service, tally_export,
 )
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
@@ -290,3 +290,18 @@ for kind, (permission, _) in share_service.KINDS.items():
         name=f"sales.share_{kind}.v1", purpose=f"Send a customer a link to a {kind.replace('_', ' ')}, by email or WhatsApp.",
         permission=permission, risk_level="L2 Prepare", handler=share_document,
     ))
+
+
+@_guard
+def export_tally(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
+    start, end = date.fromisoformat(args["date_from"]), date.fromisoformat(args["date_to"])
+    xml, counts = tally_export.build(db, context, start, end)
+    vouchers = counts["sales"] + counts["credit_notes"] + counts["receipts"] + counts["refunds"]
+    return {"xml": xml, "counts": counts,
+            "result_summary": f"Exported {vouchers} vouchers to Tally for {start:%d %b %Y} – {end:%d %b %Y}"}
+
+
+register_tool(ToolDefinition(
+    name="sales.export_tally.v1", purpose="Download a period's sales, credit notes, receipts and refunds as Tally XML.",
+    permission="sales.reports.read", risk_level="L1 Read", handler=export_tally,
+))

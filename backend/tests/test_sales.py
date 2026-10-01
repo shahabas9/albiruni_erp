@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from datetime import timedelta
 
-from app.api import routes_price_lists, routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
+from app.api import routes_price_lists, routes_reports as routes_sales_reports, routes_ask, routes_share, routes_customers, routes_deliveries, routes_receivables, routes_reports, routes_invoices, routes_items, routes_orders, routes_payments, routes_sales
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
@@ -1400,6 +1400,39 @@ class GstPortalTests(SalesTestCase):
         problems = routes_invoices.invoice_einvoice(invoice.id, self.context, self.db)["problems"]
         self.assertTrue(any("B2B" in p for p in problems))
         self.assertTrue(any("PIN" in p for p in problems))
+
+
+class TallyExportTests(SalesTestCase):
+    def test_a_periods_documents_become_balanced_tally_vouchers(self):
+        import xml.etree.ElementTree as ET
+
+        customer = self.customer("Rahman & Sons", gstin=KERALA_CUSTOMER_GSTIN)
+        invoice = self.invoice_for(customer, 2)  # 991
+        self.credit(invoice, "Price correction", {0: {"amount": 100}})  # 118
+        self.pay(customer, 800, allocations=[AllocationIn(invoice_id=invoice.id, amount=800, tds_amount=10)],
+                 tds_section="194Q")
+        advance = self.pay(customer, 300)  # 63 clears the invoice, 237 is an advance
+        routes_payments.create_refund(RefundIn(receipt_id=advance.id, amount=200, mode="Cash", reason="Not needed"),
+                                      self.context, self.db)
+
+        response = routes_sales_reports.tally_xml(date.today(), date.today(), self.context, self.db)
+        root = ET.fromstring(response.body)
+        vouchers = root.findall(".//VOUCHER")
+        self.assertEqual([v.get("VCHTYPE") for v in vouchers], ["Sales", "Credit Note", "Receipt", "Receipt", "Payment"])
+        for v in vouchers:
+            amounts = [Decimal(a.text) for a in v.findall(".//AMOUNT")]
+            self.assertEqual(sum(amounts), 0, v.findtext("VOUCHERNUMBER"))
+        sale = vouchers[0]
+        self.assertEqual(sale.findtext("PARTYLEDGERNAME"), "Rahman & Sons")
+        entries = {e.findtext("LEDGERNAME"): Decimal(e.findtext("AMOUNT")) for e in sale.findall("ALLLEDGERENTRIES.LIST")}
+        self.assertEqual((entries["Rahman & Sons"], entries["Sales"], entries["Output CGST"]),
+                         (Decimal("-991.00"), Decimal("840.00"), Decimal("75.60")))
+        tds = {e.findtext("LEDGERNAME"): Decimal(e.findtext("AMOUNT")) for e in vouchers[2].findall("ALLLEDGERENTRIES.LIST")}
+        self.assertEqual((tds["Bank"], tds["TDS Receivable"], tds["Rahman & Sons"]),
+                         (Decimal("-800.00"), Decimal("-10.00"), Decimal("810.00")))
+        ledger = root.find(".//LEDGER")
+        self.assertEqual((ledger.get("NAME"), ledger.findtext("PARTYGSTIN")), ("Rahman & Sons", KERALA_CUSTOMER_GSTIN))
+        self.assertIn(b"Rahman &amp; Sons", response.body)
 
 
 if __name__ == "__main__":

@@ -738,6 +738,11 @@ export function downloadReport(kind: "register" | "tds" | Gstr1Section, dateFrom
   return downloadFile(`/api/sales/reports/${kind}.csv?date_from=${dateFrom}&date_to=${dateTo}`, `${kind}.csv`);
 }
 
+/** Vouchers for TallyPrime (Import → Transactions). */
+export function downloadTally(dateFrom: string, dateTo: string): Promise<number> {
+  return downloadFile(`/api/sales/reports/tally.xml?date_from=${dateFrom}&date_to=${dateTo}`, "tally.xml");
+}
+
 // --- Counter sale ----------------------------------------------------------------------
 
 export interface QuickSaleInput {

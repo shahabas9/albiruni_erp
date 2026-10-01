@@ -47,6 +47,24 @@ def tds(date_from: date, date_to: date, context: RequestContext = Depends(requir
     return _run(lambda: sales_reports.tds_report(db, context, date_from, date_to))
 
 
+@router.get("/tally.xml")
+def tally_xml(date_from: date, date_to: date, context: RequestContext = Depends(require_permission(READ)),
+              db: Session = Depends(get_db)):
+    """Vouchers for TallyPrime's Import → Transactions: sales, credit notes, receipts and refunds,
+    with customer ledgers. Audited like the CSV downloads."""
+
+    result = execute_tool(
+        db, context, "sales.export_tally.v1", {"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
+        request_text="[form] Download Tally XML", intent="export_tally", correlation_id=new_correlation_id(),
+        confirmed=True,
+    )
+    return Response(
+        content=result["xml"], media_type="application/xml; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="tally-{date_from}-to-{date_to}.xml"',
+                 "X-Voucher-Counts": ",".join(f"{k}={v}" for k, v in result["counts"].items())},
+    )
+
+
 @router.get("/{kind}.csv")
 def report_csv(
     kind: Literal["register", "tds", "b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs"],

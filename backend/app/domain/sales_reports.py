@@ -26,21 +26,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.deps import RequestContext
 from app.domain import tax
 from app.domain.errors import ConflictError
+from app.domain.gst_portal import uqc
 from app.models.documents import CreditNote, Invoice
 
 B2CL_LIMIT = Decimal("100000")
-UQC = {
-    "box": "BOX", "boxes": "BOX", "nos": "NOS", "no": "NOS", "pcs": "PCS", "pc": "PCS", "piece": "PCS",
-    "pieces": "PCS", "kg": "KGS", "kgs": "KGS", "g": "GMS", "gm": "GMS", "ltr": "LTR", "l": "LTR", "litre": "LTR",
-    "m": "MTR", "mtr": "MTR", "metre": "MTR", "sqm": "SQM", "sqft": "SQF", "set": "SET", "sets": "SET",
-    "pair": "PRS", "roll": "ROL", "bag": "BAG", "dozen": "DOZ", "ton": "TON", "tonne": "TON", "can": "CAN",
-    "bottle": "BTL", "pack": "PAC", "carton": "CTN", "unit": "UNT", "units": "UNT",
-}
 SECTIONS = ("b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs")
-
-
-def uqc(uom: str) -> str:
-    return UQC.get((uom or "").strip().lower(), "OTH")
 
 
 def _pos(code: str) -> str:

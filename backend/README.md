@@ -731,3 +731,15 @@ invoice for printing.
   Suvidha Provider), then record the IRN, acknowledgement and e-way bill
   number (`PUT /api/sales/invoices/{id}/gst-refs`); they print on the
   invoice. PIN codes are read from the free-text addresses. Migration `0007`.
+
+### Tally export
+
+- Sales → Reports → "Export to Tally" (`GET /api/sales/reports/tally.xml`)
+  downloads the period's invoices (Sales), credit notes (Credit Note),
+  receipts (Receipt, with TDS to "TDS Receivable") and refunds (Payment) as
+  TallyPrime import XML — Gateway of Tally → Import → Transactions. Customers
+  are created as ledgers under Sundry Debtors with GSTIN and state. The other
+  ledgers must exist in Tally with these names: Sales, Output CGST, Output
+  SGST, Output IGST, Round Off, Cash, Bank, TDS Receivable. Every voucher
+  balances; voided payments and refunds are left out; downloads are audited
+  (`sales.export_tally.v1`).
