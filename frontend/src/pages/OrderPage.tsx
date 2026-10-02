@@ -19,7 +19,7 @@ import { SalespersonField } from "../sales/SalespersonField";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-import { dateTime, dayDate, docStatusClass } from "../lib/format";
+import { dateTime, dayDate, docStatusClass, inr, taxLabel } from "../lib/format";
 import { DeliverModal } from "../sales/DeliverModal";
 import { InvoiceModal } from "../sales/InvoiceModal";
 import { DocLinesTable } from "../sales/DocLinesTable";
@@ -183,10 +183,12 @@ export function OrderPage() {
                 <p>{order.shipping_address}</p>
               </div>
             )}
+            {taxLabel() === "GST" && (
             <div>
               <span>Place of supply</span>
               <p>{order.place_of_supply || "—"}</p>
             </div>
+            )}
             <SalespersonField
               id={order.salesperson_id}
               name={order.salesperson_name}
@@ -233,7 +235,7 @@ export function OrderPage() {
                         {i.number ?? "Draft invoice"}
                       </Link>
                       <small>
-                        {i.lines.map((l) => `${l.qty} ${l.uom} ${l.description}`).join(", ")} · ₹{i.grand_total.toLocaleString("en-IN")}
+                        {i.lines.map((l) => `${l.qty} ${l.uom} ${l.description}`).join(", ")} · {inr(i.grand_total)}
                       </small>
                     </div>
                     <span className={`badge ${docStatusClass(i.payment_status)}`}>{i.payment_status}</span>

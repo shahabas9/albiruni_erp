@@ -4,7 +4,7 @@ import { useAskErp } from "../askerp/AskErpContext";
 import { useAuth } from "../auth/AuthProvider";
 import { Icon, type IconName } from "../components/Icon";
 import { useAppData } from "../data/AppDataProvider";
-import { inrShort } from "../lib/format";
+import { chartUnit, inrShort } from "../lib/format";
 import { fetchTargets, type OpportunityStage, type Quotation, type TargetRow } from "../api/client";
 import { fetchSalesDashboard, type SalesDashboard } from "../api/sales";
 
@@ -126,14 +126,14 @@ export function Overview() {
         <div className="card">
           <div className="card-head">
             <span className="card-title">Quotation value</span>
-            <span className="card-note">₹ in Lakhs · last 6 months</span>
+            <span className="card-note">{chartUnit().label} · last 6 months</span>
           </div>
           <AreaChart points={series} />
         </div>
         <div className="card">
           <div className="card-head">
             <span className="card-title">Pipeline by stage</span>
-            <span className="card-note">₹ in Lakhs</span>
+            <span className="card-note">{chartUnit().label}</span>
           </div>
           <StageBars
             rows={OPEN_STAGES.map((s) => ({
@@ -314,7 +314,7 @@ function SalesBlock({ sales }: { sales: SalesDashboard }) {
         <div className="card">
           <div className="card-head">
             <span className="card-title">Sales invoiced</span>
-            <span className="card-note">₹ in Lakhs · last 6 months, less credit notes</span>
+            <span className="card-note">{chartUnit().label} · last 6 months, less credit notes</span>
           </div>
           <AreaChart points={m.monthly} label="Sales invoiced by month" />
         </div>
@@ -363,14 +363,15 @@ function AreaChart({ points, label = "Quotation value by month" }: { points: { l
   const W = 600;
   const H = 240;
   const pad = { l: 44, r: 16, t: 14, b: 30 };
-  const lakhs = points.map((p) => p.value / 100_000);
+  const unit = chartUnit();
+  const lakhs = points.map((p) => p.value / unit.divisor);
   const max = niceMax(Math.max(...lakhs));
   const x = (i: number) => pad.l + (i * (W - pad.l - pad.r)) / (points.length - 1);
   const y = (v: number) => pad.t + (1 - v / max) * (H - pad.t - pad.b);
   const line = lakhs.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join(" ");
   const area = `${line} L${x(points.length - 1)},${y(0)} L${x(0)},${y(0)} Z`;
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
-  const fmt = (v: number) => (v === 0 ? "0" : `${v % 1 === 0 ? v : v.toFixed(1)}L`);
+  const fmt = (v: number) => (v === 0 ? "0" : `${v % 1 === 0 ? v : v.toFixed(1)}${unit.suffix}`);
 
   return (
     <svg className="area-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label}>
@@ -417,7 +418,10 @@ function StageBars({ rows }: { rows: { label: string; value: number }[] }) {
           <div className="track">
             <div className="fill" style={{ width: `${(r.value / max) * 100}%`, opacity: r.value ? 1 : 0 }} />
           </div>
-          <span className="value num">{(r.value / 100_000).toFixed(1)}L</span>
+          <span className="value num">
+            {(r.value / chartUnit().divisor).toFixed(1)}
+            {chartUnit().suffix}
+          </span>
         </div>
       ))}
     </div>

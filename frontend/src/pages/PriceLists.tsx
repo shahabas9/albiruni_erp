@@ -4,7 +4,7 @@ import { deletePriceList, fetchPriceLists, savePriceList, type PriceList } from 
 import { Icon } from "../components/Icon";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-import { inr } from "../lib/format";
+import { inr, currencyLabel } from "../lib/format";
 
 interface EditRow {
   item_id: string;
@@ -175,7 +175,7 @@ function PriceListForm({ list, items, onDone }: { list: PriceList | null; items:
         <div className="line-items-head">
           <span>Item</span>
           <span>From qty</span>
-          <span>Price (₹, before GST)</span>
+          <span>Price ({currencyLabel()}, before tax)</span>
           <span className="num">Item price</span>
           <span />
         </div>

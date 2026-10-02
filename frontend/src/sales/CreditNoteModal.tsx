@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ApiError } from "../api/client";
 import { createCreditNote, type CreditNote, type Invoice } from "../api/sales";
 import { ErrorNote, Modal } from "../crm/ui";
-import { inr, todayIso } from "../lib/format";
+import { inr, todayIso, currencyLabel, currencySign } from "../lib/format";
 
 /** Take back part of an issued invoice: returned goods, or a lower price. */
 export function CreditNoteModal({ invoice, onClose, onDone }: { invoice: Invoice; onClose: () => void; onDone: (note: CreditNote) => void }) {
@@ -78,7 +78,7 @@ export function CreditNoteModal({ invoice, onClose, onDone }: { invoice: Invoice
                 <th>Item</th>
                 <th className="num">{isReturn ? "Invoiced" : "Taxable value"}</th>
                 <th className="num">{isReturn ? "Already returned" : "Already credited"}</th>
-                <th className="num">{isReturn ? "Returned now" : "Reduce by (₹, before GST)"}</th>
+                <th className="num">{isReturn ? "Returned now" : `Reduce by (${currencyLabel()}, before tax)`}</th>
               </tr>
             </thead>
             <tbody>
@@ -107,7 +107,7 @@ export function CreditNoteModal({ invoice, onClose, onDone }: { invoice: Invoice
         </div>
         <label className="field full">
           Reason (printed on the credit note)
-          <input value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} placeholder={isReturn ? "e.g. 3 boxes damaged in transit" : "e.g. Agreed rate was ₹400"} />
+          <input value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} placeholder={isReturn ? "e.g. 3 boxes damaged in transit" : `e.g. Agreed rate was ${currencySign()}400`} />
         </label>
         <label className="field">
           Date

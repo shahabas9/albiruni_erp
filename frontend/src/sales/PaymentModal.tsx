@@ -3,7 +3,7 @@ import { ApiError } from "../api/client";
 import { fetchInvoices, PAYMENT_MODES, recordPayment, TDS_SECTIONS, type Invoice, type PaymentMode, type Receipt } from "../api/sales";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { ErrorNote, Modal } from "../crm/ui";
-import { dayDate, inr, todayIso } from "../lib/format";
+import { dayDate, inr, todayIso, currencyLabel, taxLabel } from "../lib/format";
 
 /** Record money received and say which invoices it pays. */
 export function PaymentModal({
@@ -112,7 +112,7 @@ export function PaymentModal({
           </div>
         )}
         <label className="field">
-          Amount received (₹)
+          Amount received ({currencyLabel()})
           <input
             type="number"
             min={0}
@@ -142,7 +142,7 @@ export function PaymentModal({
           {mode === "Cheque" ? "Cheque no." : needsRef ? "UTR / reference" : "Reference (optional)"}
           <input value={reference} maxLength={60} onChange={(e) => setReference(e.target.value)} />
         </label>
-        {mode === "Cash" && total >= 200000 && <p className="error-banner full">Cash receipts of ₹2,00,000 or more aren't allowed (section 269ST).</p>}
+        {mode === "Cash" && total >= 200000 && currencyLabel() === "₹" && <p className="error-banner full">Cash receipts of ₹2,00,000 or more aren't allowed (section 269ST).</p>}
 
         <div className="field full">
           Apply to
@@ -155,10 +155,12 @@ export function PaymentModal({
             </button>
           </div>
         </div>
-        <label className="field checkbox-field">
-          <input type="checkbox" checked={withTds} onChange={(e) => (setWithTds(e.target.checked), e.target.checked && setManual(true))} />
-          <span>Customer deducted TDS</span>
-        </label>
+        {taxLabel() === "GST" && (
+          <label className="field checkbox-field">
+            <input type="checkbox" checked={withTds} onChange={(e) => (setWithTds(e.target.checked), e.target.checked && setManual(true))} />
+            <span>Customer deducted TDS</span>
+          </label>
+        )}
         {withTds && (
           <label className="field">
             TDS section

@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { inr, currencyLabel } from "../lib/format";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   ApiError,
@@ -25,7 +26,7 @@ import { useAppData } from "../data/AppDataProvider";
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
 function formatInr(n: number): string {
-  return `₹${n.toLocaleString("en-IN")}`;
+  return `${inr(n)}`;
 }
 
 export function Opportunities() {
@@ -387,7 +388,7 @@ function OpportunityForm({
           </label>
         )}
         <label className="field">
-          <span>Value (₹)</span>
+          <span>Value ({currencyLabel()})</span>
           <input type="number" min={0} value={value} onChange={(e) => setValue(e.target.value)} />
         </label>
         <label className="field">

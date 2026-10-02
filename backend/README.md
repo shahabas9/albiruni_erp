@@ -758,3 +758,30 @@ invoice for printing.
   credit notes on their invoices). The company chooses which one progress
   is measured on (Targets → "On deals won" / "On sales invoiced",
   `PUT /api/crm/targets/basis`, needs `crm.settings.write`).
+
+## Countries: India and Saudi Arabia
+
+Every company is registered in one country, which decides its tax rules
+(`app/domain/regimes.py`). It's chosen at first-run setup or in Sales →
+Company & Tax, and fixed once the company has quotations, orders or invoices
+(a move abroad is a new company; old documents keep their rules).
+
+| | India (IN) | Saudi Arabia (SA) |
+|---|---|---|
+| Tax | GST: CGST + SGST within the state, IGST between states | VAT: one line — 15% standard, or zero-rated / exempt / out of scope with a ZATCA reason code |
+| Seller | GSTIN, state | VAT number (15 digits, 3…3), CR number, Arabic name, national address (building, street, district, city, postal code) |
+| Buyer | GSTIN and state (place of supply) | VAT number → standard (B2B) invoice, none → simplified (B2C); customers abroad are exports, zero-rated |
+| Money | ₹, totals rounded to the rupee, lakh/crore | SAR, totals to the halala |
+| Year / numbers | April–March: INV/26-27/00001 | January–December by default: INV/2026/00001 |
+| e-Invoicing | NIC JSON + e-way bill, IRN recorded | ZATCA QR code on every invoice and credit note; UBL 2.1 XML for standard / simplified invoices and credit notes |
+| Returns | GSTR-1, TDS report, sales register | VAT return (sales boxes 1–6), VAT sales register |
+| Other | TDS on receipts, 269ST cash limit, GST credit-note deadline | none of those |
+| Print | GST tax invoice | bilingual English/Arabic "Tax Invoice / فاتورة ضريبية" or simplified, with the QR |
+| Tally | Output CGST/SGST/IGST | Output VAT, customers' VAT numbers |
+
+Not done yet for Saudi Arabia: the ZATCA cryptographic stamp, invoice
+counter (ICV) and hash chain (PIH), and the clearance / reporting API — these
+need the company onboarded with ZATCA (a CSID certificate). Input VAT and VAT
+return boxes 7–12 come with Purchasing; Zakat with Finance. Migration `0009`.
+Demo: `.venv/bin/python -m app.seed` also creates "Riyadh Trading Co." with the
+user `khalid` / `khalid123`.

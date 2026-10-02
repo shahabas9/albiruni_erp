@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { inr } from "../lib/format";
 import { useNavigate } from "react-router-dom";
 import { useAskErp } from "./AskErpContext";
 import { useAppData } from "../data/AppDataProvider";
@@ -477,14 +478,15 @@ function MessageView({
           <>
             <PreviewLine k="Customer" v={preview.customer} />
             {preview.lines.map((line, idx) => (
-              <PreviewLine key={idx} k={line.item_name} v={`${line.qty} @ ₹${line.unit_price.toLocaleString("en-IN")}`} />
+              <PreviewLine key={idx} k={line.item_name} v={`${line.qty} @ ${inr(line.unit_price)}`} />
             ))}
             <PreviewLine k="Discount requested" v={`${preview.discount_pct}%`} />
-            <PreviewLine k="Subtotal" v={`₹${preview.subtotal.toLocaleString("en-IN")}`} />
-            <PreviewLine k="Total after discount" v={`₹${preview.total.toLocaleString("en-IN")}`} />
-            {preview.igst > 0 && <PreviewLine k="IGST" v={`₹${preview.igst.toLocaleString("en-IN")}`} />}
-            {preview.cgst > 0 && <PreviewLine k="CGST + SGST" v={`₹${(preview.cgst + preview.sgst).toLocaleString("en-IN")}`} />}
-            <PreviewLine k="Total with GST" v={`₹${preview.grand_total.toLocaleString("en-IN")}`} />
+            <PreviewLine k="Subtotal" v={`${inr(preview.subtotal)}`} />
+            <PreviewLine k="Total after discount" v={`${inr(preview.total)}`} />
+            {preview.igst > 0 && <PreviewLine k="IGST" v={inr(preview.igst)} />}
+            {preview.cgst > 0 && <PreviewLine k="CGST + SGST" v={inr(preview.cgst + preview.sgst)} />}
+            {(preview.vat ?? 0) > 0 && <PreviewLine k="VAT" v={inr(preview.vat ?? 0)} />}
+            <PreviewLine k="Total with tax" v={`${inr(preview.grand_total)}`} />
             {preview.warnings.map((w, idx) => (
               <div className="preview-flag" key={idx}>
                 {w}

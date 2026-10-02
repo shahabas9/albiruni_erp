@@ -1,12 +1,62 @@
-/** ₹ in Indian units: ₹28.6L, ₹1.2Cr, ₹42,500. */
-export function inrShort(amount: number): string {
-  if (amount >= 10_000_000) return `₹${(amount / 10_000_000).toFixed(1)}Cr`;
-  if (amount >= 100_000) return `₹${(amount / 100_000).toFixed(1)}L`;
-  return `₹${Math.round(amount).toLocaleString("en-IN")}`;
+// The signed-in company's currency (INR for India, SAR for Saudi Arabia); set at sign-in.
+// Amounts on screen follow it — the helpers keep their old names, they aren't India-only.
+let currency = "INR";
+
+export function setMoneyCurrency(code: string | null | undefined) {
+  currency = code || "INR";
 }
 
+export function moneyCurrency(): string {
+  return currency;
+}
+
+function prefix(): string {
+  return currency === "INR" ? "₹" : `${currency} `;
+}
+
+/** What sales tax is called for the signed-in company: GST (India) or VAT (Saudi Arabia). */
+export function taxLabel(): "GST" | "VAT" {
+  return currency === "INR" ? "GST" : "VAT";
+}
+
+/** "₹" or "SAR ", to put before a plain number. */
+export function currencySign(): string {
+  return prefix();
+}
+
+/** "₹" or "SAR", for labels like "Price (₹)". */
+export function currencyLabel(): string {
+  return currency === "INR" ? "₹" : currency;
+}
+
+/** A plain amount to two decimals with the right digit grouping (no symbol). */
+export function plainMoney(n: number): string {
+  return n.toLocaleString(currency === "INR" ? "en-IN" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Charts: lakhs in India, thousands elsewhere. */
+export function chartUnit(): { divisor: number; suffix: string; label: string } {
+  return currency === "INR"
+    ? { divisor: 100_000, suffix: "L", label: "₹ in Lakhs" }
+    : { divisor: 1000, suffix: "K", label: `${currency} in thousands` };
+}
+
+/** Short amounts: ₹28.6L, ₹1.2Cr, ₹42,500 in India; SAR 28.6K, SAR 1.2M elsewhere. */
+export function inrShort(amount: number): string {
+  if (currency === "INR") {
+    if (amount >= 10_000_000) return `₹${(amount / 10_000_000).toFixed(1)}Cr`;
+    if (amount >= 100_000) return `₹${(amount / 100_000).toFixed(1)}L`;
+    return `₹${Math.round(amount).toLocaleString("en-IN")}`;
+  }
+  if (amount >= 1_000_000) return `${prefix()}${(amount / 1_000_000).toFixed(1)}M`;
+  if (amount >= 100_000) return `${prefix()}${(amount / 1000).toFixed(0)}K`;
+  return `${prefix()}${Math.round(amount).toLocaleString("en-US")}`;
+}
+
+/** An exact amount: ₹42,500.5 (Indian grouping) or SAR 42,500.50. */
 export function inr(amount: number): string {
-  return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  if (currency === "INR") return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  return `${prefix()}${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function shortDate(iso: string): string {

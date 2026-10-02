@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Item } from "../api/client";
 import { fetchAgreedPrices, type AgreedPrices } from "../api/sales";
 import { Icon } from "../components/Icon";
-import { inr } from "../lib/format";
+import { inr, currencyLabel, moneyCurrency } from "../lib/format";
 
 export interface EditLine {
   item_id: string;
@@ -67,7 +67,9 @@ export function estimate(lines: EditLine[], items: Item[], discountPct: number, 
     taxable += value;
     gst += (value * (item.gst_rate ?? 0)) / 100;
   }
-  return { taxable, gst, total: Math.round(taxable + gst) };
+  // Indian invoices round the total to the rupee; Saudi ones keep halalas.
+  const exact = Math.round((taxable + gst) * 100) / 100;
+  return { taxable, gst, total: moneyCurrency() === "INR" ? Math.round(exact) : exact };
 }
 
 /** Item, quantity, price and discount rows for quotations, orders and counter sales. */
@@ -90,7 +92,7 @@ export function LineItemsEditor({
       <div className="line-items-head">
         <span>Item</span>
         <span>Qty</span>
-        <span>Rate (₹, before GST)</span>
+        <span>Rate ({currencyLabel()}, before tax)</span>
         <span>Disc %</span>
         <span className="num">Amount</span>
         <span />

@@ -17,4 +17,7 @@ def user_payload(db: Session, user: User) -> dict:
         "role": role.name if role else None,
         "permissions": role.permissions if role else [],
         "company": company.name if company else None,
+        # Decide the tax regime and money formatting on screen.
+        "country": (company.country if company else None) or "IN",
+        "currency": (company.currency if company else None) or "INR",
     }

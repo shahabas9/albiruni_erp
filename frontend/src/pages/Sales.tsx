@@ -6,7 +6,7 @@ import { useAppData } from "../data/AppDataProvider";
 import { ApiError, type Quotation } from "../api/client";
 import { orderFromQuotation, quotationAction, updateQuotation, type QuotationAction } from "../api/sales";
 import { Drawer, ErrorNote } from "../crm/ui";
-import { dateTime, dayDate, inr, quoteStatusClass } from "../lib/format";
+import { dateTime, dayDate, inr, quoteStatusClass, taxLabel } from "../lib/format";
 import { DocTotals } from "../sales/DocTotals";
 import { ReasonModal } from "../sales/ReasonModal";
 import { SendModal } from "../sales/SendModal";
@@ -120,7 +120,7 @@ export function Sales() {
                   <td>
                     {q.lines.length} line{q.lines.length === 1 ? "" : "s"}
                   </td>
-                  <td className="mono">₹{(q.grand_total || q.total).toLocaleString("en-IN")}</td>
+                  <td className="mono">{inr(q.grand_total || q.total)}</td>
                   <td>
                     <span className={`badge ${quoteStatusClass(q.status)}`}>{q.status}</span>
                     {q.is_expired && <span className="badge status-rejected">Expired</span>}
@@ -215,7 +215,7 @@ function QuotationDrawer({ quotation: q, onClose, onChanged }: { quotation: Quot
               <th>Item</th>
               <th className="num">Qty</th>
               <th className="num">Rate</th>
-              <th className="num">GST</th>
+              <th className="num">{taxLabel()}</th>
               <th className="num">Amount</th>
             </tr>
           </thead>

@@ -5,7 +5,7 @@ import { PAYMENT_MODES, quickSale, type PaymentMode } from "../api/sales";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-import { inr } from "../lib/format";
+import { inr, currencyLabel, taxLabel } from "../lib/format";
 import { blankLine, estimate, LineItemsEditor, linePayload, useAgreedPrices, type EditLine } from "../sales/LineItemsEditor";
 
 /** A counter sale: pick items, take the money, print the invoice. */
@@ -89,7 +89,7 @@ export function QuickSale() {
         </div>
         <div className="quote-total">
           <span>
-            {inr(est.taxable)} + GST {inr(est.gst)} (exact figures on the invoice)
+            {inr(est.taxable)} + {taxLabel()} {inr(est.gst)} (exact figures on the invoice)
           </span>
           <b className="num">{inr(est.total)}</b>
         </div>
@@ -111,7 +111,7 @@ export function QuickSale() {
                 </label>
                 {mode === "Cash" ? (
                   <label className="field">
-                    <span>Cash received (₹)</span>
+                    <span>Cash received ({currencyLabel()})</span>
                     <input type="number" min={0} step="1" value={received} placeholder={String(est.total)} onChange={(e) => setReceived(e.target.value)} />
                   </label>
                 ) : (

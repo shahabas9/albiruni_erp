@@ -1,7 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { downloadReport, downloadTally, fetchGstr1, fetchSalesRegister, fetchTdsReport, GSTR1_SECTIONS, type Gstr1, type SalesRegister, type TdsReport } from "../api/sales";
+import {
+  downloadReport,
+  downloadTally,
+  fetchGstr1,
+  fetchSalesRegister,
+  fetchTdsReport,
+  fetchVatReturn,
+  GSTR1_SECTIONS,
+  type Gstr1,
+  type SalesRegister,
+  type TdsReport,
+  type VatReturn,
+} from "../api/sales";
+import { useCountry } from "../lib/regime";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 import { dayDate, inr, inrShort } from "../lib/format";
@@ -31,19 +44,27 @@ export function SalesReports() {
   const [register, setRegister] = useState<SalesRegister | null>(null);
   const [gstr1, setGstr1] = useState<Gstr1 | null>(null);
   const [tds, setTds] = useState<TdsReport | null>(null);
+  const [vatReturn, setVatReturn] = useState<VatReturn | null>(null);
+  const saudi = useCountry() === "SA";
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [start, end] = custom ? [from, to] : monthRange(month);
 
   useEffect(() => {
     let live = true;
-    Promise.all([fetchSalesRegister(start, end), fetchGstr1(start, end), fetchTdsReport(start, end)])
-      .then(([r, g, d]) => live && (setRegister(r), setGstr1(g), setTds(d), setError(null)))
+    const load = saudi
+      ? Promise.all([fetchSalesRegister(start, end), fetchVatReturn(start, end)]).then(
+          ([r, v]) => live && (setRegister(r), setVatReturn(v), setGstr1(null), setTds(null), setError(null)),
+        )
+      : Promise.all([fetchSalesRegister(start, end), fetchGstr1(start, end), fetchTdsReport(start, end)]).then(
+          ([r, g, d]) => live && (setRegister(r), setGstr1(g), setTds(d), setVatReturn(null), setError(null)),
+        );
+    load
       .catch((err) => live && setError(err instanceof ApiError ? err.message : "Couldn't load the reports."));
     return () => {
       live = false;
     };
-  }, [start, end, version]);
+  }, [start, end, version, saudi]);
 
   async function download(kind: Parameters<typeof downloadReport>[0] | "tally") {
     setBusy(kind);
@@ -65,7 +86,9 @@ export function SalesReports() {
         <div>
           <div className="eyebrow">Sales</div>
           <h1 className="page-title">Sales reports</h1>
-          <p className="page-sub">The sales register and GSTR-1 figures for a period, as CSV files for your accountant. Check them before filing.</p>
+          <p className="page-sub">{saudi
+              ? "The sales register and the sales side of your VAT return for a period, as CSV files for your accountant. Check them before filing with ZATCA."
+              : "The sales register and GSTR-1 figures for a period, as CSV files for your accountant. Check them before filing."}</p>
         </div>
         <div className="head-actions">
           {custom ? (
@@ -110,10 +133,10 @@ export function SalesReports() {
             </div>
           </div>
           <div className="card stat">
-            <div className="stat-label">GST charged</div>
-            <div className="stat-value num">{inrShort(t.cgst + t.sgst + t.igst)}</div>
+            <div className="stat-label">{saudi ? "VAT charged" : "GST charged"}</div>
+            <div className="stat-value num">{inrShort(t.cgst + t.sgst + t.igst + (t.vat ?? 0))}</div>
             <div className="stat-sub">
-              IGST {inrShort(t.igst)} · CGST {inrShort(t.cgst)} · SGST {inrShort(t.sgst)}
+              {saudi ? "Output VAT, less credit notes" : `IGST ${inrShort(t.igst)} · CGST ${inrShort(t.cgst)} · SGST ${inrShort(t.sgst)}`}
             </div>
           </div>
           <div className="card stat">
@@ -123,6 +146,45 @@ export function SalesReports() {
               {dayDate(start)} – {dayDate(end)}
             </div>
           </div>
+        </div>
+      )}
+
+      {vatReturn && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="card-head">
+            <span className="card-title">VAT return — sales</span>
+            <button className="ghost-btn sm" disabled={busy !== null} onClick={() => download("vat_return")}>
+              {busy === "vat_return" ? "Downloading…" : "Download CSV"}
+            </button>
+          </div>
+          <div className="table-wrap">
+            <table className="doc-lines">
+              <thead>
+                <tr>
+                  <th>Box</th>
+                  <th>Description</th>
+                  <th className="num">Amount</th>
+                  <th className="num">Adjustment</th>
+                  <th className="num">VAT</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vatReturn.rows.map((r) => (
+                  <tr key={r.box} className={r.box === 6 ? "total-row" : undefined}>
+                    <td>{r.box}</td>
+                    <td>{r.label}</td>
+                    <td className="num">{inr(r.amount)}</td>
+                    <td className="num">{inr(r.adjustment)}</td>
+                    <td className="num">{inr(r.vat)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="card-note">
+            Net VAT due {inr(vatReturn.net_vat_due)}. {vatReturn.note}
+            {vatReturn.out_of_scope ? ` Out-of-scope sales of ${inr(vatReturn.out_of_scope)} aren't reported.` : ""}
+          </p>
         </div>
       )}
 
@@ -229,11 +291,17 @@ export function SalesReports() {
                     <th>Date</th>
                     <th>Document</th>
                     <th>Customer</th>
-                    <th>GSTIN</th>
+                    <th>{saudi ? "VAT number" : "GSTIN"}</th>
                     <th className="num">Taxable</th>
-                    <th className="num">CGST</th>
-                    <th className="num">SGST</th>
-                    <th className="num">IGST</th>
+                    {saudi ? (
+                      <th className="num">VAT</th>
+                    ) : (
+                      <>
+                        <th className="num">CGST</th>
+                        <th className="num">SGST</th>
+                        <th className="num">IGST</th>
+                      </>
+                    )}
                     <th className="num">Total</th>
                   </tr>
                 </thead>
@@ -251,20 +319,32 @@ export function SalesReports() {
                         )}
                       </td>
                       <td>{r.customer}</td>
-                      <td className="mono">{r.gstin || "—"}</td>
+                      <td className="mono">{(saudi ? r.vat_number : r.gstin) || "—"}</td>
                       <td className="num">{inr(r.taxable_value)}</td>
-                      <td className="num">{inr(r.cgst)}</td>
-                      <td className="num">{inr(r.sgst)}</td>
-                      <td className="num">{inr(r.igst)}</td>
+                      {saudi ? (
+                        <td className="num">{inr(r.vat)}</td>
+                      ) : (
+                        <>
+                          <td className="num">{inr(r.cgst)}</td>
+                          <td className="num">{inr(r.sgst)}</td>
+                          <td className="num">{inr(r.igst)}</td>
+                        </>
+                      )}
                       <td className="num">{inr(r.total)}</td>
                     </tr>
                   ))}
                   <tr className="total-row">
                     <td colSpan={4}>Total{register.rows.length > 200 ? ` (first 200 of ${register.rows.length} shown; the CSV has all)` : ""}</td>
                     <td className="num">{inr(register.totals.taxable_value)}</td>
-                    <td className="num">{inr(register.totals.cgst)}</td>
-                    <td className="num">{inr(register.totals.sgst)}</td>
-                    <td className="num">{inr(register.totals.igst)}</td>
+                    {saudi ? (
+                      <td className="num">{inr(register.totals.vat)}</td>
+                    ) : (
+                      <>
+                        <td className="num">{inr(register.totals.cgst)}</td>
+                        <td className="num">{inr(register.totals.sgst)}</td>
+                        <td className="num">{inr(register.totals.igst)}</td>
+                      </>
+                    )}
                     <td className="num">{inr(register.totals.total)}</td>
                   </tr>
                 </tbody>

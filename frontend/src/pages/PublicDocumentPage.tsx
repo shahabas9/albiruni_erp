@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { ApiError, type Quotation } from "../api/client";
 import { fetchPublicDocument, type CompanyProfile, type CreditNote, type Invoice, type PublicDocument, type Receipt, type Statement } from "../api/sales";
 import { CreditSheet, InvoiceSheet, QuotationSheet, ReceiptSheet, StatementSheet } from "./PrintDocument";
+import { setMoneyCurrency } from "../lib/format";
 
 /** What a customer sees when they open a share link: the document, ready to print. No login. */
 export function PublicDocumentPage() {
@@ -13,6 +14,8 @@ export function PublicDocumentPage() {
   useEffect(() => {
     fetchPublicDocument(token)
       .then((d) => {
+        // No sign-in here: the company's currency comes with the document.
+        setMoneyCurrency((d.company as { currency?: string }).currency);
         setDoc(d);
         document.title = `${d.company.legal_name || d.company.name}`;
       })

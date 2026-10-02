@@ -10,6 +10,7 @@ import {
   type AuthUser,
   type BootstrapRequest,
 } from "../api/client";
+import { setMoneyCurrency } from "../lib/format";
 
 type AuthStatus = "checking" | "authenticated" | "anonymous" | "needs_setup";
 
@@ -26,6 +27,10 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const applyUser = (next: AuthUser | null) => {
+    setMoneyCurrency(next?.currency);
+    setUser(next);
+  };
   const [status, setStatus] = useState<AuthStatus>("checking");
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (token) {
         try {
           const me = await fetchMe();
-          setUser(me);
+          applyUser(me);
           setStatus("authenticated");
           return;
         } catch {
@@ -58,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const res = await apiLogin(username, password);
       setToken(res.access_token);
-      setUser(res.user);
+      applyUser(res.user);
       setStatus("authenticated");
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not reach the API.";
@@ -72,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const res = await apiBootstrap(body);
       setToken(res.access_token);
-      setUser(res.user);
+      applyUser(res.user);
       setStatus("authenticated");
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not reach the API.";
@@ -83,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     setToken(null);
-    setUser(null);
+    applyUser(null);
     setStatus("anonymous");
   };
 

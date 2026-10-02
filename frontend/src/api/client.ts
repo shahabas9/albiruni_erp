@@ -106,6 +106,9 @@ export interface AuthUser {
   role: string | null;
   permissions: string[];
   company: string | null;
+  /** Where the company is registered — IN (GST) or SA (VAT). */
+  country: "IN" | "SA";
+  currency: string;
 }
 
 export interface LoginResponse {
@@ -136,6 +139,8 @@ export function fetchSetupStatus(): Promise<SetupStatus> {
 export interface BootstrapRequest {
   organization_name: string;
   company_name: string;
+  /** Where the first company is registered: decides GST (IN) or VAT (SA). */
+  country?: "IN" | "SA";
   admin_name: string;
   username: string;
   password: string;
@@ -168,6 +173,8 @@ export interface TaxTotals {
   cgst: number;
   sgst: number;
   igst: number;
+  /** Saudi VAT (0 in India). */
+  vat: number;
   round_off: number;
   /** What the customer pays. */
   grand_total: number;
@@ -224,7 +231,7 @@ export interface CreateQuotationResult {
 // --- Ask ERP ----------------------------------------------------------------
 
 export type AskResponse =
-  | { type: "preview"; preview_token: string; correlation_id: string; tool_name: string; risk_level: string; customer: string; lines: QuotationLine[]; subtotal: number; discount_pct: number; discount_amount: number; total: number; cgst: number; sgst: number; igst: number; round_off: number; grand_total: number; requires_approval: boolean; warnings: string[] }
+  | { type: "preview"; preview_token: string; correlation_id: string; tool_name: string; risk_level: string; customer: string; lines: QuotationLine[]; subtotal: number; discount_pct: number; discount_amount: number; total: number; cgst: number; sgst: number; igst: number; vat?: number; round_off: number; grand_total: number; requires_approval: boolean; warnings: string[] }
   | ActionPreview
   | AskAnswer
   | { type: "message" | "clarify" | "denied" | "error"; message: string; options?: string[] };
@@ -319,6 +326,16 @@ export interface Customer {
   phone: string;
   /** null: the company's default price list, else item prices. */
   price_list_id: string | null;
+  /** "" = the company's own country; another code makes sales to them exports. */
+  country: string;
+  /** Saudi Arabia: VAT number (a buyer with one gets standard tax invoices), Arabic name, national address. */
+  vat_number: string;
+  name_ar: string;
+  building_no: string;
+  street: string;
+  district: string;
+  city: string;
+  postal_code: string;
 }
 
 export interface CustomerInput {
@@ -337,6 +354,14 @@ export interface CustomerInput {
   email?: string;
   phone?: string;
   price_list_id?: string | null;
+  country?: string;
+  vat_number?: string;
+  name_ar?: string;
+  building_no?: string;
+  street?: string;
+  district?: string;
+  city?: string;
+  postal_code?: string;
 }
 
 export interface CustomerQuery {
@@ -376,11 +401,14 @@ export interface Item {
   stock_qty: number;
   kind: "goods" | "service";
   hsn_code: string;
-  /** null until set; invoices refuse items without a rate. */
+  /** GST rate (India) or VAT rate (Saudi Arabia); null until set — invoices refuse items without one. */
   gst_rate: number | null;
+  /** Saudi Arabia: ZATCA category S, Z, E or O, and the reason code for Z/E/O. "" in India. */
+  tax_category: string;
+  exemption_reason: string;
 }
 
-export type ItemInput = Omit<Item, "id">;
+export type ItemInput = Omit<Item, "id" | "tax_category" | "exemption_reason"> & Partial<Pick<Item, "tax_category" | "exemption_reason">>;
 
 export function fetchItems(): Promise<Item[]> {
   return request<Item[]>("/api/items");

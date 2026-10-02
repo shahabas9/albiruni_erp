@@ -107,8 +107,11 @@ class InvoiceOut(BaseModel):
     invoice_kind: str = ""
     seller_vat_number: str = ""
     buyer_vat_number: str = ""
-    # Saudi Arabia: ZATCA QR code (SVG data URI) to print.
+    # Saudi Arabia: ZATCA QR code (SVG data URI) to print, Arabic names and the seller's CR number.
     zatca_qr: str = ""
+    seller_name_ar: str = ""
+    buyer_name_ar: str = ""
+    seller_cr_number: str = ""
     balance: float
     notes: str
     terms: str
@@ -163,6 +166,9 @@ class CreditNoteOut(BaseModel):
     seller_vat_number: str = ""
     buyer_vat_number: str = ""
     invoice_kind: str = ""
+    seller_name_ar: str = ""
+    buyer_name_ar: str = ""
+    seller_cr_number: str = ""
     id: UUID
     number: str
     invoice_id: UUID

@@ -3464,3 +3464,14 @@ tr.selected td {
   padding: 0;
   text-align: left;
 }
+
+.login-field select {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}

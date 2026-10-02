@@ -18,10 +18,11 @@ import {
   type Statement,
   type SalesOrder,
 } from "../api/sales";
-import { dayDate } from "../lib/format";
+import { currencySign, dayDate, moneyCurrency, plainMoney } from "../lib/format";
+import { SaudiCreditSheet, SaudiInvoiceSheet } from "./SaudiTaxDocument";
 import { StatementTable } from "./StatementPage";
 
-const money = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = plainMoney;
 
 /** Print-ready documents at /print/invoice/:id and /print/delivery/:id — no app chrome; use the browser's Print / Save as PDF. */
 export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit-note" | "receipt" | "statement" | "quotation" }) {
@@ -93,6 +94,7 @@ export function PrintDocument({ kind }: { kind: "invoice" | "delivery" | "credit
 }
 
 export function InvoiceSheet({ inv }: { inv: Invoice }) {
+  if (inv.invoice_kind || moneyCurrency() === "SAR") return <SaudiInvoiceSheet inv={inv} />;
   const interstate = inv.igst > 0 || (inv.cgst === 0 && inv.sgst === 0 && inv.place_of_supply !== inv.seller_state);
   return (
     <article className="print-doc">
@@ -280,7 +282,7 @@ export function InvoiceSheet({ inv }: { inv: Invoice }) {
             </>
           )}
           <dt className="grand">Total</dt>
-          <dd className="grand">₹{money(inv.grand_total)}</dd>
+          <dd className="grand">{currencySign()}{money(inv.grand_total)}</dd>
         </dl>
       </section>
 
@@ -318,6 +320,11 @@ export function ChallanSheet({ note, order, company }: { note: DeliveryNote; ord
           {company.gstin && (
             <p>
               GSTIN <b className="mono">{company.gstin}</b>
+            </p>
+          )}
+          {company.vat_number && (
+            <p>
+              VAT number <b className="mono">{company.vat_number}</b>
             </p>
           )}
         </div>
@@ -402,6 +409,7 @@ export function ChallanSheet({ note, order, company }: { note: DeliveryNote; ord
 }
 
 export function CreditSheet({ note }: { note: CreditNote }) {
+  if (note.invoice_kind) return <SaudiCreditSheet note={note} />;
   const interstate = note.igst > 0;
   return (
     <article className="print-doc">
@@ -521,7 +529,7 @@ export function CreditSheet({ note }: { note: CreditNote }) {
             </>
           )}
           <dt className="grand">Credit</dt>
-          <dd className="grand">₹{money(note.grand_total)}</dd>
+          <dd className="grand">{currencySign()}{money(note.grand_total)}</dd>
         </dl>
       </section>
       <footer className="pd-foot">
@@ -547,6 +555,11 @@ export function ReceiptSheet({ receipt: r, company }: { receipt: Receipt; compan
               GSTIN <b className="mono">{company.gstin}</b>
             </p>
           )}
+          {company.vat_number && (
+            <p>
+              VAT number <b className="mono">{company.vat_number}</b>
+            </p>
+          )}
         </div>
         <div className="pd-title">
           <h2>PAYMENT RECEIPT</h2>
@@ -560,7 +573,7 @@ export function ReceiptSheet({ receipt: r, company }: { receipt: Receipt; compan
             <b>{r.customer_name}</b>
           </p>
           <p style={{ marginTop: 12 }}>
-            The sum of <b>₹{money(r.amount)}</b> ({r.amount_in_words}) by {r.mode.toLowerCase()}
+            The sum of <b>{currencySign()}{money(r.amount)}</b> ({r.amount_in_words}) by {r.mode.toLowerCase()}
             {r.reference && <> — ref. <span className="mono">{r.reference}</span></>}.
           </p>
         </div>
@@ -618,6 +631,11 @@ export function StatementSheet({ data, company }: { data: Statement; company: Co
               GSTIN <b className="mono">{company.gstin}</b>
             </p>
           )}
+          {company.vat_number && (
+            <p>
+              VAT number <b className="mono">{company.vat_number}</b>
+            </p>
+          )}
         </div>
         <div className="pd-title">
           <h2>STATEMENT OF ACCOUNT</h2>
@@ -642,7 +660,7 @@ export function StatementSheet({ data, company }: { data: Statement; company: Co
         <dl>
           <dt>Balance due</dt>
           <dd>
-            <b>₹{money(data.closing_balance)}</b>
+            <b>{currencySign()}{money(data.closing_balance)}</b>
           </dd>
         </dl>
       </section>
@@ -663,6 +681,7 @@ export function StatementSheet({ data, company }: { data: Statement; company: Co
 
 export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyProfile }) {
   const interstate = q.igst > 0;
+  const saudi = company.country === "SA" || moneyCurrency() === "SAR";
   return (
     <article className="print-doc">
       <header className="pd-head">
@@ -672,6 +691,11 @@ export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyP
           {company.gstin && (
             <p>
               GSTIN <b className="mono">{company.gstin}</b>
+            </p>
+          )}
+          {company.vat_number && (
+            <p>
+              VAT number <b className="mono">{company.vat_number}</b>
             </p>
           )}
           {(company.phone || company.email) && <p>{[company.phone, company.email].filter(Boolean).join(" · ")}</p>}
@@ -718,11 +742,11 @@ export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyP
           <tr>
             <th>#</th>
             <th>Description</th>
-            <th>HSN/SAC</th>
+            {!saudi && <th>HSN/SAC</th>}
             <th className="num">Qty</th>
             <th className="num">Rate</th>
             <th className="num">Amount</th>
-            <th className="num">GST</th>
+            <th className="num">{saudi ? "VAT" : "GST"}</th>
           </tr>
         </thead>
         <tbody>
@@ -730,7 +754,7 @@ export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyP
             <tr key={i}>
               <td>{i + 1}</td>
               <td>{l.item_name}</td>
-              <td className="mono">{l.hsn_code}</td>
+              {!saudi && <td className="mono">{l.hsn_code}</td>}
               <td className="num">
                 {l.qty} {l.uom}
               </td>
@@ -757,7 +781,12 @@ export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyP
           )}
           <dt>Taxable value</dt>
           <dd>{money(q.total)}</dd>
-          {interstate ? (
+          {saudi ? (
+            <>
+              <dt>VAT</dt>
+              <dd>{money(q.vat ?? 0)}</dd>
+            </>
+          ) : interstate ? (
             <>
               <dt>IGST</dt>
               <dd>{money(q.igst)}</dd>
@@ -777,7 +806,7 @@ export function QuotationSheet({ q, company }: { q: Quotation; company: CompanyP
             </>
           )}
           <dt className="grand">Total</dt>
-          <dd className="grand">₹{money(q.grand_total)}</dd>
+          <dd className="grand">{currencySign()}{money(q.grand_total)}</dd>
         </dl>
       </section>
       <footer className="pd-foot">

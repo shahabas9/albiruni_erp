@@ -26,6 +26,7 @@ export function GstPortalModal({
   const [ewbNo, setEwbNo] = useState(invoice.eway_bill_no);
   const [ewbDate, setEwbDate] = useState(invoice.eway_bill_date ?? "");
   const [busy, setBusy] = useState(false);
+  const saudi = Boolean(invoice.invoice_kind);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,7 +66,7 @@ export function GstPortalModal({
 
   return (
     <Modal
-      title={`GST portals · ${invoice.number}`}
+      title={saudi ? `ZATCA e-invoice · ${invoice.number}` : `GST portals · ${invoice.number}`}
       wide
       onClose={onClose}
       footer={
@@ -73,7 +74,7 @@ export function GstPortalModal({
           <button className="ghost-btn" onClick={onClose}>
             Close
           </button>
-          {canWrite && (
+          {canWrite && !saudi && (
             <button className="primary-btn" disabled={busy} onClick={save}>
               {busy ? "Saving…" : "Save numbers"}
             </button>
@@ -84,14 +85,23 @@ export function GstPortalModal({
       <ErrorNote message={error} />
       <h3 className="card-title">e-Invoice</h3>
       <p className="card-note">
-        Download the JSON and upload it on the e-invoice portal (or through your GST Suvidha Provider), then record the IRN it gives back.
+        {saudi
+          ? `A ${invoice.invoice_kind} tax invoice in ZATCA's UBL XML format, with its QR code. Standard (B2B) invoices are cleared by ZATCA before they reach the buyer; simplified (B2C) ones are reported within 24 hours.`
+          : "Download the JSON and upload it on the e-invoice portal (or through your GST Suvidha Provider), then record the IRN it gives back."}
       </p>
       <Problems file={einvoice} />
+      {einvoice?.notes?.map((n) => (
+        <p key={n} className="card-note">
+          {n}
+        </p>
+      ))}
       <div className="head-actions" style={{ margin: "8px 0 16px" }}>
         <button className="ghost-btn" disabled={!einvoice} onClick={() => einvoice && saveJson(einvoice)}>
-          Download e-invoice JSON
+          {saudi ? "Download ZATCA XML" : "Download e-invoice JSON"}
         </button>
       </div>
+      {!saudi && (
+        <>
 
       <h3 className="card-title">e-Way bill</h3>
       <div className="fields">
@@ -141,6 +151,8 @@ export function GstPortalModal({
           <input type="date" value={ewbDate} disabled={!canWrite} onChange={(e) => setEwbDate(e.target.value)} />
         </label>
       </div>
+        </>
+      )}
     </Modal>
   );
 }

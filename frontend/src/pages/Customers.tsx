@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { inr, currencyLabel } from "../lib/format";
 import { Link } from "react-router-dom";
 import {
   ApiError,
@@ -21,11 +22,18 @@ import { BulkBar, useSelection, type BulkActionDef } from "../crm/BulkBar";
 import { MergeDuplicates } from "../crm/MergeDuplicates";
 import { Drawer, DuplicateWarning, Pager, SearchBox } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
+import { useCountry } from "../lib/regime";
+
+/** Countries a Saudi company's customer may be in; sales to them are exports. */
+const FOREIGN_COUNTRIES: Record<string, string> = {
+  AE: "United Arab Emirates", QA: "Qatar", OM: "Oman", KW: "Kuwait", BH: "Bahrain", IN: "India", US: "United States", GB: "United Kingdom",
+};
 import { PAGE_SIZE, usePaged } from "../lib/usePaged";
 
 type ActiveFilter = "all" | "active" | "inactive";
 
 export function Customers() {
+  const country = useCountry();
   const { can, version } = useAppData();
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +112,7 @@ export function Customers() {
           }}
         />
         <TagFilter recordType="customer" value={tag} onChange={setTag} version={version + saves} />
-        <SearchBox value={search} onChange={onSearch} placeholder="Search name or GSTIN" />
+        <SearchBox value={search} onChange={onSearch} placeholder={country === "SA" ? "Search name" : "Search name or GSTIN"} />
         <ExportButton
           kind="customers"
           filters={{ q: search, active: active === "all" ? undefined : active === "active", tag }}
@@ -167,7 +175,7 @@ export function Customers() {
                   </th>
                 )}
                 <th>Name</th>
-                <th>GSTIN</th>
+                <th>{country === "SA" ? "VAT number" : "GSTIN"}</th>
                 <th>Credit limit</th>
                 <th>Status</th>
                 <th></th>
@@ -200,8 +208,14 @@ export function Customers() {
                       </Link>
                       <TagChips tags={c.tags} onClick={setTag} />
                     </td>
-                    <td>{c.gstin ? <span className="mono">{c.gstin}</span> : <span className="followup none">Unregistered</span>}</td>
-                    <td className="mono">₹{c.credit_limit.toLocaleString("en-IN")}</td>
+                    <td>
+                      {(country === "SA" ? c.vat_number : c.gstin) ? (
+                        <span className="mono">{country === "SA" ? c.vat_number : c.gstin}</span>
+                      ) : (
+                        <span className="followup none">{c.country ? `Abroad (${c.country})` : "Unregistered"}</span>
+                      )}
+                    </td>
+                    <td className="mono">{inr(c.credit_limit)}</td>
                     <td>
                       <span className={`badge ${c.active ? "status-confirmed" : "status-draft"}`}>
                         {c.active ? "Active" : "Inactive"}
@@ -283,6 +297,23 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
   const [billEmail, setBillEmail] = useState(customer?.email ?? "");
   const [billPhone, setBillPhone] = useState(customer?.phone ?? "");
   const [priceListId, setPriceListId] = useState(customer?.price_list_id ?? "");
+  const saudi = useCountry() === "SA";
+  const [ksa, setKsa] = useState({
+    country: customer?.country ?? "",
+    vat_number: customer?.vat_number ?? "",
+    name_ar: customer?.name_ar ?? "",
+    building_no: customer?.building_no ?? "",
+    street: customer?.street ?? "",
+    district: customer?.district ?? "",
+    city: customer?.city ?? "",
+    postal_code: customer?.postal_code ?? "",
+  });
+  const ksaField = (key: keyof typeof ksa, label: string, placeholder = "", rtl = false) => (
+    <label className="field">
+      <span>{label}</span>
+      <input dir={rtl ? "rtl" : undefined} value={ksa[key]} placeholder={placeholder} onChange={(e) => setKsa({ ...ksa, [key]: e.target.value })} />
+    </label>
+  );
   const [priceLists, setPriceLists] = useState<PriceList[] | null>(null);
   useEffect(() => {
     // Hidden for users who can't see price lists.
@@ -298,6 +329,7 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
     email: billEmail.trim(),
     phone: billPhone.trim(),
     ...(priceListId !== (customer?.price_list_id ?? "") ? { price_list_id: priceListId || null } : {}),
+    ...(saudi ? { ...ksa, vat_number: ksa.vat_number.trim(), country: ksa.country.trim().toUpperCase() } : {}),
   };
   const customFields = useCustomFields("customer");
   const [custom, setCustom] = useState<CustomValues>(customer?.custom ?? {});
@@ -346,23 +378,48 @@ export function CustomerForm({ customer, onDone }: { customer?: Customer; onDone
           <input value={name} onChange={(e) => (setName(e.target.value), setDuplicates(null))} autoFocus />
         </label>
         <label className="field">
-          <span>Credit limit (₹)</span>
+          <span>Credit limit ({currencyLabel()})</span>
           <input type="number" min={0} value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} />
         </label>
-        <label className="field">
-          <span>GSTIN (optional)</span>
-          <input
-            value={gstin}
-            onChange={(e) => (setGstin(e.target.value.toUpperCase()), setDuplicates(null))}
-            maxLength={15}
-            placeholder="e.g. 32ABCDE1234F1Z9"
-            style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
-          />
-        </label>
-        <label className="field">
-          <span>State (place of supply)</span>
-          <StateSelect value={gstinState || state} onChange={setState} disabled={Boolean(gstinState)} />
-        </label>
+        {saudi ? (
+          <>
+            {ksaField("vat_number", "VAT number (if registered)", "15 digits — gets standard tax invoices")}
+            {ksaField("name_ar", "Name in Arabic", "", true)}
+            <label className="field">
+              <span>Country</span>
+              <select value={ksa.country} onChange={(e) => setKsa({ ...ksa, country: e.target.value })}>
+                <option value="">Saudi Arabia</option>
+                {Object.entries(FOREIGN_COUNTRIES).map(([code, label]) => (
+                  <option key={code} value={code}>
+                    {label} (export — zero-rated)
+                  </option>
+                ))}
+              </select>
+            </label>
+            {ksaField("building_no", "Building number", "4 digits")}
+            {ksaField("street", "Street")}
+            {ksaField("district", "District")}
+            {ksaField("city", "City")}
+            {ksaField("postal_code", "Postal code", ksa.country ? "" : "5 digits")}
+          </>
+        ) : (
+          <>
+            <label className="field">
+              <span>GSTIN (optional)</span>
+              <input
+                value={gstin}
+                onChange={(e) => (setGstin(e.target.value.toUpperCase()), setDuplicates(null))}
+                maxLength={15}
+                placeholder="e.g. 32ABCDE1234F1Z9"
+                style={{ fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em" }}
+              />
+            </label>
+            <label className="field">
+              <span>State (place of supply)</span>
+              <StateSelect value={gstinState || state} onChange={setState} disabled={Boolean(gstinState)} />
+            </label>
+          </>
+        )}
         <label className="field">
           <span>Payment terms (days)</span>
           <input type="number" min={0} max={365} value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="Company default" />

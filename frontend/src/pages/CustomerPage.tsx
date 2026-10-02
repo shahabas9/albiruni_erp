@@ -25,7 +25,7 @@ import { FollowUpModal } from "../crm/forms";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-import { dateTime, dayDate, inr, inrShort, quoteStatusClass, relativeDue } from "../lib/format";
+import { dateTime, dayDate, inr, inrShort, quoteStatusClass, relativeDue, taxLabel } from "../lib/format";
 import { CustomerForm } from "./Customers";
 
 /** Everything about one customer on one page. */
@@ -111,7 +111,7 @@ export function CustomerPage() {
           <h1 className="page-title">{c.name}</h1>
           <p className="page-sub">
             <span className={`badge ${c.active ? "status-confirmed" : "status-draft"}`}>{c.active ? "Active" : "Inactive"}</span>{" "}
-            {c.gstin ? <span className="mono">GSTIN {c.gstin}</span> : "Unregistered for GST"} · Credit limit {inr(c.credit_limit)}
+            {c.vat_number ? <span className="mono">VAT {c.vat_number}</span> : c.gstin ? <span className="mono">GSTIN {c.gstin}</span> : `Unregistered for ${taxLabel()}`} · Credit limit {inr(c.credit_limit)}
             {c.state_code ? ` · State ${c.state_code}` : ""}
             {c.payment_terms_days != null ? ` · Pays in ${c.payment_terms_days} days` : ""}
           </p>

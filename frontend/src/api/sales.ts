@@ -19,12 +19,42 @@ export function fetchStates(): Promise<GstState[]> {
   return statesCache;
 }
 
+/** What a country's tax rules use (backend regimes.py). */
+export interface TaxRegime {
+  country: "IN" | "SA";
+  country_name: string;
+  currency: string;
+  tax_name: "GST" | "VAT";
+  tax_id_label: string;
+  rates: number[];
+  /** ZATCA categories (S, Z, E, O) in Saudi Arabia; empty in India. */
+  categories: string[];
+  round_to_unit: boolean;
+  split_by_state: boolean;
+  postal_code_digits: number;
+  exemption_reasons: Record<string, string>;
+}
+
 export interface CompanyProfile {
   name: string;
+  /** Where the company is registered; fixed once it has sales documents. */
+  country: "IN" | "SA";
+  currency: string;
+  fy_start_month: number;
+  country_locked: boolean;
+  regime: TaxRegime;
   legal_name: string;
+  name_ar: string;
   gstin: string;
   state_code: string;
+  vat_number: string;
+  cr_number: string;
   address: string;
+  building_no: string;
+  street: string;
+  district: string;
+  city: string;
+  postal_code: string;
   phone: string;
   email: string;
   bank_details: string;
@@ -42,7 +72,7 @@ export function fetchCompanyProfile(): Promise<CompanyProfile> {
   return request<CompanyProfile>("/api/sales/company");
 }
 
-export function updateCompanyProfile(body: Partial<Omit<CompanyProfile, "name">>): Promise<CompanyProfile> {
+export function updateCompanyProfile(body: Partial<Omit<CompanyProfile, "name" | "regime" | "country_locked" | "currency">>): Promise<CompanyProfile> {
   return request<CompanyProfile>("/api/sales/company", { method: "PUT", body: JSON.stringify(body) });
 }
 
@@ -147,6 +177,8 @@ export interface DocLine {
   cgst: number;
   sgst: number;
   igst: number;
+  /** Saudi VAT (0 in India). */
+  vat: number;
   delivered_qty: number;
   invoiced_qty: number;
 }
@@ -329,12 +361,15 @@ export interface InvoiceLine {
   qty: number;
   unit_price: number;
   gst_rate: number;
+  tax_category: string;
   discount_pct: number;
   amount: number;
   taxable_value: number;
   cgst: number;
   sgst: number;
   igst: number;
+  /** Saudi VAT (0 in India). */
+  vat: number;
   credited_qty: number;
   /** Taxable value already credited (returns and price corrections). */
   credited_value: number;
@@ -348,6 +383,8 @@ export interface HsnRow {
   cgst: number;
   sgst: number;
   igst: number;
+  /** Saudi VAT (0 in India). */
+  vat: number;
 }
 
 export type PaymentStatus = "Draft" | "Unpaid" | "Partly paid" | "Paid" | "Overdue" | "Credited";
@@ -386,6 +423,15 @@ export interface Invoice extends TaxTotals {
   amount_tds: number;
   /** Credit balance paid back to the customer. */
   amount_refunded: number;
+  /** Saudi Arabia: "standard" (B2B) or "simplified" (B2C); "" in India. */
+  invoice_kind: string;
+  seller_vat_number: string;
+  buyer_vat_number: string;
+  /** ZATCA QR code (SVG data URI) to print. */
+  zatca_qr: string;
+  seller_name_ar: string;
+  buyer_name_ar: string;
+  seller_cr_number: string;
   /** Recorded from the GST portals after upload. */
   irn: string;
   irn_ack_no: string;
@@ -446,6 +492,14 @@ export function issueInvoice(id: string, invoiceDate?: string): Promise<Invoice>
 // --- Credit notes ----------------------------------------------------------------
 
 export interface CreditNote {
+  /** Saudi Arabia: ZATCA QR code, VAT numbers, Arabic names; "" in India. */
+  zatca_qr: string;
+  invoice_kind: string;
+  seller_vat_number: string;
+  buyer_vat_number: string;
+  seller_name_ar: string;
+  buyer_name_ar: string;
+  seller_cr_number: string;
   id: string;
   number: string;
   invoice_id: string;
@@ -468,12 +522,14 @@ export interface CreditNote {
   cgst: number;
   sgst: number;
   igst: number;
+  /** Saudi VAT (0 in India). */
+  vat: number;
   round_off: number;
   grand_total: number;
   amount_in_words: string;
   created_by_name: string | null;
   created_at: string;
-  lines: { invoice_line_id: string; item_id: string; description: string; hsn_code: string; uom: string; qty: number; gst_rate: number; taxable_value: number; cgst: number; sgst: number; igst: number }[];
+  lines: { invoice_line_id: string; item_id: string; description: string; hsn_code: string; uom: string; qty: number; gst_rate: number; tax_category?: string; taxable_value: number; cgst: number; sgst: number; igst: number; vat: number }[];
 }
 
 export interface CreditNoteInput {
@@ -596,6 +652,20 @@ export interface TdsReport {
   certificates_missing: number;
 }
 
+/** Saudi VAT return, sales side (boxes 1–6). */
+export interface VatReturn {
+  rows: { box: number; label: string; amount: number; adjustment: number; vat: number }[];
+  output_vat: number;
+  input_vat: number;
+  net_vat_due: number;
+  out_of_scope: number;
+  note: string;
+}
+
+export function fetchVatReturn(dateFrom: string, dateTo: string): Promise<VatReturn> {
+  return request<VatReturn>(`/api/sales/reports/vat-return?date_from=${dateFrom}&date_to=${dateTo}`);
+}
+
 export function fetchTdsReport(dateFrom: string, dateTo: string): Promise<TdsReport> {
   return request<TdsReport>(`/api/sales/reports/tds?date_from=${dateFrom}&date_to=${dateTo}`);
 }
@@ -700,6 +770,10 @@ export interface RegisterRow {
   cgst: number;
   sgst: number;
   igst: number;
+  /** Saudi VAT (0 in India). */
+  vat: number;
+  /** Saudi Arabia: the buyer's VAT number. */
+  vat_number: string;
   round_off: number;
   total: number;
   id: string;
@@ -709,7 +783,7 @@ export interface SalesRegister {
   date_from: string;
   date_to: string;
   rows: RegisterRow[];
-  totals: Pick<RegisterRow, "taxable_value" | "cgst" | "sgst" | "igst" | "round_off" | "total">;
+  totals: Pick<RegisterRow, "taxable_value" | "cgst" | "sgst" | "igst" | "vat" | "round_off" | "total">;
   invoices: number;
   credit_notes: number;
 }
@@ -739,7 +813,7 @@ export function fetchGstr1(dateFrom: string, dateTo: string): Promise<Gstr1> {
   return request<Gstr1>(`/api/sales/reports/gstr1?date_from=${dateFrom}&date_to=${dateTo}`);
 }
 
-export function downloadReport(kind: "register" | "tds" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
+export function downloadReport(kind: "register" | "tds" | "vat_return" | Gstr1Section, dateFrom: string, dateTo: string): Promise<number> {
   return downloadFile(`/api/sales/reports/${kind}.csv?date_from=${dateFrom}&date_to=${dateTo}`, `${kind}.csv`);
 }
 
@@ -828,7 +902,12 @@ export function fetchSalesDashboard(): Promise<SalesDashboard> {
 
 export interface PortalJson {
   filename: string;
-  payload: unknown;
+  /** India: NIC JSON in payload. Saudi Arabia: ZATCA UBL XML in content. */
+  format?: "json" | "xml";
+  payload?: unknown;
+  content?: string;
+  /** What isn't in the file yet and why (e.g. ZATCA signing). */
+  notes?: string[];
   /** What the portal would reject; fix before uploading. */
   problems: string[];
 }
@@ -851,7 +930,10 @@ export function recordGstRefs(
 
 /** Saves the JSON as a file for the portal's upload. */
 export function saveJson(file: PortalJson) {
-  const blob = new Blob([JSON.stringify(file.payload, null, 2)], { type: "application/json" });
+  const blob =
+    file.format === "xml"
+      ? new Blob([file.content ?? ""], { type: "application/xml" })
+      : new Blob([JSON.stringify(file.payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

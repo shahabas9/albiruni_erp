@@ -1,15 +1,18 @@
 import type { TaxTotals } from "../api/client";
-import { inr } from "../lib/format";
+import { inr, moneyCurrency } from "../lib/format";
 
-/** Subtotal → discount → taxable value → GST → round off → grand total. */
+/** Subtotal → discount → taxable value → GST or VAT → round off → grand total. */
 export function DocTotals({ doc, subtotal, discountPct }: { doc: TaxTotals; subtotal?: number; discountPct?: number }) {
   const rows: [string, number][] = [];
   if (subtotal !== undefined && discountPct) {
     rows.push(["Subtotal", subtotal], [`Discount ${discountPct}%`, -(subtotal - doc.total)]);
   }
   rows.push(["Taxable value", doc.total]);
-  if (doc.igst) rows.push(["IGST", doc.igst]);
-  if (doc.cgst || doc.sgst || !doc.igst) rows.push(["CGST", doc.cgst], ["SGST", doc.sgst]);
+  if (moneyCurrency() !== "INR") rows.push(["VAT", doc.vat ?? 0]);
+  else {
+    if (doc.igst) rows.push(["IGST", doc.igst]);
+    if (doc.cgst || doc.sgst || !doc.igst) rows.push(["CGST", doc.cgst], ["SGST", doc.sgst]);
+  }
   if (doc.round_off) rows.push(["Round off", doc.round_off]);
   return (
     <dl className="doc-totals">

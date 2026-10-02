@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ApiError } from "../api/client";
 import { createRefund, PAYMENT_MODES, type PaymentMode, type Refund } from "../api/sales";
 import { ErrorNote, Modal } from "../crm/ui";
-import { inr, todayIso } from "../lib/format";
+import { inr, todayIso, currencyLabel } from "../lib/format";
 
 /** Pay a customer back from one advance payment or one invoice's credit balance. */
 export function RefundModal({
@@ -67,7 +67,7 @@ export function RefundModal({
       </p>
       <form id="refund-form" onSubmit={submit} className="fields">
         <label className="field">
-          Amount paid back (₹)
+          Amount paid back ({currencyLabel()})
           <input type="number" min={0} max={source.available} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
         </label>
         <label className="field">

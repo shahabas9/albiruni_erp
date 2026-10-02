@@ -51,6 +51,9 @@ def quick_sale(
     if payment:
         amount = Decimal(str(payment["amount"])).quantize(Decimal("0.01"))
         total = Decimal(str(invoice.grand_total))
+        # The screen's estimate can be a paisa/halala off the exact tax per line: take the bill.
+        if total < amount <= total + Decimal("0.05"):
+            amount = total
         if amount > total:
             raise ConflictError(f"The bill is {cur(context)}{float(total):,.2f} — give change for the rest rather than recording it.")
         receipt = payment_service.record_receipt(

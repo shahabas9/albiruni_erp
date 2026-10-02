@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { currencyLabel } from "../lib/format";
 import { useSearchParams } from "react-router-dom";
 import {
   ApiError,
@@ -618,7 +619,7 @@ function ConvertForm({
       </label>
       {createOpportunity && (
         <label className="field" style={{ maxWidth: 220 }}>
-          <span>Estimated value (₹)</span>
+          <span>Estimated value ({currencyLabel()})</span>
           <input type="number" min={0} value={value} onChange={(e) => setValue(e.target.value)} />
         </label>
       )}

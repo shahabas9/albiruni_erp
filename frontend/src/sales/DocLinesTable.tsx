@@ -36,7 +36,7 @@ export function DocLinesTable({ lines, progress = false }: { lines: DocLine[]; p
               </td>
               <td className="num">{l.gst_rate}%</td>
               <td className="num">{inr(l.taxable_value)}</td>
-              <td className="num">{inr(l.cgst + l.sgst + l.igst)}</td>
+              <td className="num">{inr(l.cgst + l.sgst + l.igst + (l.vat ?? 0))}</td>
               {progress && <td className="num">{l.delivered_qty}</td>}
               {progress && <td className="num">{l.invoiced_qty}</td>}
             </tr>

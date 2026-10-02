@@ -4,7 +4,7 @@ import { ApiError, fetchSalesItems, type Item, type Quotation } from "../api/cli
 import { createQuotation, fetchQuotation, updateQuotation } from "../api/sales";
 import { CustomerPicker } from "../components/CustomerPicker";
 import { ErrorNote } from "../crm/ui";
-import { inr, todayIso } from "../lib/format";
+import { inr, todayIso, taxLabel } from "../lib/format";
 import { blankLine, editLine, estimate, LineItemsEditor, linePayload, useAgreedPrices, type EditLine } from "../sales/LineItemsEditor";
 
 /** New quotation (/sales/quotations/new) or a draft being edited (/sales/quotations/:id/edit). */
@@ -112,7 +112,7 @@ export function QuotationEditor() {
         </label>
         <div className="quote-total">
           <span>
-            Estimated {inr(est.taxable)} + GST {inr(est.gst)} (worked out exactly on save)
+            Estimated {inr(est.taxable)} + {taxLabel()} {inr(est.gst)} (worked out exactly on save)
           </span>
           <b className="num">{inr(est.total)}</b>
         </div>

@@ -39,6 +39,16 @@ def _currency(db: Session, company_id) -> str:
     return getattr(db.get(Company, company_id), "currency", None) or "INR"
 
 
+def _arabic(db: Session, inv: Invoice) -> dict:
+    """Arabic names and the CR number for bilingual Saudi invoices."""
+
+    company = db.get(Company, inv.company_id)
+    if not inv.invoice_kind or company is None:
+        return {}
+    return {"seller_name_ar": company.name_ar or "", "buyer_name_ar": inv.customer.name_ar or "",
+            "seller_cr_number": company.cr_number or ""}
+
+
 def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
     issued_by = db.get(User, inv.issued_by) if inv.issued_by else None
     salesperson = db.get(User, inv.salesperson_id) if inv.salesperson_id else None
@@ -56,7 +66,8 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
         discount_pct=float(inv.discount_pct), total=float(inv.total), cgst=float(inv.cgst), sgst=float(inv.sgst),
         igst=float(inv.igst), vat=float(inv.vat or 0), invoice_kind=inv.invoice_kind or "",
         seller_vat_number=inv.seller_vat_number or "", buyer_vat_number=inv.buyer_vat_number or "",
-        zatca_qr=zatca.qr_svg(zatca.invoice_qr(inv)) if inv.invoice_kind and inv.status == "Issued" else "", round_off=float(inv.round_off), grand_total=float(inv.grand_total),
+        zatca_qr=zatca.qr_svg(zatca.invoice_qr(inv)) if inv.invoice_kind and inv.status == "Issued" else "",
+        **_arabic(db, inv), round_off=float(inv.round_off), grand_total=float(inv.grand_total),
         amount_in_words=tax.amount_in_words(inv.grand_total, _currency(db, inv.company_id)), amount_paid=float(inv.amount_paid),
         amount_credited=float(inv.amount_credited), amount_tds=float(inv.amount_tds or 0),
         amount_refunded=float(inv.amount_refunded or 0), irn=inv.irn or "", irn_ack_no=inv.irn_ack_no or "",
@@ -149,7 +160,7 @@ def credit_note_out(db: Session, note: CreditNote) -> CreditNoteOut:
     return CreditNoteOut(
         zatca_qr=zatca.qr_svg(zatca.credit_note_qr(note)) if inv.invoice_kind else "",
         seller_vat_number=inv.seller_vat_number or "", buyer_vat_number=inv.buyer_vat_number or "",
-        invoice_kind=inv.invoice_kind or "",
+        invoice_kind=inv.invoice_kind or "", **_arabic(db, inv),
         id=note.id, number=note.number, invoice_id=inv.id, invoice_number=inv.number or "",
         invoice_date=inv.invoice_date, customer_id=note.customer_id, customer_name=note.customer.name,
         buyer_gstin=inv.buyer_gstin, billing_address=inv.billing_address, place_of_supply=inv.place_of_supply,

@@ -5,7 +5,9 @@ import { StateSelect } from "../components/StateSelect";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
 
-/** The seller's details printed on every tax invoice, and sales defaults. */
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/** The seller's details printed on every tax invoice, and sales defaults — per the company's country. */
 export function SalesSettings() {
   const { can } = useAppData();
   const canEdit = can("sales.settings.write");
@@ -35,15 +37,30 @@ export function SalesSettings() {
     setSaved(false);
   };
   const gstinState = draft.gstin.trim().length === 15 ? draft.gstin.trim().slice(0, 2) : "";
-  const missing = [!draft.legal_name && "legal name", !draft.gstin && "GSTIN", !(gstinState || draft.state_code) && "state", !draft.address && "address"].filter(Boolean);
+  const saudi = draft.country === "SA";
+  const missing = (
+    saudi
+      ? [
+          !draft.legal_name && "legal name",
+          !draft.vat_number && "VAT number",
+          !draft.cr_number && "CR number",
+          !(draft.street && draft.building_no && draft.district && draft.city && draft.postal_code) && "national address",
+        ]
+      : [!draft.legal_name && "legal name", !draft.gstin && "GSTIN", !(gstinState || draft.state_code) && "state", !draft.address && "address"]
+  ).filter(Boolean);
 
   async function save() {
     if (!draft) return;
     setSaving(true);
     setError(null);
     try {
-      const { name: _name, ...body } = draft;
+      const { name: _name, regime: _regime, country_locked: _locked, currency: _currency, ...body } = draft;
       const next = await updateCompanyProfile({ ...body, gstin: body.gstin.trim(), state_code: gstinState || body.state_code });
+      if (next.country !== profile?.country) {
+        // Currency and tax screens follow the country everywhere — start afresh.
+        window.location.reload();
+        return;
+      }
       setProfile(next);
       setDraft(next);
       setSaved(true);
@@ -54,7 +71,11 @@ export function SalesSettings() {
     }
   }
 
-  const text = (key: "legal_name" | "phone" | "email", label: string, placeholder = "") => (
+  const text = (
+    key: "legal_name" | "phone" | "email" | "name_ar" | "vat_number" | "cr_number" | "building_no" | "street" | "district" | "city" | "postal_code",
+    label: string,
+    placeholder = "",
+  ) => (
     <label className="field">
       <span>{label}</span>
       <input value={draft[key]} disabled={!canEdit} placeholder={placeholder} onChange={(e) => set(key, e.target.value)} />
@@ -71,8 +92,8 @@ export function SalesSettings() {
     <section>
       <div className="page-head">
         <div className="eyebrow">Sales</div>
-        <h1 className="page-title">Company &amp; GST</h1>
-        <p className="page-sub">Printed on every tax invoice for {profile.name}. The state decides CGST + SGST versus IGST.</p>
+        <h1 className="page-title">Company &amp; Tax</h1>
+        <p className="page-sub">Printed on every tax invoice for {profile.name}. {saudi ? "VAT is charged at 15% (or zero-rated / exempt per item) and invoices carry ZATCA's QR code." : "The state decides CGST + SGST versus IGST."}</p>
       </div>
 
       {missing.length > 0 && (
@@ -84,25 +105,73 @@ export function SalesSettings() {
           <span className="card-title">Seller details</span>
         </div>
         <div className="field-grid">
-          {text("legal_name", "Legal name", "As registered for GST")}
           <label className="field">
-            <span>GSTIN</span>
-            <input
-              value={draft.gstin}
-              disabled={!canEdit}
-              maxLength={15}
-              className="mono"
-              onChange={(e) => set("gstin", e.target.value.toUpperCase())}
-              placeholder="e.g. 32ABCDE1234F1Z9"
-            />
+            <span>Registered in</span>
+            <select
+              value={draft.country}
+              disabled={!canEdit || profile.country_locked}
+              onChange={(e) => {
+                const country = e.target.value as "IN" | "SA";
+                setDraft({ ...draft, country, fy_start_month: country === "SA" ? 1 : 4 });
+                setSaved(false);
+              }}
+            >
+              <option value="IN">India — GST, ₹</option>
+              <option value="SA">Saudi Arabia — VAT, SAR</option>
+            </select>
+            {profile.country_locked && <small className="card-note">Fixed: the company already has sales documents. Another country means a new company.</small>}
           </label>
           <label className="field">
-            <span>State</span>
-            <StateSelect value={gstinState || draft.state_code} onChange={(v) => set("state_code", v)} disabled={!canEdit || Boolean(gstinState)} />
+            <span>Financial year starts</span>
+            <select
+              value={draft.fy_start_month}
+              disabled={!canEdit || profile.country_locked}
+              onChange={(e) => set("fy_start_month", Number(e.target.value))}
+            >
+              {MONTHS.map((m, i) => (
+                <option key={m} value={i + 1}>
+                  {m}
+                </option>
+              ))}
+            </select>
           </label>
+          {text("legal_name", "Legal name", saudi ? "As on the Commercial Registration" : "As registered for GST")}
+          {saudi ? (
+            <>
+              <label className="field">
+                <span>Legal name in Arabic</span>
+                <input dir="rtl" value={draft.name_ar} disabled={!canEdit} onChange={(e) => set("name_ar", e.target.value)} />
+              </label>
+              {text("vat_number", "VAT number", "15 digits, starts and ends with 3")}
+              {text("cr_number", "CR number", "10 digits")}
+              {text("building_no", "Building number", "4 digits")}
+              {text("street", "Street")}
+              {text("district", "District")}
+              {text("city", "City")}
+              {text("postal_code", "Postal code", "5 digits")}
+            </>
+          ) : (
+            <>
+              <label className="field">
+                <span>GSTIN</span>
+                <input
+                  value={draft.gstin}
+                  disabled={!canEdit}
+                  maxLength={15}
+                  className="mono"
+                  onChange={(e) => set("gstin", e.target.value.toUpperCase())}
+                  placeholder="e.g. 32ABCDE1234F1Z9"
+                />
+              </label>
+              <label className="field">
+                <span>State</span>
+                <StateSelect value={gstinState || draft.state_code} onChange={(v) => set("state_code", v)} disabled={!canEdit || Boolean(gstinState)} />
+              </label>
+            </>
+          )}
           {text("phone", "Phone")}
           {text("email", "Email")}
-          {area("address", "Address")}
+          {area("address", saudi ? "Address (optional, printed as written)" : "Address")}
         </div>
       </div>
 

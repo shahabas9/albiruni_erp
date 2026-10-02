@@ -133,6 +133,52 @@ def seed_crm(db: Session, tenant: Tenant) -> None:
     ))
 
 
+def seed_saudi(db: Session) -> None:
+    """A second business registered in Saudi Arabia (VAT, SAR), with its own user 'khalid'."""
+
+    if db.execute(select(Tenant).where(Tenant.code == "tenant_ksa")).scalar_one_or_none() is not None:
+        return
+    tenant = Tenant(name="Riyadh Trading Co.", code="tenant_ksa")
+    db.add(tenant)
+    db.flush()
+    company = Company(
+        tenant_id=tenant.id, name="Riyadh HQ", code="company_riyadh", country="SA", currency="SAR", fy_start_month=1,
+        legal_name="Riyadh Trading Co.", name_ar="شركة الرياض للتجارة", vat_number="300000000000003",
+        cr_number="1010101010", building_no="2345", street="King Fahd Road", district="Al Olaya", city="Riyadh",
+        postal_code="12211", phone="+966 11 000 0000", email="accounts@riyadh.example",
+        bank_details="Al Rajhi Bank\nIBAN SA03 8000 0000 6080 1016 7519",
+        invoice_terms="Payment within 30 days of the invoice date.",
+    )
+    db.add(company)
+    db.flush()
+    role = Role(tenant_id=tenant.id, name="Sales Manager",
+                permissions=["sales.quotation.create", "sales.quotation.read", "sales.quotation.approve", "audit.read",
+                             *CRM_PERMISSIONS, *SALES_PERMISSIONS])
+    db.add(role)
+    db.flush()
+    db.add(User(tenant_id=tenant.id, company_id=company.id, role_id=role.id, username="khalid",
+                display_name="Khalid", hashed_password=hash_password("khalid123"), locale="en-SA"))
+    db.add_all([
+        Customer(tenant_id=tenant.id, company_id=company.id, name="Al Noor Trading", credit_limit=100_000,
+                 vat_number="311111111111113", name_ar="شركة النور للتجارة", building_no="4321", street="Olaya Street",
+                 district="Al Malqa", city="Riyadh", postal_code="13521",
+                 billing_address="4321 Olaya Street, Al Malqa\nRiyadh 13521"),
+        Customer(tenant_id=tenant.id, company_id=company.id, name="Walk-in customer", credit_limit=0),
+        Customer(tenant_id=tenant.id, company_id=company.id, name="Gulf Imports LLC", credit_limit=50_000,
+                 country="AE", city="Dubai", billing_address="Deira, Dubai, UAE"),
+    ])
+    db.add_all([
+        Item(tenant_id=tenant.id, company_id=company.id, sku="PRD-A", name="Product A", uom="box", unit_price=100,
+             stock_qty=500, gst_rate=15, tax_category="S"),
+        Item(tenant_id=tenant.id, company_id=company.id, sku="MED-1", name="Medical gloves", uom="box", unit_price=40,
+             stock_qty=300, gst_rate=0, tax_category="Z", exemption_reason="VATEX-SA-35"),
+        Item(tenant_id=tenant.id, company_id=company.id, sku="SRV-1", name="Installation", uom="job", unit_price=250,
+             stock_qty=0, kind="service", gst_rate=15, tax_category="S"),
+    ])
+    db.flush()
+    print("Seeded tenant_ksa / Riyadh HQ (Saudi Arabia, VAT) with user 'khalid' (password: khalid123).")
+
+
 def run() -> None:
     upgrade_database()
     db: Session = SessionLocal()
@@ -142,6 +188,7 @@ def run() -> None:
             print("Seed data already present (tenant_018) — topping up CRM and sales only.")
             seed_crm(db, existing)
             seed_sales(db, existing)
+            seed_saudi(db)
             db.commit()
             return
 
@@ -235,6 +282,7 @@ def run() -> None:
 
         seed_crm(db, tenant)
         seed_sales(db, tenant)
+        seed_saudi(db)
 
         db.commit()
         print("Seeded tenant_018 / company_kozhikode with user 'ahmed' (password: ahmed123).")

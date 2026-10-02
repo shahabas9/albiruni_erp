@@ -6,6 +6,7 @@ export function Setup() {
   const { completeSetup, error } = useAuth();
   const [organizationName, setOrganizationName] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [country, setCountry] = useState<"IN" | "SA">("IN");
   const [adminName, setAdminName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -31,6 +32,7 @@ export function Setup() {
       await completeSetup({
         organization_name: organizationName,
         company_name: companyName,
+        country,
         admin_name: adminName,
         username,
         password,
@@ -72,6 +74,13 @@ export function Setup() {
             placeholder="Kozhikode HQ"
             required
           />
+        </label>
+        <label className="login-field">
+          <span>Registered in</span>
+          <select id="setup-country" value={country} onChange={(e) => setCountry(e.target.value as "IN" | "SA")}>
+            <option value="IN">India — GST, rupees</option>
+            <option value="SA">Saudi Arabia — VAT, riyals</option>
+          </select>
         </label>
         <label className="login-field">
           <span>Your name</span>

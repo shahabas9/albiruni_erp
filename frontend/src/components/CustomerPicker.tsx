@@ -171,7 +171,8 @@ export function CustomerPicker({
               }
               show({
                 id, name: match?.label ?? "", gstin: "", credit_limit: 0, active: true, tags: [], custom: {},
-                billing_address: "", shipping_address: "", state_code: "", payment_terms_days: null, email: "", phone: "", price_list_id: null,
+                billing_address: "", shipping_address: "", state_code: "", payment_terms_days: null, email: "", phone: "", price_list_id: null, country: "", vat_number: "", name_ar: "",
+                building_no: "", street: "", district: "", city: "", postal_code: "",
               });
               close();
             }}

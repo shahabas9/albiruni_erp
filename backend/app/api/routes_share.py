@@ -137,6 +137,8 @@ def public_document(token: str, db: Session = Depends(get_db)):
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     profile = sales_settings.profile(db, context)
-    company = {k: getattr(profile, k) for k in ("name", "legal_name", "gstin", "state_code", "address", "phone",
-                                                  "email", "bank_details", "invoice_terms")}
+    company = {k: getattr(profile, k) for k in (
+        "name", "legal_name", "gstin", "state_code", "address", "phone", "email", "bank_details", "invoice_terms",
+        "country", "currency", "name_ar", "vat_number", "cr_number", "building_no", "street", "district", "city",
+        "postal_code")}
     return {"kind": kind, "document": doc, "company": company, "expires": payload["exp"]}

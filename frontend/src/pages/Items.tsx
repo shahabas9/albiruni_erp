@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import { ApiError, createItem, fetchItems, updateItem, type Item } from "../api/client";
 import { GST_RATES } from "../api/sales";
 import { useAppData } from "../data/AppDataProvider";
+import { inr, currencyLabel } from "../lib/format";
+import { EXEMPTION_REASONS, SA_TREATMENTS, taxName, useCountry } from "../lib/regime";
 import { StockDrawer } from "../sales/StockDrawer";
 
 export function Items() {
+  const country = useCountry();
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +37,7 @@ export function Items() {
       <div className="page-head">
         <div className="eyebrow">Inventory</div>
         <h1 className="page-title">Items</h1>
-        <p className="page-sub">Products and pricing — the stock and price list Ask ERP checks before drafting a quotation. Prices exclude GST.</p>
+        <p className="page-sub">Products and pricing — the stock and price list Ask ERP checks before drafting a quotation. Prices exclude {taxName(country)}.</p>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
@@ -62,8 +65,8 @@ export function Items() {
                 <th>SKU</th>
                 <th>Name</th>
                 <th>UOM</th>
-                <th>HSN/SAC</th>
-                <th>GST</th>
+                <th>{country === "SA" ? "Category" : "HSN/SAC"}</th>
+                <th>{taxName(country)}</th>
                 <th>Unit price</th>
                 <th>Stock</th>
                 <th></th>
@@ -88,11 +91,11 @@ export function Items() {
                     <td className="mono">{i.sku}</td>
                     <td>{i.name}</td>
                     <td>{i.uom}</td>
-                    <td className="mono">{i.hsn_code || "—"}</td>
+                    <td className="mono">{country === "SA" ? i.tax_category || "—" : i.hsn_code || "—"}</td>
                     <td>
                       {i.gst_rate === null ? <span className="badge status-pending">Not set</span> : `${i.gst_rate}%`}
                     </td>
-                    <td className="mono">₹{i.unit_price.toLocaleString("en-IN")}</td>
+                    <td className="mono">{inr(i.unit_price)}</td>
                     <td className="mono">{i.kind === "service" ? "Service" : i.stock_qty}</td>
                     <td style={{ display: "flex", gap: 6 }}>
                       <button className="secondary-btn" onClick={() => setEditingId(i.id)}>
@@ -132,6 +135,10 @@ function ItemForm({ item, onDone }: { item?: Item; onDone: () => void }) {
   const [kind, setKind] = useState<Item["kind"]>(item?.kind ?? "goods");
   const [hsn, setHsn] = useState(item?.hsn_code ?? "");
   const [rate, setRate] = useState(item?.gst_rate === null || item?.gst_rate === undefined ? "" : String(item.gst_rate));
+  const country = useCountry();
+  const saudi = country === "SA";
+  const [treatment, setTreatment] = useState(item?.tax_category || (item?.gst_rate === null || item?.gst_rate === undefined ? "" : item.gst_rate > 0 ? "S" : "Z"));
+  const [reason, setReason] = useState(item?.exemption_reason ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -147,7 +154,13 @@ function ItemForm({ item, onDone }: { item?: Item; onDone: () => void }) {
       ...(item ? {} : { stock_qty: Number(stockQty) }),
       kind,
       hsn_code: hsn.trim(),
-      gst_rate: rate === "" ? null : Number(rate),
+      ...(saudi
+        ? {
+            gst_rate: treatment === "" ? null : (SA_TREATMENTS.find((t) => t.key === treatment)?.rate ?? 0),
+            tax_category: treatment,
+            exemption_reason: treatment === "S" ? "" : reason,
+          }
+        : { gst_rate: rate === "" ? null : Number(rate) }),
     };
     try {
       if (item) await updateItem(item.id, body);
@@ -176,7 +189,7 @@ function ItemForm({ item, onDone }: { item?: Item; onDone: () => void }) {
           <input value={uom} onChange={(e) => setUom(e.target.value)} />
         </label>
         <label className="field">
-          <span>Unit price (₹, before GST)</span>
+          <span>Unit price ({currencyLabel()}, before {taxName(country)})</span>
           <input type="number" min={0} value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} />
         </label>
         <label className="field">
@@ -186,21 +199,52 @@ function ItemForm({ item, onDone }: { item?: Item; onDone: () => void }) {
             <option value="service">Service (no stock)</option>
           </select>
         </label>
-        <label className="field">
-          <span>{kind === "service" ? "SAC code" : "HSN code"}</span>
-          <input value={hsn} onChange={(e) => setHsn(e.target.value)} inputMode="numeric" placeholder="4, 6 or 8 digits" />
-        </label>
-        <label className="field">
-          <span>GST rate</span>
-          <select value={rate} onChange={(e) => setRate(e.target.value)}>
-            <option value="">Not set</option>
-            {GST_RATES.map((r) => (
-              <option key={r} value={String(r)}>
-                {r}%
-              </option>
-            ))}
-          </select>
-        </label>
+        {saudi ? (
+          <>
+            <label className="field">
+              <span>VAT treatment</span>
+              <select value={treatment} onChange={(e) => setTreatment(e.target.value)}>
+                <option value="">Not set</option>
+                {SA_TREATMENTS.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {treatment && treatment !== "S" && (
+              <label className="field">
+                <span>Reason (ZATCA)</span>
+                <select value={reason} onChange={(e) => setReason(e.target.value)}>
+                  <option value="">Choose…</option>
+                  {Object.entries(EXEMPTION_REASONS).map(([code, label]) => (
+                    <option key={code} value={code}>
+                      {label} ({code})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </>
+        ) : (
+          <>
+            <label className="field">
+              <span>{kind === "service" ? "SAC code" : "HSN code"}</span>
+              <input value={hsn} onChange={(e) => setHsn(e.target.value)} inputMode="numeric" placeholder="4, 6 or 8 digits" />
+            </label>
+            <label className="field">
+              <span>GST rate</span>
+              <select value={rate} onChange={(e) => setRate(e.target.value)}>
+                <option value="">Not set</option>
+                {GST_RATES.map((r) => (
+                  <option key={r} value={String(r)}>
+                    {r}%
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
         {!item && kind === "goods" && (
           <label className="field">
             <span>Opening stock</span>

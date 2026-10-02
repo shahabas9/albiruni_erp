@@ -27,7 +27,7 @@ const PERMISSION_HINTS: Record<string, string> = {
   "sales.delivery.write": "Record and cancel deliveries (takes goods out of stock).",
   "inventory.stock.adjust": "Correct stock after a count, with a reason. Every change is kept in the item's stock ledger.",
   "sales.credit.override": "Confirm an order that takes a customer past their credit limit.",
-  "sales.settings.write": "Edit the company's GST details, invoice terms and sales defaults (Sales → Company & GST).",
+  "sales.settings.write": "Edit the company's tax details (GST or VAT), invoice terms and sales defaults (Sales → Company & Tax).",
   "crm.settings.write": "Change CRM settings: lead rotation, stale limits, custom fields, targets, web form.",
 };
 

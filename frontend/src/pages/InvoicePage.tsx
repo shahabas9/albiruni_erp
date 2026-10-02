@@ -15,7 +15,7 @@ import { SalespersonField } from "../sales/SalespersonField";
 import { Timeline } from "../crm/Timeline";
 import { ErrorNote } from "../crm/ui";
 import { useAppData } from "../data/AppDataProvider";
-import { dateTime, dayDate, docStatusClass, inr, todayIso } from "../lib/format";
+import { dateTime, dayDate, docStatusClass, inr, todayIso, taxLabel } from "../lib/format";
 import { CreditNoteModal } from "../sales/CreditNoteModal";
 import { PaymentModal } from "../sales/PaymentModal";
 import { RefundModal } from "../sales/RefundModal";
@@ -121,7 +121,7 @@ export function InvoicePage() {
           )}
           {!draft && (
             <button className="ghost-btn" onClick={() => setPortal(true)}>
-              e-Invoice / e-Way bill
+              {invoice.invoice_kind ? "ZATCA e-invoice" : "e-Invoice / e-Way bill"}
             </button>
           )}
           {!draft && can("sales.payment.write") && invoice.balance < 0 && (
@@ -168,7 +168,7 @@ export function InvoicePage() {
                   <th>HSN/SAC</th>
                   <th className="num">Qty</th>
                   <th className="num">Rate</th>
-                  <th className="num">GST</th>
+                  <th className="num">{taxLabel()}</th>
                   <th className="num">Taxable</th>
                   <th className="num">Tax</th>
                 </tr>
@@ -187,7 +187,7 @@ export function InvoicePage() {
                     <td className="num">{inr(l.unit_price)}</td>
                     <td className="num">{l.gst_rate}%</td>
                     <td className="num">{inr(l.taxable_value)}</td>
-                    <td className="num">{inr(l.cgst + l.sgst + l.igst)}</td>
+                    <td className="num">{inr(l.cgst + l.sgst + l.igst + (l.vat ?? 0))}</td>
                   </tr>
                 ))}
               </tbody>
@@ -234,16 +234,24 @@ export function InvoicePage() {
               <span>Bill to</span>
               <p>
                 {invoice.buyer_name}
-                {invoice.buyer_gstin ? <small className="mono">GSTIN {invoice.buyer_gstin}</small> : <small>Unregistered</small>}
+                {invoice.buyer_vat_number ? (
+                  <small className="mono">VAT {invoice.buyer_vat_number}</small>
+                ) : invoice.buyer_gstin ? (
+                  <small className="mono">GSTIN {invoice.buyer_gstin}</small>
+                ) : (
+                  <small>{invoice.invoice_kind === "simplified" ? "Simplified tax invoice (B2C)" : "Unregistered"}</small>
+                )}
                 {invoice.billing_address && <small>{invoice.billing_address}</small>}
               </p>
             </div>
+            {taxLabel() === "GST" && (
             <div>
               <span>Place of supply</span>
               <p>
                 {invoice.place_of_supply ? `${invoice.place_of_supply} · ${invoice.place_of_supply_name}` : "—"}
               </p>
             </div>
+            )}
             {invoice.customer_po && (
               <div>
                 <span>Customer PO</span>
