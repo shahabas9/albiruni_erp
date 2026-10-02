@@ -50,12 +50,14 @@ class DocLineOut(BaseModel):
     unit_price: float
     list_price: float
     gst_rate: float
+    tax_category: str = ""
     discount_pct: float = 0
     amount: float
     taxable_value: float
     cgst: float
     sgst: float
     igst: float
+    vat: float = 0
     delivered_qty: float
     invoiced_qty: float
 
@@ -84,6 +86,7 @@ class OrderOut(BaseModel):
     cgst: float
     sgst: float
     igst: float
+    vat: float = 0
     round_off: float
     grand_total: float
     needs_approval: bool

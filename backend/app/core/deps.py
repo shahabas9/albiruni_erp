@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.identity import Role, User
+from app.models.tenant import Company
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -36,6 +37,8 @@ class RequestContext:
     # "app" (screens), "ask_erp" (confirmed AI actions), "import" (CSV) or
     # "web_form" (the public enquiry form, which has no user).
     channel: str = "app"
+    # The company's currency (INR, SAR) — for amounts written into messages and history.
+    currency: str = "INR"
 
     def has_permission(self, permission: str) -> bool:
         return SUPER_ADMIN_PERMISSION in self.permissions or permission in self.permissions
@@ -67,6 +70,7 @@ def get_current_context(
         company_id=user.company_id,
         permissions=permissions,
         locale=user.locale,
+        currency=getattr(db.get(Company, user.company_id), "currency", None) or "INR",
     )
 
 

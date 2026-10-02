@@ -18,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
 from app.domain import crm_service, history
 from app.domain.customer_service import get_customer
@@ -112,7 +113,7 @@ def create_refund(
     if available <= 0:
         raise ConflictError(f"Nothing is owed back on {source.number}.")
     if value > available:
-        raise ConflictError(f"Only ₹{float(available):,.2f} can be refunded from {source.number}.")
+        raise ConflictError(f"Only {cur(context)}{float(available):,.2f} can be refunded from {source.number}.")
     if day < source_date:
         raise ConflictError(f"A refund can't be dated before {source.number}.")
 
@@ -125,7 +126,7 @@ def create_refund(
     )
     db.add(refund)
     db.flush()
-    summary = f"Refund {refund.number}: ₹{float(value):,.2f} by {mode.lower()} from the {what} — {reason}"
+    summary = f"Refund {refund.number}: {cur(context)}{float(value):,.2f} by {mode.lower()} from the {what} — {reason}"
     history.record(db, context, "customer", customer_id, "refunded", summary)
     history.record(db, context, "receipt" if receipt_id else "invoice", source.id, "refunded", summary)
     db.flush()
@@ -143,7 +144,7 @@ def void_refund(db: Session, context: RequestContext, refund_id: UUID, reason: s
               else get_invoice(db, context, refund.invoice_id, lock=True))
     source.amount_refunded = Decimal(str(source.amount_refunded)) - Decimal(str(refund.amount))
     refund.status, refund.void_reason = "Voided", reason[:200]
-    summary = f"Refund {refund.number} (₹{float(refund.amount):,.2f}) voided — {reason}"
+    summary = f"Refund {refund.number} ({cur(context)}{float(refund.amount):,.2f}) voided — {reason}"
     history.record(db, context, "customer", refund.customer_id, "refund_voided", summary)
     history.record(db, context, "receipt" if refund.receipt_id else "invoice", source.id, "refund_voided", summary)
     db.flush()

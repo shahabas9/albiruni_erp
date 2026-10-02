@@ -19,7 +19,7 @@ from app.api import routes_crm, routes_price_lists, routes_reports as routes_sal
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
-from app.domain import gst_portal, price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import regimes, gst_portal, price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -1483,6 +1483,127 @@ class SalespersonTests(SalesTestCase):
         self.db.commit()
         order = routes_orders.order_from_quotation(quotation.id, Response(), self.context, self.db)
         self.assertEqual(order.salesperson_id, owner.user.id)
+
+
+SAUDI_VAT = "300000000000003"
+SAUDI_BUYER_VAT = "311111111111113"
+
+
+class SaudiTestCase(SalesTestCase):
+    """A company registered in Saudi Arabia: VAT, SAR, calendar financial year."""
+
+    def setUp(self):
+        self.db = SessionLocal()
+        self.addCleanup(self.db.close)
+        tenant = Tenant(name="Saudi test", code=uuid4().hex)
+        self.db.add(tenant)
+        self.db.flush()
+        company = Company(tenant_id=tenant.id, name="Riyadh", code="riyadh", country="SA", currency="SAR",
+                          fy_start_month=1, legal_name="Riyadh Trading Co.", name_ar="شركة الرياض للتجارة",
+                          vat_number=SAUDI_VAT, cr_number="1010101010", building_no="1234", street="King Fahd Road",
+                          district="Al Olaya", city="Riyadh", postal_code="12211")
+        self.db.add(company)
+        self.db.flush()
+        self.context = self.make_context(["*"], tenant.id, company.id)
+        self.context.currency = "SAR"
+        self.db.commit()
+
+    def item(self, name="Product A", price=100, rate=15, stock=500, **fields):
+        fields.setdefault("tax_category", "S" if rate else "Z")
+        return super().item(name=name, price=price, rate=rate, stock=stock, **fields)
+
+    def b2b(self, name="Al Noor Trading", **fields):
+        return self.customer(name, vat_number=SAUDI_BUYER_VAT, building_no="4321", street="Olaya Street",
+                             district="Al Malqa", city="Riyadh", postal_code="13521", **fields)
+
+
+class SaudiVatTests(SaudiTestCase):
+    def test_vat_is_one_line_at_15_percent_kept_to_the_halala(self):
+        item = self.item(price=99.99)
+        customer = self.b2b()
+        order = self.confirmed_order([{"item_id": item.id, "qty": 3}], customer)
+        self.assertEqual((order.total, order.vat, order.cgst + order.sgst + order.igst), (299.97, 45.0, 0))
+        self.assertEqual((order.grand_total, order.round_off, order.place_of_supply), (344.97, 0, ""))
+        self.assertEqual(order.lines[0].tax_category, "S")
+        self.assertRegex(order.number, r"^SO/2026/00001$")  # calendar financial year
+        self.deliver(order, {0: 3})
+        invoice = self.issue(self.draft(order))
+        self.assertRegex(invoice.number, r"^INV/2026/00001$")
+        self.assertEqual((invoice.vat, invoice.grand_total, invoice.invoice_kind), (45.0, 344.97, "standard"))
+        self.assertEqual((invoice.seller_vat_number, invoice.buyer_vat_number), (SAUDI_VAT, SAUDI_BUYER_VAT))
+        self.assertEqual(invoice.amount_in_words, "Saudi Riyals Three Hundred Forty Four and Ninety Seven Halalas Only")
+
+        note = self.credit(invoice, "Return", {0: {"qty": 1}})
+        self.assertEqual((note.total, note.vat, note.grand_total), (99.99, 15.0, 114.99))
+
+    def test_customers_without_a_vat_number_get_simplified_invoices_and_exports_are_zero_rated(self):
+        item = self.item()
+        walk_in = self.customer("Walk in")
+        invoice = self.invoice_for(walk_in, 2, item)
+        self.assertEqual((invoice.invoice_kind, invoice.vat, invoice.grand_total), ("simplified", 30.0, 230.0))
+        dubai = self.customer("Dubai Buyer", country="AE", vat_number="100000000000003")
+        export = self.confirmed_order([{"item_id": item.id, "qty": 1}], dubai)
+        self.assertEqual((export.vat, export.lines[0].tax_category, export.grand_total), (0, "Z", 100.0))
+
+    def test_saudi_rules_on_items_customers_and_india_only_features(self):
+        from app.api import routes_items
+        with self.assertRaises(HTTPException) as gst_rate:
+            routes_items.create_item(ItemIn(sku="X1", name="Wrong", unit_price=10, gst_rate=18), self.context, self.db)
+        self.assertIn("VAT rate must be one of 0, 15%", gst_rate.exception.detail)
+        with self.assertRaises(HTTPException):  # standard-rated must carry 15%
+            routes_items.create_item(ItemIn(sku="X2", name="Odd", unit_price=10, gst_rate=0, tax_category="S"),
+                                     self.context, self.db)
+        exempt = routes_items.create_item(ItemIn(sku="X3", name="Loan fee", unit_price=10, gst_rate=0, kind="service",
+                                                 tax_category="E", exemption_reason="VATEX-SA-29"), self.context, self.db)
+        self.assertEqual((exempt.tax_category, exempt.exemption_reason), ("E", "VATEX-SA-29"))
+        with self.assertRaises(ConflictError):
+            customer_service.create_customer(self.db, self.context, CustomerIn(name="Bad VAT", vat_number="12345"))
+
+        customer = self.customer()
+        invoice = self.invoice_for(customer, 1, self.item())
+        with self.assertRaises(HTTPException) as tds:
+            self.pay(customer, 100, allocations=[AllocationIn(invoice_id=invoice.id, amount=100, tds_amount=5)],
+                     tds_section="194Q")
+        self.assertIn("Indian companies only", tds.exception.detail)
+        with self.assertRaises(HTTPException) as gstr1:
+            routes_reports.gstr1(date.today(), date.today(), self.context, self.db)
+        self.assertIn("Indian GST return", gstr1.exception.detail)
+        receipt = self.pay(customer, 115)
+        self.assertEqual(receipt.unallocated, 0)
+        timeline = routes_customers.customer_timeline(customer.id, self.context, self.db)
+        summaries = [e["summary"] if isinstance(e, dict) else e.summary for e in timeline]
+        self.assertTrue(any("SAR 115.00" in t for t in summaries))
+        self.assertFalse(any("₹" in t for t in summaries))
+
+    def test_issuing_needs_the_saudi_seller_details(self):
+        company = self.db.get(Company, self.context.company_id)
+        company.cr_number = ""
+        self.db.commit()
+        customer = self.customer()
+        order = self.confirmed_order([{"item_id": self.item().id, "qty": 1}], customer)
+        self.deliver(order, {0: 1})
+        with self.assertRaises(HTTPException) as refused:
+            self.issue(self.draft(order))
+        self.assertIn("CR number", refused.exception.detail)
+
+
+class CompanyCountryTests(SalesTestCase):
+    def test_the_country_sets_currency_and_year_and_is_fixed_once_documents_exist(self):
+        saved = sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(country="SA"))
+        self.assertEqual((saved.country, saved.currency, saved.fy_start_month, saved.regime["tax_name"]),
+                         ("SA", "SAR", 1, "VAT"))
+        with self.assertRaises(ConflictError):
+            sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(vat_number="300000000000004"))
+        sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(country="IN"))
+        self.context.currency = "INR"
+        self.item()
+        self.customer()
+        self.quote()
+        locked = sales_settings.profile(self.db, self.context)
+        self.assertTrue(locked.country_locked)
+        with self.assertRaises(ConflictError) as fixed:
+            sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(country="SA"))
+        self.assertIn("new company", str(fixed.exception))
 
 
 if __name__ == "__main__":

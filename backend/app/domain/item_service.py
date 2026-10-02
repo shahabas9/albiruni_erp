@@ -4,9 +4,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import stock_service
+from app.domain import regimes, stock_service
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.sales import Item
+from app.models.tenant import Company
 from app.schemas.items import ItemIn, ItemUpdate
 
 
@@ -34,7 +35,26 @@ def _sku_taken(db: Session, context: RequestContext, sku: str, exclude_id: UUID 
     return existing is not None and existing.id != exclude_id
 
 
+def _tax_fields(db: Session, context: RequestContext, rate, category, reason, current: Item | None = None) -> dict:
+    """Rate, category and exemption reason checked against the company's country."""
+
+    regime = regimes.of(db.get(Company, context.company_id))
+    try:
+        rate = None if rate is None else regimes.clean_rate(regime, rate)
+        category = regimes.clean_category(regime, category, rate)
+    except ValueError as exc:
+        raise ConflictError(str(exc)) from exc
+    reason = (reason or "").strip().upper()
+    if category in ("Z", "E", "O"):
+        if reason and reason not in regimes.EXEMPTION_REASONS:
+            raise ConflictError(f"'{reason}' isn't a ZATCA exemption reason code.")
+    else:
+        reason = ""
+    return {"gst_rate": rate, "tax_category": category, "exemption_reason": reason}
+
+
 def create_item(db: Session, context: RequestContext, body: ItemIn) -> Item:
+    taxes = _tax_fields(db, context, body.gst_rate, body.tax_category, body.exemption_reason)
     if _sku_taken(db, context, body.sku):
         raise ConflictError(f"SKU '{body.sku}' is already in use.")
     item = Item(
@@ -47,7 +67,7 @@ def create_item(db: Session, context: RequestContext, body: ItemIn) -> Item:
         stock_qty=0,
         kind=body.kind,
         hsn_code=body.hsn_code,
-        gst_rate=body.gst_rate,
+        **taxes,
     )
     db.add(item)
     db.flush()
@@ -64,6 +84,12 @@ def update_item(db: Session, context: RequestContext, item_id: UUID, body: ItemU
     if "sku" in data and _sku_taken(db, context, data["sku"], exclude_id=item.id):
         raise ConflictError(f"SKU '{data['sku']}' is already in use.")
     counted = data.pop("stock_qty", None)
+    if {"gst_rate", "tax_category", "exemption_reason"} & set(data):
+        data.update(_tax_fields(
+            db, context, data.pop("gst_rate", item.gst_rate),
+            data.pop("tax_category", None) if "tax_category" in data else item.tax_category,
+            data.pop("exemption_reason", None) if "exemption_reason" in data else item.exemption_reason,
+        ))
     for field, value in data.items():
         setattr(item, field, value)
     if counted is not None and float(counted) != float(item.stock_qty):

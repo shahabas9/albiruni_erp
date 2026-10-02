@@ -24,10 +24,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.deps import RequestContext
-from app.domain import tax
+from app.domain import regimes, tax
 from app.domain.errors import ConflictError
 from app.domain.gst_portal import uqc
 from app.models.documents import CreditNote, Invoice
+from app.models.tenant import Company
 
 B2CL_LIMIT = Decimal("100000")
 SECTIONS = ("b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs")
@@ -78,28 +79,35 @@ def _f(value) -> float:
     return float(Decimal(str(value)).quantize(Decimal("0.01")))
 
 
+def india_only(db: Session, context: RequestContext, what: str) -> None:
+    if regimes.of(db.get(Company, context.company_id)).country != "IN":
+        raise ConflictError(f"{what} is an Indian GST return — this company is registered in another country.")
+
+
 def sales_register(db: Session, context: RequestContext, date_from: date, date_to: date) -> dict:
     _period(date_from, date_to)
     invoices, notes = _documents(db, context, date_from, date_to)
     rows = [{
         "date": i.invoice_date, "type": "Invoice", "number": i.number, "customer": i.buyer_name,
         "gstin": i.buyer_gstin, "place_of_supply": _pos(i.place_of_supply), "taxable_value": _f(i.total),
-        "cgst": _f(i.cgst), "sgst": _f(i.sgst), "igst": _f(i.igst), "round_off": _f(i.round_off),
-        "total": _f(i.grand_total), "id": i.id,
+        "cgst": _f(i.cgst), "sgst": _f(i.sgst), "igst": _f(i.igst), "vat": _f(i.vat),
+        "vat_number": i.buyer_vat_number or "", "round_off": _f(i.round_off), "total": _f(i.grand_total), "id": i.id,
     } for i in invoices] + [{
         "date": n.note_date, "type": "Credit note", "number": n.number, "customer": n.invoice.buyer_name,
         "gstin": n.invoice.buyer_gstin, "place_of_supply": _pos(n.invoice.place_of_supply),
         "taxable_value": -_f(n.total), "cgst": -_f(n.cgst), "sgst": -_f(n.sgst), "igst": -_f(n.igst),
-        "round_off": -_f(n.round_off), "total": -_f(n.grand_total), "id": n.id,
+        "vat": -_f(n.vat), "vat_number": n.invoice.buyer_vat_number or "", "round_off": -_f(n.round_off),
+        "total": -_f(n.grand_total), "id": n.id,
     } for n in notes]
     rows.sort(key=lambda r: (r["date"], r["type"], r["number"]))
-    keys = ("taxable_value", "cgst", "sgst", "igst", "round_off", "total")
+    keys = ("taxable_value", "cgst", "sgst", "igst", "vat", "round_off", "total")
     totals = {k: round(sum(r[k] for r in rows), 2) for k in keys}
     return {"date_from": date_from, "date_to": date_to, "rows": rows, "totals": totals,
             "invoices": len(invoices), "credit_notes": len(notes)}
 
 
 def gstr1(db: Session, context: RequestContext, date_from: date, date_to: date) -> dict:
+    india_only(db, context, "GSTR-1")
     _period(date_from, date_to)
     invoices, notes = _documents(db, context, date_from, date_to)
     b2b, b2cl, cdnr, cdnur = [], [], [], []
@@ -184,6 +192,7 @@ def tds_report(db: Session, context: RequestContext, date_from: date, date_to: d
     from app.models.documents import Receipt, ReceiptAllocation
     from app.models.sales import Customer
 
+    india_only(db, context, "The TDS report")
     _period(date_from, date_to)
     rows = db.execute(
         select(ReceiptAllocation, Receipt, Invoice, Customer)
@@ -212,6 +221,10 @@ COLUMNS = {
                  ("gstin", "GSTIN"), ("place_of_supply", "Place of supply"), ("taxable_value", "Taxable value"),
                  ("cgst", "CGST"), ("sgst", "SGST"), ("igst", "IGST"), ("round_off", "Round off"),
                  ("total", "Total")],
+    # Saudi Arabia: one VAT column, the buyer's VAT number.
+    "register_vat": [("date", "Date"), ("type", "Type"), ("number", "Number"), ("customer", "Customer"),
+                     ("vat_number", "VAT number"), ("taxable_value", "Taxable value"), ("vat", "VAT"),
+                     ("total", "Total")],
     "b2b": [("gstin", "GSTIN/UIN of Recipient"), ("receiver_name", "Receiver Name"),
             ("invoice_number", "Invoice Number"), ("invoice_date", "Invoice date"),
             ("invoice_value", "Invoice Value"), ("place_of_supply", "Place Of Supply"),

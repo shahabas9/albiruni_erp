@@ -17,14 +17,16 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
-from app.domain import crm_service, history
+from app.domain import crm_service, history, regimes
 from app.domain.customer_service import get_customer
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.invoice_service import balance
 from app.domain.sales_service import next_document_number
 from app.models.documents import Invoice, Receipt, ReceiptAllocation
 from app.models.sales import Customer
+from app.models.tenant import Company
 
 MODES = ("Cash", "UPI", "Bank transfer", "Cheque", "Card", "Other")
 # Section 269ST of the Income Tax Act: no cash receipt of ₹2 lakh or more.
@@ -108,6 +110,9 @@ def _apply(db: Session, context: RequestContext, receipt: Receipt, allocations: 
             plan.append((invoice, take))
             available -= take
         return [_allocate(db, receipt, inv, amt) for inv, amt in plan]
+    if any(Decimal(str(a.get("tds_amount") or 0)) > 0 for a in allocations) and \
+            regimes.of(db.get(Company, context.company_id)).country != "IN":
+        raise ConflictError("Tax deducted at source (TDS) applies to Indian companies only.")
     if any(Decimal(str(a.get("tds_amount") or 0)) > 0 for a in allocations) and not receipt.tds_section:
         raise ConflictError("Say which TDS section the customer deducted under (e.g. 194Q, 194C, 194J).")
 
@@ -123,7 +128,7 @@ def _apply(db: Session, context: RequestContext, receipt: Receipt, allocations: 
             wanted[key] = wanted.get(key, ZERO) + amount
             tds[key] = tds.get(key, ZERO) + deducted
     if sum(wanted.values(), ZERO) > available:
-        raise ConflictError(f"Only ₹{float(available):,.2f} of this payment is left to allocate.")
+        raise ConflictError(f"Only {cur(context)}{float(available):,.2f} of this payment is left to allocate.")
     invoices = db.execute(
         select(Invoice).where(Invoice.id.in_(wanted), Invoice.tenant_id == context.tenant_id,
                               Invoice.company_id == context.company_id).order_by(Invoice.id).with_for_update()
@@ -141,10 +146,10 @@ def _apply(db: Session, context: RequestContext, receipt: Receipt, allocations: 
             raise ConflictError("Payments go against issued invoices, not drafts.")
         if amount + tds[invoice_id] > balance(invoice):
             what = "paid and deducted" if tds[invoice_id] else "to pay"
-            raise ConflictError(f"{invoice.number} only has ₹{float(balance(invoice)):,.2f} left — "
-                                f"₹{float(amount + tds[invoice_id]):,.2f} {what} is more.")
+            raise ConflictError(f"{invoice.number} only has {cur(context)}{float(balance(invoice)):,.2f} left — "
+                                f"{cur(context)}{float(amount + tds[invoice_id]):,.2f} {what} is more.")
         if tds[invoice_id] > Decimal(str(invoice.grand_total)) * Decimal("0.2"):
-            raise ConflictError(f"₹{float(tds[invoice_id]):,.2f} TDS is more than 20% of {invoice.number} — check the figure.")
+            raise ConflictError(f"{cur(context)}{float(tds[invoice_id]):,.2f} TDS is more than 20% of {invoice.number} — check the figure.")
         applied.append(_allocate(db, receipt, invoice, amount, tds[invoice_id]))
     return applied
 
@@ -161,8 +166,8 @@ def _allocate(db: Session, receipt: Receipt, invoice: Invoice, amount: Decimal, 
 def _record_history(db: Session, context: RequestContext, receipt: Receipt, applied: list[tuple]) -> None:
     for invoice, amount, tds in applied:
         history.record(db, context, "invoice", invoice.id, "paid",
-                       f"₹{float(amount):,.2f} received on {receipt.number} ({receipt.mode})"
-                       + (f", ₹{float(tds):,.2f} TDS deducted ({receipt.tds_section})" if tds else ""))
+                       f"{cur(context)}{float(amount):,.2f} received on {receipt.number} ({receipt.mode})"
+                       + (f", {cur(context)}{float(tds):,.2f} TDS deducted ({receipt.tds_section})" if tds else ""))
 
 
 def record_receipt(
@@ -175,7 +180,7 @@ def record_receipt(
         raise ConflictError("The amount must be more than zero.")
     if mode not in MODES:
         raise ConflictError(f"Mode must be one of: {', '.join(MODES)}.")
-    if mode == "Cash" and value >= CASH_LIMIT:
+    if mode == "Cash" and value >= CASH_LIMIT and context.currency == "INR":
         raise ConflictError("Cash receipts of ₹2,00,000 or more aren't allowed (Income Tax Act, section 269ST).")
     if mode in ("Cheque", "Bank transfer", "UPI") and not reference.strip():
         raise ConflictError(f"Enter the {'cheque number' if mode == 'Cheque' else 'transaction reference (UTR)'}.")
@@ -194,9 +199,9 @@ def record_receipt(
     _record_history(db, context, receipt, applied)
     left = unallocated(receipt)
     history.record(db, context, "customer", customer.id, "payment",
-                   f"Payment {receipt.number}: ₹{float(value):,.2f} by {mode.lower()}"
-                   + (f" plus ₹{float(receipt.tds_amount):,.2f} TDS" if receipt.tds_amount else "")
-                   + (f", ₹{float(left):,.2f} kept as advance" if left > 0 else ""))
+                   f"Payment {receipt.number}: {cur(context)}{float(value):,.2f} by {mode.lower()}"
+                   + (f" plus {cur(context)}{float(receipt.tds_amount):,.2f} TDS" if receipt.tds_amount else "")
+                   + (f", {cur(context)}{float(left):,.2f} kept as advance" if left > 0 else ""))
     db.flush()
     return receipt
 
@@ -234,12 +239,12 @@ def void_receipt(db: Session, context: RequestContext, receipt_id: UUID, reason:
         invoice.amount_tds = Decimal(str(invoice.amount_tds or 0)) - Decimal(str(a.tds_amount or 0))
         back = Decimal(str(a.amount)) + Decimal(str(a.tds_amount or 0))
         history.record(db, context, "invoice", invoice.id, "payment_voided",
-                       f"Payment {receipt.number} voided — {reason}; ₹{float(back):,.2f} owed again")
+                       f"Payment {receipt.number} voided — {reason}; {cur(context)}{float(back):,.2f} owed again")
     receipt.allocations.clear()
     receipt.tds_amount = 0
     receipt.status, receipt.void_reason = "Voided", reason[:200]
     history.record(db, context, "customer", receipt.customer_id, "payment_voided",
-                   f"Payment {receipt.number} (₹{float(receipt.amount):,.2f}) voided — {reason}")
+                   f"Payment {receipt.number} ({cur(context)}{float(receipt.amount):,.2f}) voided — {reason}")
     db.flush()
     return receipt
 

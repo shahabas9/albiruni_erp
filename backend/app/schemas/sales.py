@@ -59,6 +59,7 @@ class QuotationLineOut(BaseModel):
     line_total: float
     hsn_code: str = ""
     gst_rate: float = 0
+    tax_category: str = ""
     discount_pct: float = 0
     taxable_value: float = 0
     tax_amount: float = 0
@@ -78,6 +79,7 @@ class QuotationOut(BaseModel):
     cgst: float = 0
     sgst: float = 0
     igst: float = 0
+    vat: float = 0
     round_off: float = 0
     grand_total: float = 0
     status: str
@@ -115,10 +117,25 @@ class CompanyProfile(BaseModel):
     """The seller's details printed on tax invoices, plus sales defaults."""
 
     name: str
+    # Where the company is registered; decides its tax regime. Fixed once it has sales documents.
+    country: str = "IN"
+    currency: str = "INR"
+    fy_start_month: int = Field(default=4, ge=1, le=12)
+    country_locked: bool = False
+    # What this country's regime uses, for forms: tax name, rates, categories, rounding.
+    regime: dict = {}
     legal_name: str = Field(default="", max_length=160)
+    name_ar: str = Field(default="", max_length=160)
     gstin: str = ""
     state_code: str = ""
+    vat_number: str = ""
+    cr_number: str = ""
     address: str = Field(default="", max_length=600)
+    building_no: str = ""
+    street: str = Field(default="", max_length=160)
+    district: str = Field(default="", max_length=120)
+    city: str = Field(default="", max_length=120)
+    postal_code: str = ""
     phone: str = Field(default="", max_length=40)
     email: str = Field(default="", max_length=160)
     bank_details: str = Field(default="", max_length=600)
@@ -132,10 +149,20 @@ class CompanyProfile(BaseModel):
 
 
 class CompanyProfileUpdate(BaseModel):
+    country: str | None = None
+    fy_start_month: int | None = Field(default=None, ge=1, le=12)
     legal_name: str | None = Field(default=None, max_length=160)
+    name_ar: str | None = Field(default=None, max_length=160)
     gstin: str | None = None
     state_code: str | None = None
+    vat_number: str | None = None
+    cr_number: str | None = None
     address: str | None = Field(default=None, max_length=600)
+    building_no: str | None = None
+    street: str | None = Field(default=None, max_length=160)
+    district: str | None = Field(default=None, max_length=120)
+    city: str | None = Field(default=None, max_length=120)
+    postal_code: str | None = None
     phone: str | None = Field(default=None, max_length=40)
     email: str | None = Field(default=None, max_length=160)
     bank_details: str | None = Field(default=None, max_length=600)

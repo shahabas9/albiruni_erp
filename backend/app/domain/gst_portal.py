@@ -121,7 +121,7 @@ def einvoice_for_invoice(invoice: Invoice) -> tuple[dict, list[str]]:
                     "TotInvVal": _money(invoice.grand_total)},
     }
     if not invoice.seller_gstin:
-        problems.append("Your company's GSTIN isn't set (Sales → Company & GST).")
+        problems.append("Your company's GSTIN isn't set (Sales → Company & Tax).")
     if interstate and invoice.igst == 0 and invoice.total > 0:
         problems.append("Interstate supply without IGST — check the place of supply.")
     return payload, list(dict.fromkeys(problems))

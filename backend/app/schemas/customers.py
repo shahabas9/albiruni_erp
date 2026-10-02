@@ -29,6 +29,17 @@ class CustomerIn(BaseModel):
     phone: str = Field(default="", max_length=40)
     # Agreed prices; none means the company's default list, else item prices.
     price_list_id: UUID | None = None
+    # "" = the company's own country; another two-letter code makes sales to them exports.
+    country: str = Field(default="", max_length=2)
+    # Saudi Arabia: VAT number (15 digits) — a buyer with one gets standard (B2B) tax invoices —
+    # Arabic name and national address.
+    vat_number: str = Field(default="", max_length=20)
+    name_ar: str = Field(default="", max_length=160)
+    building_no: str = Field(default="", max_length=10)
+    street: str = Field(default="", max_length=160)
+    district: str = Field(default="", max_length=120)
+    city: str = Field(default="", max_length=120)
+    postal_code: str = Field(default="", max_length=10)
 
     _gstin = field_validator("gstin")(normalize_gstin)
     _state = field_validator("state_code")(_state)
@@ -50,6 +61,17 @@ class CustomerUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=40)
     # Sending null takes the customer off their list.
     price_list_id: UUID | None = None
+    # "" = the company's own country; another two-letter code makes sales to them exports.
+    country: str | None = Field(default=None, max_length=2)
+    # Saudi Arabia: VAT number (15 digits) — a buyer with one gets standard (B2B) tax invoices —
+    # Arabic name and national address.
+    vat_number: str | None = Field(default=None, max_length=20)
+    name_ar: str | None = Field(default=None, max_length=160)
+    building_no: str | None = Field(default=None, max_length=10)
+    street: str | None = Field(default=None, max_length=160)
+    district: str | None = Field(default=None, max_length=120)
+    city: str | None = Field(default=None, max_length=120)
+    postal_code: str | None = Field(default=None, max_length=10)
 
     _state = field_validator("state_code")(_state)
 
@@ -74,3 +96,11 @@ class CustomerOut(BaseModel):
     email: str = ""
     phone: str = ""
     price_list_id: UUID | None = None
+    country: str = ""
+    vat_number: str = ""
+    name_ar: str = ""
+    building_no: str = ""
+    street: str = ""
+    district: str = ""
+    city: str = ""
+    postal_code: str = ""

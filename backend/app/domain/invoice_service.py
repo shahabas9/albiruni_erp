@@ -14,8 +14,9 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
-from app.domain import crm_service, history, tax
+from app.domain import crm_service, history, regimes, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.order_service import OPEN_STATUSES, get_order
 from app.domain.sales_service import next_document_number
@@ -98,19 +99,20 @@ def _default_qty(line) -> Decimal:
 
 
 def _price(invoice: Invoice, company: Company) -> None:
-    interstate = bool(company.state_code) and bool(invoice.place_of_supply) and (
+    regime = regimes.of(company)
+    interstate = regime.split_by_state and bool(company.state_code) and bool(invoice.place_of_supply) and (
         invoice.place_of_supply != company.state_code
     )
     worked = tax.compute(
         [tax.LineIn(Decimal(str(l.qty)), Decimal(str(l.unit_price)), Decimal(str(l.gst_rate)),
                     Decimal(str(l.discount_pct or 0))) for l in invoice.lines],
-        invoice.discount_pct, interstate,
+        invoice.discount_pct, interstate, vat=not regime.split_by_state, round_to_unit=regime.round_to_unit,
     )
     for line, parts in zip(invoice.lines, worked.lines):
         line.amount, line.taxable_value = parts.amount, parts.taxable
-        line.cgst, line.sgst, line.igst = parts.cgst, parts.sgst, parts.igst
+        line.cgst, line.sgst, line.igst, line.vat = parts.cgst, parts.sgst, parts.igst, parts.vat
     invoice.subtotal, invoice.total = worked.subtotal, worked.taxable
-    invoice.cgst, invoice.sgst, invoice.igst = worked.cgst, worked.sgst, worked.igst
+    invoice.cgst, invoice.sgst, invoice.igst, invoice.vat = worked.cgst, worked.sgst, worked.igst, worked.vat
     invoice.round_off, invoice.grand_total = worked.round_off, worked.grand_total
 
 
@@ -157,6 +159,7 @@ def create_draft(db: Session, context: RequestContext, order_id: UUID, lines: li
         invoice.lines.append(InvoiceLine(
             position=position, order_line_id=line.id, item_id=line.item_id, description=line.description,
             hsn_code=line.hsn_code, uom=line.uom, qty=qty, unit_price=line.unit_price, gst_rate=line.gst_rate,
+            tax_category=line.tax_category,
             discount_pct=line.discount_pct, credited_qty=0,
         ))
     _price(invoice, company)
@@ -176,11 +179,26 @@ def delete_draft(db: Session, context: RequestContext, invoice_id: UUID) -> None
     db.commit()
 
 
+def national_address(party) -> str:
+    """A structured (Saudi national) address as printable lines."""
+
+    first = " ".join(p for p in (party.building_no, party.street) if p)
+    last = " ".join(p for p in (party.city, party.postal_code) if p)
+    return "\n".join(p for p in (first, party.district, last) if p)
+
+
 def missing_seller_details(company: Company) -> list[str]:
-    return [label for label, value in (
-        ("legal name", company.legal_name), ("GSTIN", company.gstin), ("state", company.state_code),
-        ("address", company.address),
-    ) if not value]
+    """What a tax invoice needs from the seller, by country."""
+
+    if regimes.of(company).country == "SA":
+        needed = (("legal name", company.legal_name), ("VAT number", company.vat_number),
+                  ("CR number", company.cr_number), ("street", company.street),
+                  ("building number", company.building_no), ("district", company.district), ("city", company.city),
+                  ("postal code", company.postal_code))
+    else:
+        needed = (("legal name", company.legal_name), ("GSTIN", company.gstin), ("state", company.state_code),
+                  ("address", company.address))
+    return [label for label, value in needed if not value]
 
 
 def issue(db: Session, context: RequestContext, invoice_id: UUID, invoice_date: date | None = None) -> Invoice:
@@ -194,14 +212,15 @@ def issue(db: Session, context: RequestContext, invoice_id: UUID, invoice_date: 
     company = db.get(Company, context.company_id)
     missing = missing_seller_details(company)
     if missing:
-        raise ConflictError(f"Fill in your company's {', '.join(missing)} (Sales → Company & GST) before issuing.")
+        raise ConflictError(f"Fill in your company's {', '.join(missing)} (Sales → Company & Tax) before issuing.")
     day = invoice_date or date.today()
     if day > date.today():
         raise ConflictError("An invoice can't be dated in the future.")
     last = db.execute(select(func.max(Invoice.invoice_date)).where(
         Invoice.tenant_id == context.tenant_id, Invoice.status == "Issued",
     )).scalar_one()
-    if last and tax.fy_start_year(last) == tax.fy_start_year(day) and day < last:
+    start_month = company.fy_start_month or 4
+    if last and tax.fy_start_year(last, start_month) == tax.fy_start_year(day, start_month) and day < last:
         raise ConflictError(f"Invoices are numbered in date order; the last one is dated {last:%d %b %Y}.")
 
     by_id = {l.id: l for l in order.lines}
@@ -224,17 +243,22 @@ def issue(db: Session, context: RequestContext, invoice_id: UUID, invoice_date: 
     invoice.status = "Issued"
     invoice.issued_by, invoice.issued_at = context.user.id, crm_service.now_utc()
     invoice.seller_name, invoice.seller_gstin = company.legal_name, company.gstin
-    invoice.seller_state, invoice.seller_address = company.state_code, company.address
+    invoice.seller_state, invoice.seller_address = company.state_code, company.address or national_address(company)
     invoice.buyer_name, invoice.buyer_gstin, invoice.buyer_state = customer.name, customer.gstin or "", customer.state_code or ""
+    if regimes.of(company).country == "SA":
+        # B2B with a VAT-registered buyer is a standard tax invoice (cleared by ZATCA); otherwise simplified.
+        invoice.seller_vat_number, invoice.buyer_vat_number = company.vat_number, customer.vat_number or ""
+        invoice.invoice_kind = "standard" if customer.vat_number else "simplified"
+        invoice.seller_gstin = invoice.buyer_gstin = invoice.seller_state = invoice.buyer_state = ""
     invoice.terms, invoice.bank_details = company.invoice_terms, company.bank_details
     _price(invoice, company)  # the company's state could have been set since the draft
 
     history.record(db, context, "invoice", invoice.id, "status_changed", f"Issued as {invoice.number}",
                    {"status": ["Draft", "Issued"]})
     history.record(db, context, "sales_order", order.id, "invoiced",
-                   f"Invoice {invoice.number} issued (₹{float(invoice.grand_total):,.2f})")
+                   f"Invoice {invoice.number} issued ({cur(context)}{float(invoice.grand_total):,.2f})")
     history.record(db, context, "customer", customer.id, "invoiced",
-                   f"Invoice {invoice.number} issued — ₹{float(invoice.grand_total):,.0f}, due {invoice.due_date:%d %b %Y}")
+                   f"Invoice {invoice.number} issued — {cur(context)}{float(invoice.grand_total):,.0f}, due {invoice.due_date:%d %b %Y}")
     db.flush()
     return invoice
 
@@ -246,9 +270,9 @@ def hsn_summary(invoice: Invoice) -> list[dict]:
     for l in invoice.lines:
         key = (l.hsn_code or "—", float(l.gst_rate))
         row = rows.setdefault(key, {"hsn_code": key[0], "gst_rate": key[1], "qty": 0.0, "taxable_value": 0.0,
-                                    "cgst": 0.0, "sgst": 0.0, "igst": 0.0})
+                                    "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "vat": 0.0})
         row["qty"] += float(l.qty)
-        for k in ("taxable_value", "cgst", "sgst", "igst"):
+        for k in ("taxable_value", "cgst", "sgst", "igst", "vat"):
             row[k] = round(row[k] + float(getattr(l, k)), 2)
     return list(rows.values())
 

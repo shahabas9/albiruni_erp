@@ -48,6 +48,7 @@ def to_quotation_out(q: Quotation, order: tuple[UUID, str] | None = None) -> Quo
         cgst=float(q.cgst),
         sgst=float(q.sgst),
         igst=float(q.igst),
+        vat=float(q.vat or 0),
         round_off=float(q.round_off),
         grand_total=float(q.grand_total),
         status=q.status,
@@ -71,6 +72,7 @@ def to_quotation_out(q: Quotation, order: tuple[UUID, str] | None = None) -> Quo
                 line_total=float(line.line_total),
                 hsn_code=line.hsn_code or "",
                 gst_rate=float(line.gst_rate),
+                tax_category=line.tax_category or "",
                 discount_pct=float(line.discount_pct or 0),
                 taxable_value=float(line.taxable_value),
                 tax_amount=float(line.tax_amount),
@@ -200,7 +202,7 @@ def create_quotation(
     )
 
 
-# --- Company & GST ---------------------------------------------------------------
+# --- Company & Tax ---------------------------------------------------------------
 
 
 @router.get("/states", response_model=list[StateOut])

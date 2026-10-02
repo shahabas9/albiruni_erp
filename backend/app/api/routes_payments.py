@@ -9,6 +9,7 @@ from app.core.deps import RequestContext, require_permission
 from app.domain import crm_service, payment_service, refund_service, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import Receipt, Refund
+from app.models.tenant import Company
 from app.models.identity import User
 from app.schemas.orders import ReasonIn
 from app.schemas.payments import (
@@ -37,7 +38,7 @@ def receipt_out(db: Session, r: Receipt) -> ReceiptOut:
         status=r.status, void_reason=r.void_reason, tds_amount=float(r.tds_amount or 0), tds_section=r.tds_section,
         tds_certificate_received=r.tds_certificate_received, allocated=float(payment_service.allocated(r)),
         unallocated=float(payment_service.unallocated(r)), refunded=float(r.amount_refunded or 0),
-        amount_in_words=tax.amount_in_words(r.amount),
+        amount_in_words=tax.amount_in_words(r.amount, getattr(db.get(Company, r.company_id), "currency", None) or "INR"),
         created_by_name=by.display_name if by else None, created_at=r.created_at,
         allocations=[AllocationOut(invoice_id=a.invoice_id, invoice_number=a.invoice.number, amount=float(a.amount),
                                    tds_amount=float(a.tds_amount or 0)) for a in r.allocations],

@@ -18,13 +18,15 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
-from app.domain import crm_service, history, stock_service, tax
+from app.domain import crm_service, history, regimes, stock_service, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.invoice_service import get_invoice
 from app.domain.sales_service import next_document_number
 from app.models.documents import CreditNote, CreditNoteLine
 from app.models.sales import Customer
+from app.models.tenant import Company
 
 KINDS = ("Return", "Price correction")
 
@@ -64,11 +66,16 @@ def list_credit_notes(
     return crm_service.page(db, stmt.order_by(CreditNote.note_date.desc(), CreditNote.number.desc()), limit, offset)
 
 
-def _split(taxable: Decimal, rate: Decimal, interstate: bool) -> tuple[Decimal, Decimal, Decimal]:
+def _split(taxable: Decimal, rate: Decimal, interstate: bool, vat: bool = False) -> tuple[Decimal, ...]:
+    """(cgst, sgst, igst, vat) for a credited amount."""
+
+    zero = Decimal("0.00")
+    if vat:
+        return zero, zero, zero, tax.money(taxable * rate / 100)
     if interstate:
-        return Decimal("0.00"), Decimal("0.00"), tax.money(taxable * rate / 100)
+        return zero, zero, tax.money(taxable * rate / 100), zero
     half = tax.money(taxable * rate / 200)
-    return half, half, Decimal("0.00")
+    return half, half, zero, zero
 
 
 def create_credit_note(
@@ -88,7 +95,8 @@ def create_credit_note(
     day = note_date or date.today()
     if day > date.today() or day < invoice.invoice_date:
         raise ConflictError("The credit note's date must be between the invoice date and today.")
-    if day > deadline(invoice.invoice_date):
+    regime = regimes.of(db.get(Company, context.company_id))
+    if regime.country == "IN" and day > deadline(invoice.invoice_date):
         raise ConflictError(
             f"GST allows credit notes against {invoice.number} only until {deadline(invoice.invoice_date):%d %b %Y}."
         )
@@ -128,14 +136,15 @@ def create_credit_note(
                 continue
         if taxable > value_left:
             raise ConflictError(
-                f"Only ₹{float(value_left):,.2f} of {line.description}'s value is left to credit."
+                f"Only {cur(context)}{float(value_left):,.2f} of {line.description}'s value is left to credit."
             )
         line.credited_value = Decimal(str(line.credited_value)) + taxable
         rate = Decimal(str(line.gst_rate))
-        cgst, sgst, igst = _split(taxable, rate, interstate)
+        cgst, sgst, igst, vat = _split(taxable, rate, interstate, vat=not regime.split_by_state)
         note.lines.append(CreditNoteLine(
             invoice_line_id=line.id, item_id=line.item_id, description=line.description, hsn_code=line.hsn_code,
-            uom=line.uom, qty=qty, gst_rate=rate, taxable_value=taxable, cgst=cgst, sgst=sgst, igst=igst,
+            uom=line.uom, qty=qty, gst_rate=rate, tax_category=line.tax_category, taxable_value=taxable, cgst=cgst,
+            sgst=sgst, igst=igst, vat=vat,
         ))
     if not note.lines:
         raise ConflictError("Enter a quantity or an amount for at least one line.")
@@ -144,13 +153,14 @@ def create_credit_note(
     cgst = sum((Decimal(str(l.cgst)) for l in note.lines), Decimal("0.00"))
     sgst = sum((Decimal(str(l.sgst)) for l in note.lines), Decimal("0.00"))
     igst = sum((Decimal(str(l.igst)) for l in note.lines), Decimal("0.00"))
-    exact = taxable + cgst + sgst + igst
-    grand = exact.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    vat = sum((Decimal(str(l.vat)) for l in note.lines), Decimal("0.00"))
+    exact = taxable + cgst + sgst + igst + vat
+    grand = exact.quantize(Decimal("1"), rounding=ROUND_HALF_UP) if regime.round_to_unit else exact
     # A last credit that clears the invoice matches its total to the paisa.
     credited_before = Decimal(str(invoice.amount_credited))
     if credited_before + grand > Decimal(str(invoice.grand_total)):
         grand = Decimal(str(invoice.grand_total)) - credited_before
-    note.total, note.cgst, note.sgst, note.igst = taxable, cgst, sgst, igst
+    note.total, note.cgst, note.sgst, note.igst, note.vat = taxable, cgst, sgst, igst, vat
     note.round_off, note.grand_total = grand - exact, grand
     invoice.amount_credited = credited_before + grand
     db.add(note)
@@ -164,10 +174,10 @@ def create_credit_note(
 
     what = f"{kind.lower()} — {reason}" + (" (goods back in stock)" if note.restocked else "")
     history.record(db, context, "invoice", invoice.id, "credited",
-                   f"Credit note {note.number} for ₹{float(grand):,.2f}: {what}")
+                   f"Credit note {note.number} for {cur(context)}{float(grand):,.2f}: {what}")
     history.record(db, context, "credit_note", note.id, "created", f"Against {invoice.number}: {what}")
     history.record(db, context, "customer", invoice.customer_id, "credited",
-                   f"Credit note {note.number} for ₹{float(grand):,.0f} against {invoice.number}")
+                   f"Credit note {note.number} for {cur(context)}{float(grand):,.0f} against {invoice.number}")
     db.flush()
     return note
 

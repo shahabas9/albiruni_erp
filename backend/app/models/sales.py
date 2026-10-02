@@ -26,6 +26,17 @@ class Customer(Base):
     custom: Mapped[dict] = mapped_column(JSONB, default=dict)
     billing_address: Mapped[str] = mapped_column(Text, default="")
     shipping_address: Mapped[str] = mapped_column(Text, default="")
+    # "" = the company's own country; else a two-letter code (sales abroad are exports).
+    country: Mapped[str] = mapped_column(String(2), default="", server_default="")
+    # Saudi VAT registration number (15 digits) and Arabic name for bilingual invoices.
+    vat_number: Mapped[str] = mapped_column(String(15), default="", server_default="")
+    name_ar: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    # Structured address (required on Saudi standard invoices; PIN / postal code in both countries).
+    building_no: Mapped[str] = mapped_column(String(10), default="", server_default="")
+    street: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    district: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    city: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    postal_code: Mapped[str] = mapped_column(String(10), default="", server_default="")
     # GST state code (place of supply). Taken from the GSTIN when there is one.
     state_code: Mapped[str] = mapped_column(String(2), default="")
     # Where invoices, statements and payment reminders go.
@@ -53,8 +64,13 @@ class Item(Base):
     # "goods" move stock when delivered; "service" never does.
     kind: Mapped[str] = mapped_column(String(10), default="goods")
     hsn_code: Mapped[str] = mapped_column(String(8), default="")
-    # None until someone sets it; invoices refuse items without a rate.
+    # The item's tax rate (GST in India, VAT in Saudi Arabia). None until someone
+    # sets it; invoices refuse items without a rate.
     gst_rate: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    # Saudi Arabia: S standard, Z zero-rated, E exempt, O out of scope, and for
+    # Z/E/O the ZATCA exemption reason code. Unused in India.
+    tax_category: Mapped[str] = mapped_column(String(1), default="", server_default="")
+    exemption_reason: Mapped[str] = mapped_column(String(20), default="", server_default="")
 
 
 class Quotation(Base):
@@ -79,6 +95,7 @@ class Quotation(Base):
     cgst: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     sgst: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     igst: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    vat: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")  # Saudi VAT
     round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
     # What the customer pays: total + GST, rounded to the rupee.
     grand_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
@@ -110,6 +127,8 @@ class QuotationLine(Base):
     line_total: Mapped[float] = mapped_column(Numeric(14, 2))
     hsn_code: Mapped[str] = mapped_column(String(8), default="")
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    # ZATCA category (S, Z, E, O) in Saudi Arabia; "" in India.
+    tax_category: Mapped[str] = mapped_column(String(1), default="", server_default="")
     discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     taxable_value: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     tax_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)

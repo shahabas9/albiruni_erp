@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import cur
 from app.ai import crm_parser
 from app.core.deps import RequestContext
 from app.domain import activity_service, crm_service, export_service, fields, opportunity_service, target_service
@@ -178,7 +179,7 @@ def list_stale_deals(db: Session, context: RequestContext, args: dict[str, Any])
         "items": [
             {
                 "title": o.name,
-                "subtitle": f"{o.stage} · ₹{float(o.value):,.0f} · idle {s['idle_days']} days",
+                "subtitle": f"{o.stage} · {cur(context)}{float(o.value):,.0f} · idle {s['idle_days']} days",
                 "tone": "warn",
                 "link": f"/crm?opp={o.id}",
             }
@@ -211,13 +212,13 @@ def pipeline_summary(db: Session, context: RequestContext, args: dict[str, Any])
     ).all())
     whose = "Your" if _mine(context, args) else "The team's"
     message = (
-        f"{whose} pipeline: {_n(open_count, 'open deal')} worth ₹{total:,.0f}, weighted forecast ₹{weighted:,.0f}. "
+        f"{whose} pipeline: {_n(open_count, 'open deal')} worth {cur(context)}{total:,.0f}, weighted forecast {cur(context)}{weighted:,.0f}. "
         f"Last 30 days: {closed.get('Won', 0)} won, {closed.get('Lost', 0)} lost."
     )
     items = [
         {
             "title": stage,
-            "subtitle": f"{count} deal{'s' if count != 1 else ''} · ₹{value:,.0f}",
+            "subtitle": f"{count} deal{'s' if count != 1 else ''} · {cur(context)}{value:,.0f}",
             "tone": None,
             "link": "/crm",
         }
@@ -237,8 +238,8 @@ def export_records(db: Session, context: RequestContext, args: dict[str, Any]) -
             "result_summary": f"Exported {count} {args['kind']} (filters: {filters})"}
 
 
-def _inr(value: float) -> str:
-    return f"₹{value:,.0f}"
+def _inr(context: RequestContext, value: float) -> str:
+    return f"{cur(context)}{value:,.0f}"
 
 
 def target_progress(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -251,18 +252,18 @@ def target_progress(db: Session, context: RequestContext, args: dict[str, Any]) 
         won, target, forecast = (me["won_value"], me["target"], me["forecast"]) if me else (0.0, 0.0, 0.0)
         if target:
             gap = max(target - won, 0)
-            message = (f"You've won {_inr(won)} of your {_inr(target)} target for {label} ({round(won / target * 100)}%)."
-                       + (f" {_inr(gap)} to go; deals expected to close this month add {_inr(forecast)} (weighted)."
+            message = (f"You've won {_inr(context, won)} of your {_inr(context, target)} target for {label} ({round(won / target * 100)}%)."
+                       + (f" {_inr(context, gap)} to go; deals expected to close this month add {_inr(context, forecast)} (weighted)."
                           if gap else " Target reached. 🎉"))
         else:
-            message = f"No target is set for you in {label}. You've won {_inr(won)} so far."
+            message = f"No target is set for you in {label}. You've won {_inr(context, won)} so far."
         return {"message": message, "items": [], "link": link, "result_summary": message}
     rows = sorted(report["rows"], key=lambda r: (r["pct"] is None, -(r["pct"] or 0)))
     team = report["team_pct"]
-    message = (f"The team has won {_inr(report['team_won'])} of {_inr(report['team_target'])} for {label} ({team}%)."
-               if report["team_target"] else f"No targets set for {label}; the team has won {_inr(report['team_won'])}.")
+    message = (f"The team has won {_inr(context, report['team_won'])} of {_inr(context, report['team_target'])} for {label} ({team}%)."
+               if report["team_target"] else f"No targets set for {label}; the team has won {_inr(context, report['team_won'])}.")
     items = [
-        {"title": r["name"], "subtitle": f"{_inr(r['won_value'])} of {_inr(r['target'])}" + (f" · {r['pct']}%" if r["pct"] is not None else " · no target"),
+        {"title": r["name"], "subtitle": f"{_inr(context, r['won_value'])} of {_inr(context, r['target'])}" + (f" · {r['pct']}%" if r["pct"] is not None else " · no target"),
          "tone": None if (r["pct"] or 0) >= 60 else "bad", "link": "/crm/targets"}
         for r in rows[:12]
     ]
@@ -334,7 +335,7 @@ def find_records(db: Session, context: RequestContext, args: dict[str, Any]) -> 
             items.append({"title": r.company_name or r.name, "subtitle": " · ".join(filter(None, [r.status, r.phone])),
                           "tone": None, "link": f"/leads?lead={r.id}"})
         elif kind == "opportunity":
-            items.append({"title": r.name, "subtitle": f"{r.stage} · {_inr(float(r.value))}", "tone": None,
+            items.append({"title": r.name, "subtitle": f"{r.stage} · {_inr(context, float(r.value))}", "tone": None,
                           "link": f"/crm?opp={r.id}"})
         else:
             items.append({"title": r.name, "subtitle": ", ".join(r.tags or []) or "—", "tone": None,

@@ -13,6 +13,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
 from app.domain import crm_service, delivery_service, invoice_service, order_service, payment_service
 from app.domain.errors import ConflictError
@@ -51,7 +52,7 @@ def quick_sale(
         amount = Decimal(str(payment["amount"])).quantize(Decimal("0.01"))
         total = Decimal(str(invoice.grand_total))
         if amount > total:
-            raise ConflictError(f"The bill is ₹{float(total):,.2f} — give change for the rest rather than recording it.")
+            raise ConflictError(f"The bill is {cur(context)}{float(total):,.2f} — give change for the rest rather than recording it.")
         receipt = payment_service.record_receipt(
             db, context, customer_id=customer_id, amount=float(amount), mode=payment["mode"], receipt_date=None,
             reference=payment.get("reference", ""), notes="Counter sale",

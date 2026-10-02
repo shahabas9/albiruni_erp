@@ -18,6 +18,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import symbol
 from app.core.deps import RequestContext
 from app.domain import crm_service, history, notifications, share_service
 from app.domain.invoice_service import balance
@@ -59,9 +60,9 @@ def stage_due(invoice: Invoice, company: Company, today: date) -> int | None:
     return None if latest in (invoice.reminder_offsets_sent or []) else latest
 
 
-def reminder_text(invoice: Invoice, today: date | None = None) -> str:
+def reminder_text(invoice: Invoice, today: date | None = None, currency: str = "INR") -> str:
     today = today or date.today()
-    owed = f"₹{float(balance(invoice)):,.2f}"
+    owed = f"{symbol(currency)}{float(balance(invoice)):,.2f}"
     days = (invoice.due_date - today).days
     if days > 0:
         when = f"is due on {invoice.due_date:%d %b %Y}, in {days} day{'' if days == 1 else 's'}"
@@ -92,14 +93,14 @@ def send_due_reminders(db: Session, today: date | None = None, send=None) -> int
             .with_for_update(of=Invoice, skip_locked=True)
         ).all()
         context = RequestContext(user=None, tenant_id=company.tenant_id, company_id=company.id, permissions=[],
-                                 locale="en-IN", channel="reminder")
+                                 locale="en-IN", channel="reminder", currency=company.currency or "INR")
         for invoice, customer in rows:
             stage = stage_due(invoice, company, today)
             if stage is None:
                 continue
             url = share_service.link(share_service.make_token(context, "invoice", invoice.id))
             seller = company.legal_name or company.name
-            body = (f"Dear {customer.name},\n\n{reminder_text(invoice, today)}\n\nView the invoice: {url}\n\n"
+            body = (f"Dear {customer.name},\n\n{reminder_text(invoice, today, context.currency)}\n\nView the invoice: {url}\n\n"
                     + (f"Our bank details:\n{company.bank_details}\n\n" if company.bank_details else "") + f"— {seller}")
             try:
                 send(customer.email, f"Payment reminder: invoice {invoice.number} from {seller}", body)

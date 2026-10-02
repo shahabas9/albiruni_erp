@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import SUPER_ADMIN_PERMISSION
 from app.core.security import create_access_token, hash_password
+from app.domain import regimes
 from app.domain.identity_service import user_payload
 from app.models.identity import Role, User
 from app.models.tenant import Company, Tenant
@@ -56,7 +57,9 @@ def bootstrap(body: BootstrapRequest, db: Session = Depends(get_db)):
     db.add(tenant)
     db.flush()
 
-    company = Company(tenant_id=tenant.id, name=body.company_name, code=_slug(body.company_name), currency="INR")
+    regime = regimes.REGIMES[body.country]
+    company = Company(tenant_id=tenant.id, name=body.company_name, code=_slug(body.company_name), country=regime.country,
+                      currency=regime.currency, fy_start_month=regime.fy_start_month)
     db.add(company)
     db.flush()
 
@@ -71,7 +74,7 @@ def bootstrap(body: BootstrapRequest, db: Session = Depends(get_db)):
         username=body.username,
         display_name=body.admin_name,
         hashed_password=hash_password(body.password),
-        locale="en-IN",
+        locale="en-SA" if body.country == "SA" else "en-IN",
     )
     db.add(admin)
     db.commit()

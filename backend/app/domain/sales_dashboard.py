@@ -16,6 +16,7 @@ from app.domain import receivables, tax
 from app.domain.order_service import OPEN_STATUSES
 from app.models.documents import CreditNote, Invoice, Receipt, Refund, SalesOrder, SalesOrderLine
 from app.models.sales import Customer, Quotation
+from app.models.tenant import Company
 
 
 def _month_start(day: date, back: int = 0) -> date:
@@ -49,7 +50,8 @@ def dashboard(db: Session, context: RequestContext, today: date | None = None) -
                         Receipt.receipt_date >= this_start)
         refunded = _sum(db, Refund.amount, *mine(Refund), Refund.status == "Paid", Refund.refund_date >= this_start)
         aged = receivables.ageing(db, context, as_of=day)
-        fy_start = date(tax.fy_start_year(day), 4, 1)
+        start_month = db.get(Company, context.company_id).fy_start_month or 4
+        fy_start = tax.fy_start(day, start_month)
         top = db.execute(
             select(Customer.id, Customer.name, func.sum(Invoice.grand_total).label("value"))
             .join(Invoice, Invoice.customer_id == Customer.id)
@@ -66,7 +68,7 @@ def dashboard(db: Session, context: RequestContext, today: date | None = None) -
                 for r in aged["rows"] if r["overdue"] > 0][:5],
             "monthly": series,
             "top_customers": [{"customer_id": r.id, "name": r.name, "value": float(r.value)} for r in top],
-            "fy_label": tax.fy_label(day),
+            "fy_label": tax.fy_label(day, start_month),
         }
 
     if context.has_permission("sales.order.read"):

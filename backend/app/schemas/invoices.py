@@ -33,12 +33,14 @@ class InvoiceLineOut(BaseModel):
     qty: float
     unit_price: float
     gst_rate: float
+    tax_category: str = ""
     discount_pct: float = 0
     amount: float
     taxable_value: float
     cgst: float
     sgst: float
     igst: float
+    vat: float = 0
     credited_qty: float
     credited_value: float
 
@@ -46,11 +48,13 @@ class InvoiceLineOut(BaseModel):
 class HsnRow(BaseModel):
     hsn_code: str
     gst_rate: float
+    tax_category: str = ""
     qty: float
     taxable_value: float
     cgst: float
     sgst: float
     igst: float
+    vat: float = 0
 
 
 class InvoiceOut(BaseModel):
@@ -84,6 +88,7 @@ class InvoiceOut(BaseModel):
     cgst: float
     sgst: float
     igst: float
+    vat: float = 0
     round_off: float
     grand_total: float
     amount_in_words: str
@@ -98,6 +103,10 @@ class InvoiceOut(BaseModel):
     irn_ack_date: date | None = None
     eway_bill_no: str = ""
     eway_bill_date: date | None = None
+    # Saudi Arabia: standard (B2B) or simplified (B2C) tax invoice, and both VAT numbers.
+    invoice_kind: str = ""
+    seller_vat_number: str = ""
+    buyer_vat_number: str = ""
     balance: float
     notes: str
     terms: str
@@ -138,10 +147,12 @@ class CreditNoteLineOut(BaseModel):
     uom: str
     qty: float
     gst_rate: float
+    tax_category: str = ""
     taxable_value: float
     cgst: float
     sgst: float
     igst: float
+    vat: float = 0
 
 
 class CreditNoteOut(BaseModel):
@@ -167,6 +178,7 @@ class CreditNoteOut(BaseModel):
     cgst: float
     sgst: float
     igst: float
+    vat: float = 0
     round_off: float
     grand_total: float
     amount_in_words: str

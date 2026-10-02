@@ -42,7 +42,7 @@ PURPOSE = "document-share"
 def make_token(context: RequestContext, kind: str, doc_id: UUID, extra: dict | None = None) -> str:
     payload = {
         "purpose": PURPOSE, "kind": kind, "id": str(doc_id), "tid": str(context.tenant_id),
-        "cid": str(context.company_id), "exp": datetime.now(timezone.utc) + timedelta(days=LINK_DAYS),
+        "cid": str(context.company_id), "cur": context.currency, "exp": datetime.now(timezone.utc) + timedelta(days=LINK_DAYS),
         **(extra or {}),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
@@ -62,7 +62,7 @@ def public_context(payload: dict) -> RequestContext:
     """A read-only context for the document's company; no user, no permissions."""
 
     return RequestContext(user=None, tenant_id=UUID(payload["tid"]), company_id=UUID(payload["cid"]),
-                          permissions=[], locale="en-IN", channel="share")
+                          permissions=[], locale="en-IN", channel="share", currency=payload.get("cur") or "INR")
 
 
 def link(token: str) -> str:

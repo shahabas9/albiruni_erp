@@ -10,6 +10,7 @@ from app.core.deps import RequestContext, require_permission
 from app.domain import order_service, credit_note_service, crm_service, gst_portal, history, invoice_service, payment_service, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import CreditNote, Invoice
+from app.models.tenant import Company
 from app.models.identity import User
 from app.schemas.orders import SalespersonIn
 from app.schemas.payments import InvoicePaymentOut
@@ -34,6 +35,10 @@ def _errors(fn):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+def _currency(db: Session, company_id) -> str:
+    return getattr(db.get(Company, company_id), "currency", None) or "INR"
+
+
 def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
     issued_by = db.get(User, inv.issued_by) if inv.issued_by else None
     salesperson = db.get(User, inv.salesperson_id) if inv.salesperson_id else None
@@ -49,8 +54,9 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
         buyer_state=inv.buyer_state or inv.customer.state_code or "", billing_address=inv.billing_address,
         shipping_address=inv.shipping_address, customer_po=inv.customer_po, subtotal=float(inv.subtotal),
         discount_pct=float(inv.discount_pct), total=float(inv.total), cgst=float(inv.cgst), sgst=float(inv.sgst),
-        igst=float(inv.igst), round_off=float(inv.round_off), grand_total=float(inv.grand_total),
-        amount_in_words=tax.amount_in_words(inv.grand_total), amount_paid=float(inv.amount_paid),
+        igst=float(inv.igst), vat=float(inv.vat or 0), invoice_kind=inv.invoice_kind or "",
+        seller_vat_number=inv.seller_vat_number or "", buyer_vat_number=inv.buyer_vat_number or "", round_off=float(inv.round_off), grand_total=float(inv.grand_total),
+        amount_in_words=tax.amount_in_words(inv.grand_total, _currency(db, inv.company_id)), amount_paid=float(inv.amount_paid),
         amount_credited=float(inv.amount_credited), amount_tds=float(inv.amount_tds or 0),
         amount_refunded=float(inv.amount_refunded or 0), irn=inv.irn or "", irn_ack_no=inv.irn_ack_no or "",
         irn_ack_date=inv.irn_ack_date, eway_bill_no=inv.eway_bill_no or "", eway_bill_date=inv.eway_bill_date,
@@ -62,7 +68,7 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
             hsn_code=l.hsn_code, uom=l.uom, qty=float(l.qty), unit_price=float(l.unit_price),
             gst_rate=float(l.gst_rate), discount_pct=float(l.discount_pct or 0), amount=float(l.amount),
             taxable_value=float(l.taxable_value),
-            cgst=float(l.cgst), sgst=float(l.sgst), igst=float(l.igst), credited_qty=float(l.credited_qty),
+            cgst=float(l.cgst), sgst=float(l.sgst), igst=float(l.igst), vat=float(l.vat or 0), tax_category=l.tax_category or "", credited_qty=float(l.credited_qty),
             credited_value=float(l.credited_value),
         ) for l in inv.lines],
         hsn_summary=[HsnRow(**row) for row in invoice_service.hsn_summary(inv)],
@@ -146,13 +152,13 @@ def credit_note_out(db: Session, note: CreditNote) -> CreditNoteOut:
         place_of_supply_name=tax.state_name(inv.place_of_supply), seller_name=inv.seller_name,
         seller_gstin=inv.seller_gstin, seller_address=inv.seller_address, note_date=note.note_date, kind=note.kind,
         reason=note.reason, restocked=note.restocked, total=float(note.total), cgst=float(note.cgst),
-        sgst=float(note.sgst), igst=float(note.igst), round_off=float(note.round_off),
-        grand_total=float(note.grand_total), amount_in_words=tax.amount_in_words(note.grand_total),
+        sgst=float(note.sgst), igst=float(note.igst), vat=float(note.vat or 0), round_off=float(note.round_off),
+        grand_total=float(note.grand_total), amount_in_words=tax.amount_in_words(note.grand_total, _currency(db, note.company_id)),
         created_by_name=by.display_name if by else None, created_at=note.created_at,
         lines=[CreditNoteLineOut(
             invoice_line_id=l.invoice_line_id, item_id=l.item_id, description=l.description, hsn_code=l.hsn_code,
             uom=l.uom, qty=float(l.qty), gst_rate=float(l.gst_rate), taxable_value=float(l.taxable_value),
-            cgst=float(l.cgst), sgst=float(l.sgst), igst=float(l.igst),
+            cgst=float(l.cgst), sgst=float(l.sgst), igst=float(l.igst), vat=float(l.vat or 0), tax_category=l.tax_category or "",
         ) for l in note.lines],
     )
 

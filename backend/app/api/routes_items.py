@@ -16,6 +16,7 @@ def _to_out(i) -> ItemOut:
     return ItemOut(
         id=i.id, sku=i.sku, name=i.name, uom=i.uom, unit_price=float(i.unit_price), stock_qty=float(i.stock_qty),
         kind=i.kind, hsn_code=i.hsn_code or "", gst_rate=None if i.gst_rate is None else float(i.gst_rate),
+        tax_category=i.tax_category or "", exemption_reason=i.exemption_reason or "",
     )
 
 

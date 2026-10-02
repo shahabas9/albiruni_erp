@@ -16,6 +16,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import symbol
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
@@ -23,6 +24,7 @@ from app.domain import crm_service
 from app.models.crm import Activity, Lead, Notification, Opportunity
 from app.models.documents import Invoice, SalesOrder
 from app.models.identity import Role, User
+from app.models.tenant import Company
 
 log = logging.getLogger(__name__)
 MAX_EMAIL_ATTEMPTS = 3
@@ -136,13 +138,14 @@ def raise_overdue_invoice_alerts(db: Session) -> int:
         order = db.get(SalesOrder, inv.order_id)
         if order is not None and order.opportunity_id:
             people.add(db.get(Opportunity, order.opportunity_id).owner_user_id)
+        currency = getattr(db.get(Company, inv.company_id), "currency", None) or "INR"
         context = RequestContext(user=None, tenant_id=inv.tenant_id, company_id=inv.company_id, permissions=[],
-                                 locale="en-IN")
+                                 locale="en-IN", currency=currency)
         owed = float(inv.grand_total) - float(inv.amount_paid) - float(inv.amount_credited) - float(inv.amount_tds) \
             + float(inv.amount_refunded)
         for user_id in people - {None}:
             notify(db, context, user_id, "invoice_overdue", f"Overdue: {inv.number} ({inv.buyer_name})",
-                   f"₹{owed:,.2f} was due on {inv.due_date:%d %b %Y}.", f"/sales/invoices/{inv.id}")
+                   f"{symbol(currency)}{owed:,.2f} was due on {inv.due_date:%d %b %Y}.", f"/sales/invoices/{inv.id}")
     db.commit()
     return len(due)
 

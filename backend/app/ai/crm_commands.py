@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import cur
 from app.ai import crm_parser, crm_resolver
 from app.core.deps import RequestContext
 from app.domain import order_service, payment_service, receivables
@@ -295,17 +296,17 @@ def _sales_plan(db: Session, context: RequestContext, text: str, intent: str) ->
         applies = ", ".join(i.number for i in open_invoices[:4]) or "nothing yet — kept as an advance"
         warnings = []
         if amount > float(owed) > 0:
-            warnings.append(f"That's more than the ₹{float(owed):,.2f} owed — the rest is kept as an advance.")
-        if mode == "Cash" and amount >= 200000:
+            warnings.append(f"That's more than the {cur(context)}{float(owed):,.2f} owed — the rest is kept as an advance.")
+        if mode == "Cash" and amount >= 200000 and context.currency == "INR":
             warnings.append("Cash of ₹2,00,000 or more isn't allowed (section 269ST) — this will be refused.")
         return ActionPlan(
             "sales.record_payment.v1",
             {"customer_id": str(customer.id), "amount": amount, "mode": mode, "reference": reference,
              "receipt_date": None, "notes": text[:500], "allocations": None},
             "Record payment",
-            [{"label": "From", "value": customer.name}, {"label": "Amount", "value": f"₹{amount:,.2f}"},
+            [{"label": "From", "value": customer.name}, {"label": "Amount", "value": f"{cur(context)}{amount:,.2f}"},
              {"label": "Mode", "value": mode + (f" · {reference}" if reference else "")},
-             {"label": "Owed now", "value": f"₹{float(owed):,.2f}"},
+             {"label": "Owed now", "value": f"{cur(context)}{float(owed):,.2f}"},
              {"label": "Applies to", "value": f"Oldest first: {applies}"}],
             warnings,
         )

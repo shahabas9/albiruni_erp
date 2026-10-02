@@ -7,10 +7,6 @@ from pydantic import BaseModel, Field, field_validator
 from app.domain import tax
 
 
-def _rate(value):
-    return None if value is None else float(tax.clean_rate(value))
-
-
 def _hsn(value):
     return None if value is None else tax.clean_hsn(value)
 
@@ -23,9 +19,12 @@ class ItemIn(BaseModel):
     stock_qty: float = Field(default=0, ge=0)
     kind: Literal["goods", "service"] = "goods"
     hsn_code: str = ""
-    gst_rate: float | None = None
+    # GST rate in India, VAT rate in Saudi Arabia; checked against the company's country.
+    gst_rate: float | None = Field(default=None, ge=0, le=100)
+    # Saudi Arabia: S, Z, E or O, and the ZATCA reason code for Z/E/O.
+    tax_category: str | None = None
+    exemption_reason: str | None = Field(default=None, max_length=20)
 
-    _rate = field_validator("gst_rate")(_rate)
     _hsn = field_validator("hsn_code")(_hsn)
 
 
@@ -37,9 +36,12 @@ class ItemUpdate(BaseModel):
     stock_qty: float | None = Field(default=None, ge=0)
     kind: Literal["goods", "service"] | None = None
     hsn_code: str | None = None
-    gst_rate: float | None = None
+    # GST rate in India, VAT rate in Saudi Arabia; checked against the company's country.
+    gst_rate: float | None = Field(default=None, ge=0, le=100)
+    # Saudi Arabia: S, Z, E or O, and the ZATCA reason code for Z/E/O.
+    tax_category: str | None = None
+    exemption_reason: str | None = Field(default=None, max_length=20)
 
-    _rate = field_validator("gst_rate")(_rate)
     _hsn = field_validator("hsn_code")(_hsn)
 
 
@@ -53,3 +55,5 @@ class ItemOut(BaseModel):
     kind: str
     hsn_code: str
     gst_rate: float | None
+    tax_category: str = ""
+    exemption_reason: str = ""

@@ -119,7 +119,7 @@ def update_opportunity(db: Session, context: RequestContext, opportunity_id: UUI
         setattr(opp, field, value)
     if changes:
         action = "stage_changed" if "stage" in changes else "updated"
-        history.record(db, context, "opportunity", opp.id, action, history.describe(changes), changes)
+        history.record(db, context, "opportunity", opp.id, action, history.describe(changes, context.currency), changes)
     db.commit()
     db.refresh(opp)
     return opp

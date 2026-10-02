@@ -112,6 +112,7 @@ def ask(
         "cgst": pricing.cgst,
         "sgst": pricing.sgst,
         "igst": pricing.igst,
+        "vat": pricing.vat,
         "round_off": pricing.round_off,
         "grand_total": pricing.grand_total,
         "requires_approval": pricing.requires_approval,

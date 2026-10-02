@@ -1,17 +1,19 @@
-"""Indian GST arithmetic shared by every sales document.
+"""Tax arithmetic shared by every sales document: Indian GST and Saudi VAT.
 
 Pure functions, no database: quotations, orders, invoices and credit notes
 all price their lines through compute(), so a figure can never differ
 between the quote a customer saw and the invoice they receive.
 
-Rules applied:
-- Prices exclude GST; tax is added on top.
+Rules applied (see regimes.py for what each country uses):
+- Prices exclude tax; tax is added on top.
 - A line's own discount, then the document's discount, come off each line
   before tax.
 - Supply within the seller's state: CGST + SGST, half the rate each.
   Supply to another state: IGST at the full rate.
-- Each tax amount is rounded to the paisa per line; the grand total is
-  rounded to the nearest rupee and the difference shown as "round off".
+- Saudi Arabia: one VAT amount per line at the line's rate.
+- Each tax amount is rounded to the paisa / halala per line. In India the
+  grand total is rounded to the nearest rupee and the difference shown as
+  "round off"; Saudi totals stay to the halala.
 """
 
 from dataclasses import dataclass
@@ -92,10 +94,11 @@ class LineTax:
     cgst: Decimal
     sgst: Decimal
     igst: Decimal
+    vat: Decimal = Decimal("0.00")
 
     @property
     def tax(self) -> Decimal:
-        return self.cgst + self.sgst + self.igst
+        return self.cgst + self.sgst + self.igst + self.vat
 
 
 @dataclass
@@ -109,34 +112,44 @@ class DocumentTax:
     igst: Decimal
     round_off: Decimal
     grand_total: Decimal
+    vat: Decimal = Decimal("0.00")
 
     @property
     def tax(self) -> Decimal:
-        return self.cgst + self.sgst + self.igst
+        return self.cgst + self.sgst + self.igst + self.vat
 
 
-def compute(lines: list[LineIn], discount_pct, interstate: bool) -> DocumentTax:
+def compute(lines: list[LineIn], discount_pct, interstate: bool = False, *, vat: bool = False,
+            round_to_unit: bool = True) -> DocumentTax:
+    """vat: one VAT amount per line (Saudi Arabia) instead of the GST split."""
+
     discount = Decimal(str(discount_pct or 0))
     out: list[LineTax] = []
     for line in lines:
         amount = money(line.qty * line.unit_price)
         line_discount = Decimal(str(line.discount_pct or 0))
         taxable = money(amount * (100 - line_discount) / 100 * (100 - discount) / 100)
+        zero = Decimal("0.00")
+        if vat:
+            out.append(LineTax(amount, taxable, zero, zero, zero, money(taxable * line.gst_rate / 100)))
+            continue
         if interstate:
-            cgst = sgst = Decimal("0.00")
+            cgst = sgst = zero
             igst = money(taxable * line.gst_rate / 100)
         else:
             cgst = sgst = money(taxable * line.gst_rate / 200)
-            igst = Decimal("0.00")
+            igst = zero
         out.append(LineTax(amount, taxable, cgst, sgst, igst))
     subtotal = sum((l.amount for l in out), Decimal("0.00"))
     taxable = sum((l.taxable for l in out), Decimal("0.00"))
     cgst = sum((l.cgst for l in out), Decimal("0.00"))
     sgst = sum((l.sgst for l in out), Decimal("0.00"))
     igst = sum((l.igst for l in out), Decimal("0.00"))
-    exact = taxable + cgst + sgst + igst
-    grand = exact.quantize(RUPEE, rounding=ROUND_HALF_UP)
-    return DocumentTax(out, subtotal, subtotal - taxable, taxable, cgst, sgst, igst, grand - exact, money(grand))
+    vat_total = sum((l.vat for l in out), Decimal("0.00"))
+    exact = taxable + cgst + sgst + igst + vat_total
+    grand = exact.quantize(RUPEE, rounding=ROUND_HALF_UP) if round_to_unit else exact
+    return DocumentTax(out, subtotal, subtotal - taxable, taxable, cgst, sgst, igst, grand - exact, money(grand),
+                       vat_total)
 
 
 def place_of_supply(company_state: str, customer_state: str) -> tuple[str, bool, list[str]]:
@@ -145,7 +158,7 @@ def place_of_supply(company_state: str, customer_state: str) -> tuple[str, bool,
 
     warnings = []
     if not company_state:
-        warnings.append("Your company's GST state isn't set (Sales → Company & GST), so tax is shown as CGST + SGST.")
+        warnings.append("Your company's GST state isn't set (Sales → Company & Tax), so tax is shown as CGST + SGST.")
     if not customer_state:
         if company_state:
             warnings.append("This customer's state isn't set, so the sale is treated as within your state.")
@@ -156,15 +169,22 @@ def place_of_supply(company_state: str, customer_state: str) -> tuple[str, bool,
 # --- Financial years and words --------------------------------------------------------
 
 
-def fy_start_year(day: date) -> int:
-    """Indian financial year: April to March. 30 Sep 2026 → 2026 (FY 2026-27)."""
+def fy_start_year(day: date, start_month: int = 4) -> int:
+    """The year a financial year starts in. India: April to March, so
+    30 Sep 2026 → 2026 (FY 2026-27). With start_month 1 it's the calendar year."""
 
-    return day.year if day.month >= 4 else day.year - 1
+    return day.year if day.month >= start_month else day.year - 1
 
 
-def fy_label(day: date) -> str:
-    start = fy_start_year(day)
-    return f"{start % 100:02d}-{(start + 1) % 100:02d}"
+def fy_start(day: date, start_month: int = 4) -> date:
+    return date(fy_start_year(day, start_month), start_month, 1)
+
+
+def fy_label(day: date, start_month: int = 4) -> str:
+    """26-27 for a year spanning two calendar years; 2026 for a calendar year."""
+
+    start = fy_start_year(day, start_month)
+    return str(start) if start_month == 1 else f"{start % 100:02d}-{(start + 1) % 100:02d}"
 
 
 _ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
@@ -202,13 +222,30 @@ def _indian(n: int) -> str:
     return " ".join(parts)
 
 
-def amount_in_words(amount) -> str:
-    """"Rupees One Lakh Twenty Thousand and Fifty Paise Only"."""
+def _international(n: int) -> str:
+    if n == 0:
+        return "Zero"
+    parts = []
+    for size, name in ((1_000_000_000, "Billion"), (1_000_000, "Million"), (1000, "Thousand")):
+        chunk, n = divmod(n, size)
+        if chunk:
+            parts.append(f"{_international(chunk)} {name}")
+    if n:
+        parts.append(_three(n))
+    return " ".join(parts)
+
+
+def amount_in_words(amount, currency: str = "INR") -> str:
+    """"Rupees One Lakh Twenty Thousand and Fifty Paise Only", or for riyals
+    "Saudi Riyals One Hundred Twenty Thousand and Fifty Halalas Only"."""
 
     value = money(amount)
     sign = "Minus " if value < 0 else ""
-    rupees, paise = divmod(int(abs(value) * 100), 100)
-    words = f"{sign}Rupees {_indian(rupees)}"
-    if paise:
-        words += f" and {_two(paise)} Paise"
+    units, cents = divmod(int(abs(value) * 100), 100)
+    if currency == "SAR":
+        words = f"{sign}Saudi Riyals {_international(units)}"
+        return words + (f" and {_two(cents)} Halalas" if cents else "") + " Only"
+    words = f"{sign}Rupees {_indian(units)}"
+    if cents:
+        words += f" and {_two(cents)} Paise"
     return words + " Only"

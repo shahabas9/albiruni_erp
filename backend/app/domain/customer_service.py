@@ -4,9 +4,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import RequestContext
-from app.domain import crm_service, duplicates, fields, history
+from app.domain import crm_service, duplicates, fields, history, regimes
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.sales import Customer, PriceList
+from app.models.tenant import Company
 from app.schemas.customers import CustomerIn, CustomerUpdate
 
 
@@ -57,8 +58,43 @@ def _check_price_list(db: Session, context: RequestContext, price_list_id: UUID 
         raise NotFoundError("No such price list.")
 
 
+ADDRESS_FIELDS = ("country", "vat_number", "name_ar", "building_no", "street", "district", "city", "postal_code")
+
+
+def _clean_identity(db: Session, context: RequestContext, data: dict) -> dict:
+    """Country, VAT number and address parts, checked for the company's country (and the customer's)."""
+
+    company = db.get(Company, context.company_id)
+    regime = regimes.of(company)
+    try:
+        if "country" in data:
+            data["country"] = regimes.clean_party_country(data["country"])
+            if data["country"] == company.country:
+                data["country"] = ""
+        country = data.get("country") or company.country
+        local = regimes.REGIMES.get(country)
+        if data.get("vat_number") is not None:
+            data["vat_number"] = (regimes.clean_vat_number(data["vat_number"]) if country == "SA"
+                                  else data["vat_number"].strip().upper())
+        if data.get("postal_code") is not None and local is not None:
+            data["postal_code"] = regimes.clean_postal_code(local, data["postal_code"])
+        if data.get("building_no") is not None and country == "SA":
+            data["building_no"] = regimes.clean_building_no(data["building_no"])
+    except ValueError as exc:
+        raise ConflictError(str(exc)) from exc
+    for key in ("name_ar", "street", "district", "city"):
+        if data.get(key) is not None:
+            data[key] = data[key].strip()
+    if regime.country != "IN":
+        # GST fields belong to Indian companies.
+        data.pop("gstin", None)
+        data.pop("state_code", None)
+    return data
+
+
 def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> Customer:
     _check_price_list(db, context, body.price_list_id)
+    identity = _clean_identity(db, context, {k: getattr(body, k) for k in ADDRESS_FIELDS})
     if body.email.strip() and "@" not in body.email:
         raise ConflictError("That email address doesn't look right.")
     if not body.allow_duplicate:
@@ -83,6 +119,7 @@ def create_customer(db: Session, context: RequestContext, body: CustomerIn) -> C
         email=body.email.strip().lower(),
         phone=body.phone.strip(),
         price_list_id=body.price_list_id,
+        **identity,
     )
     db.add(customer)
     db.flush()
@@ -100,6 +137,10 @@ def update_customer(db: Session, context: RequestContext, customer_id: UUID, bod
             data.pop(key)
     if "price_list_id" in data:
         _check_price_list(db, context, data["price_list_id"])
+    for key in ADDRESS_FIELDS:
+        if key in data and data[key] is None:
+            data.pop(key)
+    data = _clean_identity(db, context, data)
     if data.get("email") is not None:
         data["email"] = data["email"].strip().lower()
     if data.get("email") and "@" not in data["email"]:
@@ -113,7 +154,7 @@ def update_customer(db: Session, context: RequestContext, customer_id: UUID, bod
     changes = {**history.diff(customer, data), **changes}
     if changes:
         action = "status_changed" if list(changes) == ["active"] else "updated"
-        history.record(db, context, "customer", customer.id, action, history.describe(changes), changes)
+        history.record(db, context, "customer", customer.id, action, history.describe(changes, context.currency), changes)
     for field, value in data.items():
         setattr(customer, field, value)
     db.commit()

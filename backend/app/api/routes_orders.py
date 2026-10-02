@@ -47,7 +47,7 @@ def order_out(db: Session, order: SalesOrder) -> OrderOut:
         place_of_supply=order.place_of_supply, billing_address=order.billing_address,
         shipping_address=order.shipping_address, notes=order.notes, subtotal=float(order.subtotal),
         discount_pct=float(order.discount_pct), total=float(order.total), cgst=float(order.cgst),
-        sgst=float(order.sgst), igst=float(order.igst), round_off=float(order.round_off),
+        sgst=float(order.sgst), igst=float(order.igst), vat=float(order.vat or 0), round_off=float(order.round_off),
         grand_total=float(order.grand_total), needs_approval=order_service.needs_approval(order),
         approved_by_name=names.get(order.approved_by), cancel_reason=order.cancel_reason,
         salesperson_id=order.salesperson_id, salesperson_name=names.get(order.salesperson_id),
@@ -62,7 +62,7 @@ def line_out(l) -> DocLineOut:
         unit_price=float(l.unit_price), list_price=float(l.list_price), gst_rate=float(l.gst_rate),
         discount_pct=float(l.discount_pct or 0),
         amount=float(l.amount), taxable_value=float(l.taxable_value), cgst=float(l.cgst), sgst=float(l.sgst),
-        igst=float(l.igst), delivered_qty=float(l.delivered_qty), invoiced_qty=float(l.invoiced_qty),
+        igst=float(l.igst), vat=float(l.vat or 0), tax_category=l.tax_category or "", delivered_qty=float(l.delivered_qty), invoiced_qty=float(l.invoiced_qty),
     )
 
 

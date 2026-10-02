@@ -9,11 +9,13 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
 from app.domain import (
     credit_note_service, delivery_service, invoice_service, order_service, payment_service, refund_service,
-    sales_reports, share_service, tally_export,
+    regimes, sales_reports, share_service, tally_export,
 )
+from app.models.tenant import Company
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.registry import ToolDefinition, ToolValidationError, register_tool
 
@@ -31,7 +33,7 @@ def _guard(fn):
 def confirm_order(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
     order = order_service.confirm_order(db, context, UUID(str(args["order_id"])))
     return {"order_id": str(order.id), "number": order.number, "status": order.status,
-            "result_summary": f"Confirmed order {order.number} (₹{float(order.grand_total):,.2f})"}
+            "result_summary": f"Confirmed order {order.number} ({cur(context)}{float(order.grand_total):,.2f})"}
 
 
 @_guard
@@ -67,7 +69,7 @@ def issue_invoice(db: Session, context: RequestContext, args: dict[str, Any]) ->
     )
     return {"invoice_id": str(invoice.id), "number": invoice.number,
             "result_summary": f"Issued invoice {invoice.number} to {invoice.buyer_name} "
-                              f"(₹{float(invoice.grand_total):,.2f})"}
+                              f"({cur(context)}{float(invoice.grand_total):,.2f})"}
 
 
 @_guard
@@ -78,7 +80,7 @@ def create_credit_note(db: Session, context: RequestContext, args: dict[str, Any
         note_date=date.fromisoformat(args["note_date"]) if args.get("note_date") else None,
     )
     return {"credit_note_id": str(note.id), "number": note.number,
-            "result_summary": f"Credit note {note.number} for ₹{float(note.grand_total):,.2f} "
+            "result_summary": f"Credit note {note.number} for {cur(context)}{float(note.grand_total):,.2f} "
                               f"against {note.invoice.number} ({note.kind.lower()})"}
 
 
@@ -93,8 +95,8 @@ def record_payment(db: Session, context: RequestContext, args: dict[str, Any]) -
     left = payment_service.unallocated(receipt)
     return {"receipt_id": str(receipt.id), "number": receipt.number,
             "link": {"label": "Open payments", "to": "/sales/payments"},
-            "result_summary": f"Recorded payment {receipt.number}: ₹{float(receipt.amount):,.2f} from "
-                              f"{receipt.customer.name}" + (f" (₹{float(left):,.2f} advance)" if left > 0 else "")}
+            "result_summary": f"Recorded payment {receipt.number}: {cur(context)}{float(receipt.amount):,.2f} from "
+                              f"{receipt.customer.name}" + (f" ({cur(context)}{float(left):,.2f} advance)" if left > 0 else "")}
 
 
 @_guard
@@ -121,7 +123,7 @@ def create_refund(db: Session, context: RequestContext, args: dict[str, Any]) ->
         invoice_id=UUID(str(args["invoice_id"])) if args.get("invoice_id") else None,
     )
     return {"refund_id": str(refund.id), "number": refund.number,
-            "result_summary": f"Refunded ₹{float(refund.amount):,.2f} to {refund.customer.name} ({refund.number})"}
+            "result_summary": f"Refunded {cur(context)}{float(refund.amount):,.2f} to {refund.customer.name} ({refund.number})"}
 
 
 @_guard
@@ -170,6 +172,8 @@ def export_report(db: Session, context: RequestContext, args: dict[str, Any]) ->
         rows = sales_reports.gstr1(db, context, start, end)[kind]
     else:
         raise ConflictError(f"Unknown report '{kind}'.")
+    if kind == "register" and regimes.of(db.get(Company, context.company_id)).country != "IN":
+        kind = "register_vat"
     return {"csv": sales_reports.to_csv(kind, rows), "rows": len(rows),
             "result_summary": f"Downloaded {kind} report for {start:%d %b %Y} – {end:%d %b %Y} ({len(rows)} rows)"}
 
@@ -198,13 +202,13 @@ def receivables_summary(db: Session, context: RequestContext, args: dict[str, An
             open_invoices, _ = invoice_service.list_invoices(db, context, status="unpaid", customer_id=customer_id,
                                                             limit=8)
             message = (
-                f"{name} owes ₹{row['invoiced_owed']:,.0f} on {row['open_invoices']} invoice"
+                f"{name} owes {cur(context)}{row['invoiced_owed']:,.0f} on {row['open_invoices']} invoice"
                 f"{'' if row['open_invoices'] == 1 else 's'}"
-                + (f", ₹{row['overdue']:,.0f} of it overdue" if row["overdue"] > 0 else ", none of it overdue yet")
-                + (f". They also have ₹{row['advance']:,.0f} in advance." if row["advance"] > 0 else ".")
+                + (f", {cur(context)}{row['overdue']:,.0f} of it overdue" if row["overdue"] > 0 else ", none of it overdue yet")
+                + (f". They also have {cur(context)}{row['advance']:,.0f} in advance." if row["advance"] > 0 else ".")
             )
             items = [{
-                "title": f"{i.number} — ₹{float(invoice_service.balance(i)):,.0f} left",
+                "title": f"{i.number} — {cur(context)}{float(invoice_service.balance(i)):,.0f} left",
                 "subtitle": f"Due {i.due_date:%d %b %Y}", "tone": "bad" if invoice_service.payment_status(i) == "Overdue" else None,
                 "link": f"/sales/invoices/{i.id}",
             } for i in open_invoices]
@@ -216,11 +220,11 @@ def receivables_summary(db: Session, context: RequestContext, args: dict[str, An
     if not rows:
         message = "Nobody owes you anything right now."
     else:
-        message = (f"Customers owe ₹{totals['invoiced_owed']:,.0f} in all; ₹{totals['overdue']:,.0f} is overdue"
-                   + (f" (₹{totals['d90_plus']:,.0f} for more than 90 days)." if totals["d90_plus"] > 0 else "."))
+        message = (f"Customers owe {cur(context)}{totals['invoiced_owed']:,.0f} in all; {cur(context)}{totals['overdue']:,.0f} is overdue"
+                   + (f" ({cur(context)}{totals['d90_plus']:,.0f} for more than 90 days)." if totals["d90_plus"] > 0 else "."))
     items = [{
-        "title": f"{r['customer_name']} — ₹{r['net']:,.0f}",
-        "subtitle": (f"₹{r['overdue']:,.0f} overdue" if r["overdue"] > 0 else "Not due yet")
+        "title": f"{r['customer_name']} — {cur(context)}{r['net']:,.0f}",
+        "subtitle": (f"{cur(context)}{r['overdue']:,.0f} overdue" if r["overdue"] > 0 else "Not due yet")
                     + (f" · oldest due {r['oldest_due']:%d %b}" if r["oldest_due"] else ""),
         "tone": "bad" if r["d61_90"] + r["d90_plus"] > 0 else ("warn" if r["overdue"] > 0 else None),
         "link": f"/sales/receivables/{r['customer_id']}",
@@ -233,7 +237,7 @@ def receivables_summary(db: Session, context: RequestContext, args: dict[str, An
 def draft_invoice(db: Session, context: RequestContext, args: dict[str, Any]) -> dict[str, Any]:
     invoice = invoice_service.create_draft(db, context, UUID(str(args["order_id"])))
     return {"invoice_id": str(invoice.id), "result_summary": f"Drafted an invoice for order {invoice.order.number} "
-                                                             f"(₹{float(invoice.grand_total):,.2f}) — check it and issue it",
+                                                             f"({cur(context)}{float(invoice.grand_total):,.2f}) — check it and issue it",
             "link": {"label": "Open the draft", "to": f"/sales/invoices/{invoice.id}"}}
 
 
@@ -258,11 +262,11 @@ def quick_sale(db: Session, context: RequestContext, args: dict[str, Any]) -> di
         )
     except (ConflictError, NotFoundError, PermissionError) as exc:
         raise ToolValidationError(str(exc)) from exc
-    paid = f", ₹{float(receipt.amount):,.2f} received" if receipt else ", not paid yet"
+    paid = f", {cur(context)}{float(receipt.amount):,.2f} received" if receipt else ", not paid yet"
     return {"order_id": str(order.id), "invoice_id": str(invoice.id),
             "receipt_id": str(receipt.id) if receipt else None,
             "result_summary": f"Counter sale: {invoice.number} for {invoice.buyer_name} "
-                              f"(₹{float(invoice.grand_total):,.2f}){paid}"}
+                              f"({cur(context)}{float(invoice.grand_total):,.2f}){paid}"}
 
 
 register_tool(ToolDefinition(

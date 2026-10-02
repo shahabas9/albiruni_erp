@@ -27,13 +27,28 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(120))
     code: Mapped[str] = mapped_column(String(40))
     currency: Mapped[str] = mapped_column(String(3), default="INR")
+    # Where the company is registered: decides its tax regime (regimes.py). Fixed once it has
+    # issued a sales document.
+    country: Mapped[str] = mapped_column(String(2), default="IN", server_default="IN")
+    # First month of the financial year: 4 (April) in India, usually 1 in Saudi Arabia.
+    fy_start_month: Mapped[int] = mapped_column(Integer, default=4, server_default="4")
 
-    # Seller details printed on tax invoices (Sales → Company & GST).
+    # Seller details printed on tax invoices (Sales → Company & Tax).
     legal_name: Mapped[str] = mapped_column(String(160), default="")
     gstin: Mapped[str] = mapped_column(String(15), default="")
     # GST state code; decides CGST+SGST (same state) versus IGST.
     state_code: Mapped[str] = mapped_column(String(2), default="")
     address: Mapped[str] = mapped_column(Text, default="")
+    # Saudi Arabia: VAT and Commercial Registration numbers, Arabic name, national address.
+    vat_number: Mapped[str] = mapped_column(String(15), default="", server_default="")
+    cr_number: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    name_ar: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    # Structured address (required on Saudi standard invoices; PIN / postal code in both countries).
+    building_no: Mapped[str] = mapped_column(String(10), default="", server_default="")
+    street: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    district: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    city: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    postal_code: Mapped[str] = mapped_column(String(10), default="", server_default="")
     phone: Mapped[str] = mapped_column(String(40), default="")
     email: Mapped[str] = mapped_column(String(160), default="")
     bank_details: Mapped[str] = mapped_column(Text, default="")

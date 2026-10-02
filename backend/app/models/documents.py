@@ -52,6 +52,7 @@ class SalesOrder(Base):
     cgst: Mapped[float] = _money()
     sgst: Mapped[float] = _money()
     igst: Mapped[float] = _money()
+    vat: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")  # Saudi VAT
     round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
     grand_total: Mapped[float] = _money()
     cancel_reason: Mapped[str] = mapped_column(String(200), default="")
@@ -87,6 +88,8 @@ class SalesOrderLine(Base):
     # The item's list price when the line was made; a lower unit price needs approval.
     list_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    # ZATCA category (S, Z, E, O) in Saudi Arabia; "" in India.
+    tax_category: Mapped[str] = mapped_column(String(1), default="", server_default="")
     # This line's own discount, before the order's.
     discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     amount: Mapped[float] = _money()  # qty × price
@@ -94,6 +97,7 @@ class SalesOrderLine(Base):
     cgst: Mapped[float] = _money()
     sgst: Mapped[float] = _money()
     igst: Mapped[float] = _money()
+    vat: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")  # Saudi VAT
     delivered_qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     invoiced_qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
 
@@ -201,6 +205,7 @@ class Invoice(Base):
     cgst: Mapped[float] = _money()
     sgst: Mapped[float] = _money()
     igst: Mapped[float] = _money()
+    vat: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")  # Saudi VAT
     round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
     grand_total: Mapped[float] = _money()
     # Running totals kept in step with receipts and credit notes.
@@ -219,6 +224,10 @@ class Invoice(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     terms: Mapped[str] = mapped_column(Text, default="")
     bank_details: Mapped[str] = mapped_column(Text, default="")
+    # Saudi Arabia: "standard" (B2B, buyer has a VAT number) or "simplified" (B2C), fixed at issue.
+    invoice_kind: Mapped[str] = mapped_column(String(12), default="", server_default="")
+    seller_vat_number: Mapped[str] = mapped_column(String(15), default="", server_default="")
+    buyer_vat_number: Mapped[str] = mapped_column(String(15), default="", server_default="")
     # Copied from the order; who the sale counts for.
     salesperson_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
@@ -260,12 +269,15 @@ class InvoiceLine(Base):
     qty: Mapped[float] = mapped_column(Numeric(14, 2))
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    # ZATCA category (S, Z, E, O) in Saudi Arabia; "" in India.
+    tax_category: Mapped[str] = mapped_column(String(1), default="", server_default="")
     discount_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0, server_default="0")
     amount: Mapped[float] = _money()
     taxable_value: Mapped[float] = _money()
     cgst: Mapped[float] = _money()
     sgst: Mapped[float] = _money()
     igst: Mapped[float] = _money()
+    vat: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")  # Saudi VAT
     # How much of this line credit notes have taken back: returned quantity,
     # and taxable value (returns and price corrections together).
     credited_qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
@@ -297,6 +309,7 @@ class CreditNote(Base):
     cgst: Mapped[float] = _money()
     sgst: Mapped[float] = _money()
     igst: Mapped[float] = _money()
+    vat: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")  # Saudi VAT
     round_off: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
     grand_total: Mapped[float] = _money()
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
@@ -321,10 +334,13 @@ class CreditNoteLine(Base):
     uom: Mapped[str] = mapped_column(String(20), default="")
     qty: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # 0 for a price correction
     gst_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    # ZATCA category (S, Z, E, O) in Saudi Arabia; "" in India.
+    tax_category: Mapped[str] = mapped_column(String(1), default="", server_default="")
     taxable_value: Mapped[float] = _money()
     cgst: Mapped[float] = _money()
     sgst: Mapped[float] = _money()
     igst: Mapped[float] = _money()
+    vat: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0")  # Saudi VAT
 
     credit_note: Mapped["CreditNote"] = relationship(back_populates="lines")
 

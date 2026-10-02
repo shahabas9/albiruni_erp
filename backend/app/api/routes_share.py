@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import cur
 from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, get_current_context, require_any_permission
@@ -15,6 +16,7 @@ from app.domain import (
     credit_note_service, invoice_service, payment_service, quotation_service, receivables, reminder_service,
     sales_settings, share_service, tax,
 )
+from app.models.tenant import Company
 from app.domain.errors import ConflictError, NotFoundError
 from app.toolgateway.executor import execute_tool
 
@@ -36,7 +38,7 @@ class ShareIn(BaseModel):
 def describe(db: Session, context: RequestContext, body: ShareIn) -> tuple[UUID, str, str]:
     """(customer id, title, one-line summary) for the document being shared."""
 
-    money = lambda v: f"₹{float(v):,.2f}"  # noqa: E731
+    money = lambda v: f"{cur(context)}{float(v):,.2f}"  # noqa: E731
     if body.kind == "invoice":
         inv = invoice_service.get_invoice(db, context, body.id)
         if inv.status != "Issued":
@@ -44,7 +46,7 @@ def describe(db: Session, context: RequestContext, body: ShareIn) -> tuple[UUID,
         if body.reminder:
             if invoice_service.balance(inv) <= 0:
                 raise ConflictError(f"{inv.number} is settled — nothing to remind about.")
-            return inv.customer_id, f"Payment reminder: invoice {inv.number}", reminder_service.reminder_text(inv)
+            return inv.customer_id, f"Payment reminder: invoice {inv.number}", reminder_service.reminder_text(inv, currency=context.currency)
         return inv.customer_id, f"Invoice {inv.number}", (
             f"Please find our invoice {inv.number} dated {inv.invoice_date:%d %b %Y} for {money(inv.grand_total)}, "
             f"due on {inv.due_date:%d %b %Y}."
@@ -66,7 +68,7 @@ def describe(db: Session, context: RequestContext, body: ShareIn) -> tuple[UUID,
             raise ConflictError(f"{r.number} is voided.")
         return r.customer_id, f"Receipt {r.number}", f"Thank you for your payment of {money(r.amount)} ({r.mode})."
     today = date.today()
-    start = body.date_from or date(tax.fy_start_year(today), 4, 1)
+    start = body.date_from or tax.fy_start(today, db.get(Company, context.company_id).fy_start_month)
     end = body.date_to or today
     st = receivables.statement(db, context, body.id, start, end)
     body.date_from, body.date_to = start, end

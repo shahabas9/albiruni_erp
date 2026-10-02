@@ -23,7 +23,9 @@ def _to_out(c) -> CustomerOut:
         tags=list(c.tags or []), custom=dict(c.custom or {}), billing_address=c.billing_address or "",
         shipping_address=c.shipping_address or "", state_code=c.state_code or "",
         payment_terms_days=c.payment_terms_days, email=c.email or "", phone=c.phone or "",
-        price_list_id=c.price_list_id,
+        price_list_id=c.price_list_id, country=c.country or "", vat_number=c.vat_number or "",
+        name_ar=c.name_ar or "", building_no=c.building_no or "", street=c.street or "", district=c.district or "",
+        city=c.city or "", postal_code=c.postal_code or "",
     )
 
 

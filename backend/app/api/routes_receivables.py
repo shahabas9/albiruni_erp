@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
 from app.domain import receivables, tax
+from app.models.tenant import Company
 from app.domain.errors import ConflictError, NotFoundError
 
 router = APIRouter(prefix="/api/sales/receivables", tags=["receivables"])
@@ -29,7 +30,7 @@ def statement(customer_id: UUID, date_from: date | None = None, date_to: date | 
     """Account statement. Defaults: the current financial year to date."""
 
     today = date.today()
-    start = date_from or date(tax.fy_start_year(today), 4, 1)
+    start = date_from or tax.fy_start(today, db.get(Company, context.company_id).fy_start_month)
     end = date_to or today
     if end - start > timedelta(days=3 * 366):
         raise HTTPException(status_code=409, detail="A statement can cover at most three years.")

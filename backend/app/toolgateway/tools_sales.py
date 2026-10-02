@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
 from app.domain import crm_service, history, opportunity_service
 from app.domain.errors import ConflictError, NotFoundError
@@ -57,7 +58,7 @@ def create_quotation_draft(db: Session, context: RequestContext, args: dict[str,
         moved = f"; stage {stage_before} → {opportunity.stage}" if opportunity.stage != stage_before else ""
         history.record(
             db, context, "opportunity", opportunity.id, "quotation_created",
-            f"Quotation {quotation.number} raised (₹{pricing.total:,.0f} before GST){moved}",
+            f"Quotation {quotation.number} raised ({cur(context)}{pricing.total:,.0f} before tax){moved}",
             {"stage": [stage_before, opportunity.stage]} if moved else None,
         )
 

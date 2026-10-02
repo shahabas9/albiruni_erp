@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.domain.regimes import cur
 from app.core.deps import RequestContext
 from app.domain import crm_service, history, price_lists, receivables, tax
 from app.domain.customer_service import get_customer
@@ -129,9 +130,9 @@ def price_lines(
             position=position, item_id=item.id, description=item.name, hsn_code=item.hsn_code or "", uom=item.uom,
             qty=line.qty, unit_price=line.unit_price,
             list_price=line_in.get("list_price", price_lists.price_for(db, context, customer, item, line.qty)),
-            gst_rate=line.gst_rate, discount_pct=line.discount_pct,
+            gst_rate=line.gst_rate, tax_category=line.tax_category, discount_pct=line.discount_pct,
             amount=float(parts.amount), taxable_value=float(parts.taxable), cgst=float(parts.cgst),
-            sgst=float(parts.sgst), igst=float(parts.igst), delivered_qty=0, invoiced_qty=0,
+            sgst=float(parts.sgst), igst=float(parts.igst), vat=float(parts.vat), delivered_qty=0, invoiced_qty=0,
         ))
         if item.kind != "service" and float(item.stock_qty) < line.qty:
             warnings.append(f"{item.name}: only {float(item.stock_qty):g} {item.uom} in stock, {line.qty:g} ordered.")
@@ -140,6 +141,7 @@ def price_lines(
     order.discount_pct = discount_pct
     order.total = float(worked.taxable)
     order.cgst, order.sgst, order.igst = float(worked.cgst), float(worked.sgst), float(worked.igst)
+    order.vat = float(worked.vat)
     order.round_off = float(worked.round_off)
     order.grand_total = float(worked.grand_total)
     return warnings
@@ -266,7 +268,8 @@ def open_order_exposure(db: Session, context: RequestContext, customer_id: UUID,
     """What confirmed orders will still bill this customer (with GST), not yet invoiced."""
 
     share = (SalesOrderLine.qty - SalesOrderLine.invoiced_qty) / SalesOrderLine.qty
-    value = SalesOrderLine.taxable_value + SalesOrderLine.cgst + SalesOrderLine.sgst + SalesOrderLine.igst
+    value = (SalesOrderLine.taxable_value + SalesOrderLine.cgst + SalesOrderLine.sgst + SalesOrderLine.igst
+             + SalesOrderLine.vat)
     stmt = (
         select(func.coalesce(func.sum(share * value), 0))
         .join(SalesOrder, SalesOrder.id == SalesOrderLine.order_id)
@@ -306,7 +309,7 @@ def confirm_order(db: Session, context: RequestContext, order_id: UUID) -> Sales
         exposure = credit_exposure(db, context, customer.id, exclude=order.id) + float(order.grand_total)
         if exposure > limit and not context.has_permission(CREDIT_OVERRIDE):
             raise ConflictError(
-                f"This takes {customer.name} to ₹{exposure:,.0f} owed or on order, over their ₹{limit:,.0f} "
+                f"This takes {customer.name} to {cur(context)}{exposure:,.0f} owed or on order, over their {cur(context)}{limit:,.0f} "
                 "credit limit. Collect a payment first, or ask someone with sales.credit.override."
             )
     order.status = "Confirmed"
@@ -315,7 +318,7 @@ def confirm_order(db: Session, context: RequestContext, order_id: UUID) -> Sales
     history.record(db, context, "sales_order", order.id, "status_changed", f"Order {order.number} confirmed",
                    {"status": ["Draft", "Confirmed"]})
     history.record(db, context, "customer", customer.id, "order_confirmed",
-                   f"Order {order.number} confirmed (₹{float(order.grand_total):,.0f})")
+                   f"Order {order.number} confirmed ({cur(context)}{float(order.grand_total):,.0f})")
     if order.opportunity_id:
         opp = db.get(Opportunity, order.opportunity_id)
         if opp is not None and opp.stage not in ("Won", "Lost"):

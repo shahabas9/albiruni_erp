@@ -52,7 +52,7 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _show(field: str, value: Any) -> str:
+def _show(field: str, value: Any, currency: str = "INR") -> str:
     if value in (None, "", []):
         return "—"
     if isinstance(value, bool):
@@ -60,7 +60,7 @@ def _show(field: str, value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
     if field in ("value", "credit_limit"):
-        return f"₹{float(value):,.0f}"
+        return f"{'₹' if currency == 'INR' else currency + ' '}{float(value):,.0f}"
     if field == "probability_pct":
         return f"{value}%"
     if field in ("notes", "billing_address", "shipping_address"):
@@ -79,7 +79,7 @@ def diff(record: Any, data: dict[str, Any]) -> dict[str, list[Any]]:
     return changes
 
 
-def describe(changes: dict[str, list[Any]]) -> str:
+def describe(changes: dict[str, list[Any]], currency: str = "INR") -> str:
     parts = []
     for field, (old, new) in changes.items():
         label = field[len("custom:"):] if field.startswith("custom:") else LABELS.get(
@@ -88,7 +88,7 @@ def describe(changes: dict[str, list[Any]]) -> str:
         if field == "notes":
             parts.append("Notes updated")
         else:
-            parts.append(f"{label}: {_show(field, old)} → {_show(field, new)}")
+            parts.append(f"{label}: {_show(field, old, currency)} → {_show(field, new, currency)}")
     return "; ".join(parts)
 
 

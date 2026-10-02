@@ -103,7 +103,7 @@ def update_lead(db: Session, context: RequestContext, lead_id: UUID, body: LeadU
         setattr(lead, field, value)
     if changes:
         action = "status_changed" if list(changes) == ["status"] else "updated"
-        history.record(db, context, "lead", lead.id, action, history.describe(changes), changes)
+        history.record(db, context, "lead", lead.id, action, history.describe(changes, context.currency), changes)
     db.commit()
     db.refresh(lead)
     return lead
