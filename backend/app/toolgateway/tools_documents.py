@@ -168,6 +168,8 @@ def export_report(db: Session, context: RequestContext, args: dict[str, Any]) ->
         rows = sales_reports.sales_register(db, context, start, end)["rows"]
     elif kind == "tds":
         rows = sales_reports.tds_report(db, context, start, end)["rows"]
+    elif kind == "vat_return":
+        rows = sales_reports.vat_return(db, context, start, end)["rows"]
     elif kind in sales_reports.SECTIONS:
         rows = sales_reports.gstr1(db, context, start, end)[kind]
     else:

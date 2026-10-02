@@ -107,6 +107,8 @@ class InvoiceOut(BaseModel):
     invoice_kind: str = ""
     seller_vat_number: str = ""
     buyer_vat_number: str = ""
+    # Saudi Arabia: ZATCA QR code (SVG data URI) to print.
+    zatca_qr: str = ""
     balance: float
     notes: str
     terms: str
@@ -156,6 +158,11 @@ class CreditNoteLineOut(BaseModel):
 
 
 class CreditNoteOut(BaseModel):
+    # Saudi Arabia: ZATCA QR code (SVG data URI) and the VAT numbers to print.
+    zatca_qr: str = ""
+    seller_vat_number: str = ""
+    buyer_vat_number: str = ""
+    invoice_kind: str = ""
     id: UUID
     number: str
     invoice_id: UUID

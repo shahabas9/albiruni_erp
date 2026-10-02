@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.ai.orchestrator import new_correlation_id
 from app.core.database import get_db
 from app.core.deps import RequestContext, require_permission
-from app.domain import order_service, credit_note_service, crm_service, gst_portal, history, invoice_service, payment_service, tax
+from app.domain import order_service, regimes, zatca, credit_note_service, crm_service, gst_portal, history, invoice_service, payment_service, tax
 from app.domain.errors import ConflictError, NotFoundError
 from app.models.documents import CreditNote, Invoice
 from app.models.tenant import Company
@@ -55,7 +55,8 @@ def invoice_out(db: Session, inv: Invoice) -> InvoiceOut:
         shipping_address=inv.shipping_address, customer_po=inv.customer_po, subtotal=float(inv.subtotal),
         discount_pct=float(inv.discount_pct), total=float(inv.total), cgst=float(inv.cgst), sgst=float(inv.sgst),
         igst=float(inv.igst), vat=float(inv.vat or 0), invoice_kind=inv.invoice_kind or "",
-        seller_vat_number=inv.seller_vat_number or "", buyer_vat_number=inv.buyer_vat_number or "", round_off=float(inv.round_off), grand_total=float(inv.grand_total),
+        seller_vat_number=inv.seller_vat_number or "", buyer_vat_number=inv.buyer_vat_number or "",
+        zatca_qr=zatca.qr_svg(zatca.invoice_qr(inv)) if inv.invoice_kind and inv.status == "Issued" else "", round_off=float(inv.round_off), grand_total=float(inv.grand_total),
         amount_in_words=tax.amount_in_words(inv.grand_total, _currency(db, inv.company_id)), amount_paid=float(inv.amount_paid),
         amount_credited=float(inv.amount_credited), amount_tds=float(inv.amount_tds or 0),
         amount_refunded=float(inv.amount_refunded or 0), irn=inv.irn or "", irn_ack_no=inv.irn_ack_no or "",
@@ -146,6 +147,9 @@ def credit_note_out(db: Session, note: CreditNote) -> CreditNoteOut:
     inv = note.invoice
     by = db.get(User, note.created_by)
     return CreditNoteOut(
+        zatca_qr=zatca.qr_svg(zatca.credit_note_qr(note)) if inv.invoice_kind else "",
+        seller_vat_number=inv.seller_vat_number or "", buyer_vat_number=inv.buyer_vat_number or "",
+        invoice_kind=inv.invoice_kind or "",
         id=note.id, number=note.number, invoice_id=inv.id, invoice_number=inv.number or "",
         invoice_date=inv.invoice_date, customer_id=note.customer_id, customer_name=note.customer.name,
         buyer_gstin=inv.buyer_gstin, billing_address=inv.billing_address, place_of_supply=inv.place_of_supply,
@@ -211,16 +215,30 @@ def invoice_einvoice(invoice_id: UUID, context: RequestContext = Depends(require
     """The e-invoice JSON (NIC schema 1.1) to upload, and anything the portal would reject."""
 
     invoice = _errors(lambda: invoice_service.get_invoice(db, context, invoice_id))
+    company = db.get(Company, context.company_id)
+    name = f"einvoice-{(invoice.number or '').replace('/', '-')}"
+    if regimes.of(company).country == "SA":
+        if invoice.status != "Issued":
+            raise HTTPException(status_code=409, detail="Issue the invoice first.")
+        xml, problems = zatca.invoice_xml(invoice, company)
+        return {"filename": f"{name}.xml", "format": "xml", "content": xml, "problems": problems,
+                "notes": [zatca.NOT_YET]}
     payload, problems = _errors(lambda: gst_portal.einvoice_for_invoice(invoice))
-    return {"filename": f"einvoice-{invoice.number.replace('/', '-')}.json", "payload": payload, "problems": problems}
+    return {"filename": f"{name}.json", "format": "json", "payload": payload, "problems": problems, "notes": []}
 
 
 @router.get("/credit-notes/{note_id}/einvoice")
 def credit_note_einvoice(note_id: UUID, context: RequestContext = Depends(require_permission(READ)),
                          db: Session = Depends(get_db)):
     note = _errors(lambda: credit_note_service.get_credit_note(db, context, note_id))
+    company = db.get(Company, context.company_id)
+    name = f"einvoice-{note.number.replace('/', '-')}"
+    if regimes.of(company).country == "SA":
+        xml, problems = zatca.credit_note_xml(note, company)
+        return {"filename": f"{name}.xml", "format": "xml", "content": xml, "problems": problems,
+                "notes": [zatca.NOT_YET]}
     payload, problems = _errors(lambda: gst_portal.einvoice_for_credit_note(note))
-    return {"filename": f"einvoice-{note.number.replace('/', '-')}.json", "payload": payload, "problems": problems}
+    return {"filename": f"{name}.json", "format": "json", "payload": payload, "problems": problems, "notes": []}
 
 
 @router.get("/invoices/{invoice_id}/ewaybill")
@@ -229,6 +247,8 @@ def invoice_eway_bill(invoice_id: UUID, distance_km: int = Query(0, ge=0, le=400
                       context: RequestContext = Depends(require_permission(READ)), db: Session = Depends(get_db)):
     """The e-way bill bulk-upload JSON. Vehicle and transporter default to the order's latest delivery."""
 
+    if regimes.of(db.get(Company, context.company_id)).country != "IN":
+        raise HTTPException(status_code=409, detail="E-way bills are an Indian GST requirement.")
     invoice = _errors(lambda: invoice_service.get_invoice(db, context, invoice_id))
     payload, problems = _errors(lambda: gst_portal.eway_bill(
         db, context, invoice, distance_km=distance_km, vehicle_no=vehicle_no, transporter_id=transporter_id,

@@ -185,6 +185,59 @@ def gstr1(db: Session, context: RequestContext, date_from: date, date_to: date) 
             "b2cs": b2cs_rows, "cdnr": cdnr, "cdnur": cdnur, "hsn": hsn_rows, "docs": docs}
 
 
+def vat_return(db: Session, context: RequestContext, date_from: date, date_to: date) -> dict:
+    """Saudi VAT return, sales side (ZATCA form boxes 1–6): sales by VAT category with credit notes as
+    adjustments, and the output VAT due. Purchases (boxes 7–12) come with the Purchasing module."""
+
+    if regimes.of(db.get(Company, context.company_id)).country != "SA":
+        raise ConflictError("The VAT return is for companies registered in Saudi Arabia.")
+    _period(date_from, date_to)
+    invoices, notes = _documents(db, context, date_from, date_to)
+    boxes = {key: {"box": box, "label": label, "amount": Decimal(0), "adjustment": Decimal(0), "vat": Decimal(0)}
+             for key, box, label in (
+                 ("standard", 1, "Standard rated sales (15%)"),
+                 ("zero", 3, "Zero rated domestic sales"),
+                 ("exports", 4, "Exports"),
+                 ("exempt", 5, "Exempt sales"),
+             )}
+    out_of_scope = Decimal(0)
+
+    def box_for(line, customer) -> str | None:
+        code = line.tax_category or ("S" if Decimal(str(line.gst_rate)) > 0 else "Z")
+        if code == "S":
+            return "standard"
+        if code == "Z":
+            return "exports" if customer.country and customer.country != "SA" else "zero"
+        if code == "E":
+            return "exempt"
+        return None
+
+    for inv in invoices:
+        for l in inv.lines:
+            key = box_for(l, inv.customer)
+            if key is None:
+                out_of_scope += Decimal(str(l.taxable_value))
+                continue
+            boxes[key]["amount"] += Decimal(str(l.taxable_value))
+            boxes[key]["vat"] += Decimal(str(l.vat))
+    for note in notes:
+        for l in note.lines:
+            key = box_for(l, note.invoice.customer)
+            if key is None:
+                out_of_scope -= Decimal(str(l.taxable_value))
+                continue
+            boxes[key]["adjustment"] -= Decimal(str(l.taxable_value))
+            boxes[key]["vat"] -= Decimal(str(l.vat))
+    rows = [{"box": b["box"], "label": b["label"], "amount": _f(b["amount"]), "adjustment": _f(b["adjustment"]),
+             "vat": _f(b["vat"])} for b in boxes.values()]
+    total = {"box": 6, "label": "Total sales", "amount": round(sum(r["amount"] for r in rows), 2),
+             "adjustment": round(sum(r["adjustment"] for r in rows), 2), "vat": round(sum(r["vat"] for r in rows), 2)}
+    return {"date_from": date_from, "date_to": date_to, "rows": [*rows, total],
+            "output_vat": total["vat"], "input_vat": 0.0, "net_vat_due": total["vat"],
+            "out_of_scope": _f(out_of_scope),
+            "note": "Purchases and input VAT (boxes 7–12) aren't recorded yet — add them from your purchase records."}
+
+
 def tds_report(db: Session, context: RequestContext, date_from: date, date_to: date) -> dict:
     """TDS customers deducted on payments dated in the period, one row per invoice, to
     reconcile with Form 26AS and chase missing TDS certificates (Form 16A)."""
@@ -221,6 +274,8 @@ COLUMNS = {
                  ("gstin", "GSTIN"), ("place_of_supply", "Place of supply"), ("taxable_value", "Taxable value"),
                  ("cgst", "CGST"), ("sgst", "SGST"), ("igst", "IGST"), ("round_off", "Round off"),
                  ("total", "Total")],
+    "vat_return": [("box", "Box"), ("label", "Description"), ("amount", "Amount (SAR)"),
+                   ("adjustment", "Adjustment (SAR)"), ("vat", "VAT amount (SAR)")],
     # Saudi Arabia: one VAT column, the buyer's VAT number.
     "register_vat": [("date", "Date"), ("type", "Type"), ("number", "Number"), ("customer", "Customer"),
                      ("vat_number", "VAT number"), ("taxable_value", "Taxable value"), ("vat", "VAT"),

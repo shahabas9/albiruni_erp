@@ -19,7 +19,7 @@ from app.api import routes_crm, routes_price_lists, routes_reports as routes_sal
 from app.core.database import SessionLocal
 from app.core.deps import RequestContext
 from app.core.migrations import upgrade_database
-from app.domain import regimes, gst_portal, price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
+from app.domain import zatca, regimes, gst_portal, price_lists, refund_service, sales_dashboard, credit_note_service, customer_service, delivery_service, receivables, sales_reports, order_service, stock_service, quotation_service, sales_service, sales_settings, tax
 from app.domain.errors import ConflictError
 from app.models.audit import AuditEvent
 from app.models.documents import Invoice
@@ -1604,6 +1604,77 @@ class CompanyCountryTests(SalesTestCase):
         with self.assertRaises(ConflictError) as fixed:
             sales_settings.update_profile(self.db, self.context, CompanyProfileUpdate(country="SA"))
         self.assertIn("new company", str(fixed.exception))
+
+
+class ZatcaTests(SaudiTestCase):
+    def issued(self, customer, qty=2, **item_fields):
+        item = self.item(**item_fields)
+        order = self.confirmed_order([{"item_id": item.id, "qty": qty}], customer)
+        self.deliver(order, {0: qty})
+        return self.issue(self.draft(order))
+
+    def test_qr_code_holds_seller_vat_time_and_totals(self):
+        invoice = self.issued(self.customer("Walk in"))
+        row = self.db.get(Invoice, invoice.id)
+        fields = zatca.decode_qr(zatca.invoice_qr(row))
+        self.assertEqual((fields[1], fields[2], fields[4], fields[5]), ("Riyadh Trading Co.", SAUDI_VAT, "230.00", "30.00"))
+        self.assertRegex(fields[3], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertTrue(invoice.zatca_qr.startswith("data:image/svg+xml"))
+
+    def test_xml_for_standard_simplified_and_credit_notes(self):
+        import xml.etree.ElementTree as ET
+        ns = {"cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
+              "cac": "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"}
+        invoice = self.issued(self.b2b())
+        out = routes_invoices.invoice_einvoice(invoice.id, self.context, self.db)
+        self.assertEqual((out["format"], out["problems"]), ("xml", []))
+        root = ET.fromstring(out["content"])
+        self.assertEqual(root.find("cbc:InvoiceTypeCode", ns).get("name"), "0100000")
+        self.assertEqual(root.find("cac:LegalMonetaryTotal/cbc:PayableAmount", ns).text, "230.00")
+        self.assertEqual(root.find("cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID", ns).text,
+                         SAUDI_BUYER_VAT)
+        self.assertEqual(root.find("cac:InvoiceLine/cac:Item/cac:ClassifiedTaxCategory/cbc:ID", ns).text, "S")
+
+        note = self.credit(invoice, "Return", {0: {"qty": 1}})
+        cn = ET.fromstring(routes_invoices.credit_note_einvoice(note.id, self.context, self.db)["content"])
+        self.assertEqual((cn.find("cbc:InvoiceTypeCode", ns).text,
+                          cn.find("cac:BillingReference/cac:InvoiceDocumentReference/cbc:ID", ns).text),
+                         ("381", invoice.number))
+        self.assertTrue(note.zatca_qr)
+
+        simplified = self.issued(self.customer("Walk in"))
+        root = ET.fromstring(routes_invoices.invoice_einvoice(simplified.id, self.context, self.db)["content"])
+        self.assertEqual(root.find("cbc:InvoiceTypeCode", ns).get("name"), "0200000")
+
+    def test_problems_are_reported_and_exports_carry_a_reason(self):
+        bare = self.customer("No Address Co", vat_number=SAUDI_BUYER_VAT)
+        problems = routes_invoices.invoice_einvoice(self.issued(bare).id, self.context, self.db)["problems"]
+        self.assertTrue(any("national address" in p for p in problems))
+        dubai = self.customer("Dubai Buyer", country="AE")
+        export = routes_invoices.invoice_einvoice(self.issued(dubai).id, self.context, self.db)
+        self.assertIn("VATEX-SA-32", export["content"])
+        with self.assertRaises(HTTPException):
+            routes_invoices.invoice_eway_bill(self.issued(dubai).id, 100, "", "", "", self.context, self.db)
+
+    def test_vat_return_boxes_and_tally_vat(self):
+        import xml.etree.ElementTree as ET
+        standard = self.issued(self.b2b(), qty=10)  # 1,000 + 150 VAT
+        self.issued(self.customer("Dubai Buyer", country="AE"), qty=2)  # export 200
+        self.issued(self.customer("Clinic"), qty=1, name="Medicine", price=50, rate=0, tax_category="Z",
+                    exemption_reason="VATEX-SA-35")  # zero-rated domestic 50
+        self.credit(standard, "Return", {0: {"qty": 1}})  # -100, -15 VAT
+        report = routes_reports.vat_return(date.today(), date.today(), self.context, self.db)
+        rows = {r["box"]: r for r in report["rows"]}
+        self.assertEqual((rows[1]["amount"], rows[1]["adjustment"], rows[1]["vat"]), (1000, -100, 135))
+        self.assertEqual((rows[3]["amount"], rows[4]["amount"], rows[6]["vat"], report["net_vat_due"]),
+                         (50, 200, 135, 135))
+        with self.assertRaises(HTTPException):
+            routes_reports.tds(date.today(), date.today(), self.context, self.db)
+
+        xml = ET.fromstring(routes_reports.tally_xml(date.today(), date.today(), self.context, self.db).body)
+        sale = xml.findall(".//VOUCHER")[0]
+        entries = {e.findtext("LEDGERNAME"): Decimal(e.findtext("AMOUNT")) for e in sale.findall("ALLLEDGERENTRIES.LIST")}
+        self.assertEqual((entries["Output VAT"], entries["Sales"]), (Decimal("150.00"), Decimal("1000.00")))
 
 
 if __name__ == "__main__":

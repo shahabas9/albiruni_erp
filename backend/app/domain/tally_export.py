@@ -6,8 +6,9 @@ Customers become ledgers under Sundry Debtors (created if missing, with their
 GSTIN and state). The other ledgers must already exist in Tally with these
 names — the usual ones in a GST-enabled company:
 
-  Sales, Output CGST, Output SGST, Output IGST, Round Off, Cash, Bank,
-  TDS Receivable
+  India: Sales, Output CGST, Output SGST, Output IGST, Round Off, Cash, Bank,
+  TDS Receivable. Saudi Arabia (Tally's GCC VAT edition): Sales, Output VAT,
+  Cash, Bank.
 
 Tally's sign convention: debits are negative amounts with
 ISDEEMEDPOSITIVE=Yes, credits positive with No. Every voucher balances to
@@ -30,7 +31,7 @@ from app.models.tenant import Company
 
 LEDGERS = {
     "sales": "Sales", "cgst": "Output CGST", "sgst": "Output SGST", "igst": "Output IGST", "round_off": "Round Off",
-    "cash": "Cash", "bank": "Bank", "tds": "TDS Receivable",
+    "cash": "Cash", "bank": "Bank", "tds": "TDS Receivable", "vat": "Output VAT",
 }
 ZERO = Decimal("0.00")
 
@@ -77,7 +78,8 @@ def _ledger(customer: Customer) -> str:
         f'<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="{_x(customer.name)}" ACTION="Create">'
         f"<NAME.LIST><NAME>{_x(customer.name)}</NAME></NAME.LIST><PARENT>Sundry Debtors</PARENT>"
         f"<ISBILLWISEON>Yes</ISBILLWISEON>"
-        + (f"<PARTYGSTIN>{_x(customer.gstin)}</PARTYGSTIN><GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>"
+        + (f"<VATTINNUMBER>{_x(customer.vat_number)}</VATTINNUMBER>" if customer.vat_number else
+           f"<PARTYGSTIN>{_x(customer.gstin)}</PARTYGSTIN><GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>"
            if customer.gstin else "<GSTREGISTRATIONTYPE>Unregistered</GSTREGISTRATIONTYPE>")
         + (f"<LEDSTATENAME>{_x(state)}</LEDSTATENAME>" if state else "")
         + (f"<ADDRESS.LIST><ADDRESS>{_x(customer.billing_address)}</ADDRESS></ADDRESS.LIST>"
@@ -113,6 +115,7 @@ def build(db: Session, context: RequestContext, date_from: date, date_to: date) 
                                  f"Order {inv.order.number if inv.order else ''} · due {inv.due_date:%d-%m-%Y}".strip(), [
             (name(inv.customer_id), -_d(inv.grand_total)), (LEDGERS["sales"], _d(inv.total)),
             (LEDGERS["cgst"], _d(inv.cgst)), (LEDGERS["sgst"], _d(inv.sgst)), (LEDGERS["igst"], _d(inv.igst)),
+            (LEDGERS["vat"], _d(inv.vat)),
             (LEDGERS["round_off"], _d(inv.round_off)),
         ]))
     for note in notes:
@@ -120,6 +123,7 @@ def build(db: Session, context: RequestContext, date_from: date, date_to: date) 
                                  f"{note.kind} against {note.invoice.number}: {note.reason}", [
             (name(note.customer_id), _d(note.grand_total)), (LEDGERS["sales"], -_d(note.total)),
             (LEDGERS["cgst"], -_d(note.cgst)), (LEDGERS["sgst"], -_d(note.sgst)), (LEDGERS["igst"], -_d(note.igst)),
+            (LEDGERS["vat"], -_d(note.vat)),
             (LEDGERS["round_off"], -_d(note.round_off)),
         ], reference=note.invoice.number))
     for r in receipts:

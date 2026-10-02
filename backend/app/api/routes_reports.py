@@ -47,6 +47,14 @@ def tds(date_from: date, date_to: date, context: RequestContext = Depends(requir
     return _run(lambda: sales_reports.tds_report(db, context, date_from, date_to))
 
 
+@router.get("/vat-return")
+def vat_return(date_from: date, date_to: date, context: RequestContext = Depends(require_permission(READ)),
+               db: Session = Depends(get_db)):
+    """Saudi VAT return (sales side): boxes 1–6 and the output VAT due."""
+
+    return _run(lambda: sales_reports.vat_return(db, context, date_from, date_to))
+
+
 @router.get("/tally.xml")
 def tally_xml(date_from: date, date_to: date, context: RequestContext = Depends(require_permission(READ)),
               db: Session = Depends(get_db)):
@@ -67,7 +75,7 @@ def tally_xml(date_from: date, date_to: date, context: RequestContext = Depends(
 
 @router.get("/{kind}.csv")
 def report_csv(
-    kind: Literal["register", "tds", "b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs"],
+    kind: Literal["register", "tds", "vat_return", "b2b", "b2cl", "b2cs", "cdnr", "cdnur", "hsn", "docs"],
     date_from: date,
     date_to: date,
     context: RequestContext = Depends(require_permission(READ)),
@@ -81,7 +89,7 @@ def report_csv(
         request_text=f"[form] Download {kind} report", intent="export_report",
         correlation_id=new_correlation_id(), confirmed=True,
     )
-    prefix = {"register": "sales-register", "tds": "tds-deducted"}.get(kind, f"gstr1-{kind}")
+    prefix = {"register": "sales-register", "tds": "tds-deducted", "vat_return": "vat-return"}.get(kind, f"gstr1-{kind}")
     name = f"{prefix}-{date_from}-to-{date_to}.csv"
     return Response(
         content=result["csv"], media_type="text/csv; charset=utf-8",
